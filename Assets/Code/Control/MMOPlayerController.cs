@@ -1,292 +1,787 @@
+
 using UnityEngine;
 
 /// <summary>
-/// Local character movement, grounded/jump physics, locomotion blend values,
-/// and a buffered two-hit attack combo.
-/// Add this to the network player root beside CharacterController.
+/// Local character movement, grounding, jump animation locking,
+/// locomotion blending and a buffered two-hit attack combo.
+///
+/// Designed for CharacterController + Animator.
+/// Compatible with MMOPlayerFusion network animation properties.
+///
+/// Controls:
+/// W A S D = Movement
+/// W + Left Shift = Run
+/// S = Backward Walk
+/// Space = Jump
+/// Left Click = Attack 1 / Attack 2 Combo
+///
+/// Requirements:
+/// - No Rigidbody on the Player root.
+/// - Animator Apply Root Motion must be disabled.
+/// - Ground Layers must include floor layers only.
+/// - Animator states: Locomotion, Jump, Attack1, Attack2.
 /// </summary>
 [DisallowMultipleComponent]
 [RequireComponent(typeof(CharacterController))]
 public sealed class MMOPlayerController : MonoBehaviour
 {
-    private static readonly int SpeedHash = Animator.StringToHash("Speed");
-    private static readonly int IsGroundedHash = Animator.StringToHash("IsGrounded");
-    private static readonly int JumpHash = Animator.StringToHash("Jump");
-    private static readonly int Attack1Hash = Animator.StringToHash("Attack1");
-    private static readonly int Attack2Hash = Animator.StringToHash("Attack2");
+    // =========================================================
+    // ANIMATOR HASHES
+    // =========================================================
 
-    private static readonly int AttackTagHash = Animator.StringToHash("Attack");
-    private static readonly int Attack1StateHash = Animator.StringToHash("Attack1");
+    private static readonly int SpeedHash =
+        Animator.StringToHash("Speed");
+
+    private static readonly int IsGroundedHash =
+        Animator.StringToHash("IsGrounded");
+
+    private static readonly int JumpHash =
+        Animator.StringToHash("Jump");
+
+    private static readonly int Attack1Hash =
+        Animator.StringToHash("Attack1");
+
+    private static readonly int Attack2Hash =
+        Animator.StringToHash("Attack2");
+
+    // Animator State Hashes
+
+    private static readonly int JumpStateHash =
+        Animator.StringToHash("Jump");
+
+    private static readonly int Attack1StateHash =
+        Animator.StringToHash("Attack1");
+
+    private static readonly int Attack2StateHash =
+        Animator.StringToHash("Attack2");
+
+    private static readonly int AttackTagHash =
+        Animator.StringToHash("Attack");
+
+    // =========================================================
+    // REFERENCES
+    // =========================================================
 
     [Header("References")]
-    [SerializeField] private Animator animator;
-    [SerializeField] private Transform groundCheck;
-    [SerializeField] private LayerMask groundLayers = ~0;
-    [SerializeField] private bool allowStandaloneInput = true;
+
+    [SerializeField]
+    private Animator animator;
+
+    [SerializeField]
+    private Transform groundCheck;
+
+    [SerializeField]
+    private LayerMask groundLayers;
+
+    [SerializeField]
+    private bool allowStandaloneInput = true;
+
+    // =========================================================
+    // MOVEMENT SPEEDS
+    // =========================================================
 
     [Header("Movement Speeds")]
-    [SerializeField, Min(0f)] private float walkSpeed = 2.2f;
-    [SerializeField, Min(0f)] private float runSpeed = 5.6f;
-    [Tooltip("Normal movement runs. CapsLock toggles walk mode; Left Shift forces run.")]
-    [SerializeField] private bool startInWalkMode = false;
+
+    [SerializeField, Min(0f)]
+    private float walkSpeed = 2.2f;
+
+    [SerializeField, Min(0f)]
+    private float runSpeed = 5.6f;
+
+    // =========================================================
+    // MOVEMENT SMOOTHING
+    // =========================================================
 
     [Header("Movement Smoothing")]
-    [SerializeField, Min(0.01f)] private float accelerationSmoothTime = 0.12f;
-    [SerializeField, Min(0.01f)] private float turnSmoothTime = 0.10f;
-    [SerializeField, Min(0.01f)] private float attackTurnSmoothTime = 0.045f;
-    [SerializeField, Min(0.01f)] private float animatorDampTime = 0.12f;
+
+    [SerializeField, Min(0.01f)]
+    private float accelerationSmoothTime = 0.12f;
+
+    [SerializeField, Min(0.01f)]
+    private float turnSmoothTime = 0.10f;
+
+    [SerializeField, Min(0.01f)]
+    private float attackTurnSmoothTime = 0.045f;
+
+    [SerializeField, Min(0.01f)]
+    private float animatorDampTime = 0.12f;
+
+    // =========================================================
+    // JUMP AND GROUNDING
+    // =========================================================
 
     [Header("Jump and Grounding")]
-    [SerializeField, Min(0.01f)] private float groundCheckRadius = 0.22f;
-    [SerializeField] private float jumpHeight = 1.65f;
-    [SerializeField] private float gravity = -25f;
-    [SerializeField, Min(0f)] private float groundStickForce = 2.5f;
+
+    [SerializeField, Min(0.01f)]
+    private float groundCheckRadius = 0.22f;
+
+    [SerializeField, Min(0.1f)]
+    private float jumpHeight = 1.65f;
+
+    [Tooltip("Gravity must be negative.")]
+    [SerializeField]
+    private float gravity = -25f;
+
+    [SerializeField, Min(0f)]
+    private float groundStickForce = 2.5f;
+
+    [SerializeField, Min(0.5f)]
+    private float jumpLockSafetyTimeout = 5f;
+
+    // =========================================================
+    // ATTACK COMBO
+    // =========================================================
 
     [Header("Attack Combo")]
-    [Tooltip("The second click is buffered until this normalized time if it arrives early.")]
-    [Range(0f, 0.95f)][SerializeField] private float comboWindowStart = 0.38f;
-    [Range(0.05f, 1f)][SerializeField] private float comboWindowEnd = 0.88f;
-    [SerializeField, Min(0f)] private float attackStartGraceTime = 0.25f;
+
+    [Range(0f, 0.95f)]
+    [SerializeField]
+    private float comboWindowStart = 0.38f;
+
+    [Range(0.05f, 1f)]
+    [SerializeField]
+    private float comboWindowEnd = 0.88f;
+
+    [SerializeField, Min(0f)]
+    private float attackStartGraceTime = 0.25f;
+
+    [SerializeField, Min(0.1f)]
+    private float attackEntryTimeout = 1f;
+
+    [SerializeField, Min(1f)]
+    private float attackSafetyTimeout = 5f;
+
+    // =========================================================
+    // PRIVATE REFERENCES
+    // =========================================================
 
     private CharacterController _characterController;
+
     private MMOCameraController _cameraController;
 
+    // =========================================================
+    // PLAYER CONTROL STATE
+    // =========================================================
+
     private bool _inputEnabled;
-    private bool _walkMode;
+
     private bool _isGrounded;
+
+    // =========================================================
+    // JUMP LOCK STATE
+    // =========================================================
+
+    private bool _jumpLocked;
+
+    private bool _jumpAnimationEntered;
+
+    private float _jumpLockStartedAt;
+
+    // =========================================================
+    // ATTACK STATE
+    // =========================================================
+
     private bool _attackActive;
+
+    private bool _attackStateEntered;
+
     private bool _comboQueued;
 
-    private float _verticalVelocity;
-    private float _currentMoveSpeed;
-    private float _speedSmoothVelocity;
-    private float _rotationSmoothVelocity;
+    private int _attackStep;
+
     private float _attackCommandTime;
+
+    private float _attackSequenceStartedAt;
+
     private float _lastAttackStateSeenTime;
 
-    private int _attackStep;
+    // =========================================================
+    // MOVEMENT VARIABLES
+    // =========================================================
+
+    private float _verticalVelocity;
+
+    private float _currentMoveSpeed;
+
+    private float _speedSmoothVelocity;
+
+    private float _rotationSmoothVelocity;
+
+    // =========================================================
+    // NETWORK VARIABLES
+    // =========================================================
+
     private int _networkActionCode;
+
     private int _networkActionSequence;
+
     private int _lastRemoteActionSequence = -1;
 
     private float _networkAnimationSpeed;
 
+    // =========================================================
+    // ANIMATOR PARAMETER VALIDATION
+    // =========================================================
+
     private bool _hasSpeedParameter;
+
     private bool _hasGroundedParameter;
+
     private bool _hasJumpParameter;
+
     private bool _hasAttack1Parameter;
+
     private bool _hasAttack2Parameter;
 
-    /// <summary>0 = locomotion, 1 = jump, 2 = attack one, 3 = attack two.</summary>
-    public int NetworkActionCode => _networkActionCode;
-    public int NetworkActionSequence => _networkActionSequence;
-    public float NetworkAnimationSpeed => _networkAnimationSpeed;
-    public bool NetworkIsGrounded => _isGrounded;
-    public bool IsLocalControl => _inputEnabled;
+    // =========================================================
+    // PUBLIC NETWORK PROPERTIES
+    // =========================================================
+
+    /// <summary>
+    /// 0 = Locomotion
+    /// 1 = Jump
+    /// 2 = Attack1
+    /// 3 = Attack2
+    /// </summary>
+
+    public int NetworkActionCode =>
+        _networkActionCode;
+
+    public int NetworkActionSequence =>
+        _networkActionSequence;
+
+    public float NetworkAnimationSpeed =>
+        _networkAnimationSpeed;
+
+    public bool NetworkIsGrounded =>
+        _isGrounded;
+
+    public bool IsLocalControl =>
+        _inputEnabled;
+
+    public bool IsJumpLocked =>
+        _jumpLocked;
+
+    public bool IsAttacking =>
+        _attackActive;
+
+    // =========================================================
+    // AWAKE
+    // =========================================================
 
     private void Awake()
     {
-        _characterController = GetComponent<CharacterController>();
+        _characterController =
+            GetComponent<CharacterController>();
+
         if (animator == null)
         {
-            animator = GetComponentInChildren<Animator>();
+            animator =
+                GetComponentInChildren<Animator>(true);
         }
 
-        _walkMode = startInWalkMode;
-        bool hasFusionDriver = GetComponent<MMOPlayerFusion>() != null;
-        _inputEnabled = !hasFusionDriver && allowStandaloneInput;
-        _characterController.enabled = !hasFusionDriver;
+        bool hasFusionDriver =
+            GetComponent<MMOPlayerFusion>() != null;
+
+        _inputEnabled =
+            !hasFusionDriver && allowStandaloneInput;
+
+        _characterController.enabled =
+            !hasFusionDriver;
 
         if (animator == null)
         {
-            Debug.LogError("[MMOPlayerController] Animator was not found on this player or its children.", this);
+            Debug.LogError(
+                "[MMOPlayerController] Animator was not found.",
+                this
+            );
+
             enabled = false;
             return;
         }
 
-        // CharacterController owns translation; root motion would move the root a second time.
+        // CharacterController controls root movement.
         animator.applyRootMotion = false;
 
-        _hasSpeedParameter = HasParameter(SpeedHash, AnimatorControllerParameterType.Float);
-        _hasGroundedParameter = HasParameter(IsGroundedHash, AnimatorControllerParameterType.Bool);
-        _hasJumpParameter = HasParameter(JumpHash, AnimatorControllerParameterType.Trigger);
-        _hasAttack1Parameter = HasParameter(Attack1Hash, AnimatorControllerParameterType.Trigger);
-        _hasAttack2Parameter = HasParameter(Attack2Hash, AnimatorControllerParameterType.Trigger);
-
-        if (!_hasSpeedParameter || !_hasGroundedParameter || !_hasJumpParameter || !_hasAttack1Parameter || !_hasAttack2Parameter)
-        {
-            Debug.LogError(
-                "[MMOPlayerController] Animator parameters must be Speed (Float), IsGrounded (Bool), Jump (Trigger), Attack1 (Trigger), and Attack2 (Trigger).",
-                this);
-        }
+        CacheAnimatorParameters();
     }
+
+    // =========================================================
+    // START
+    // =========================================================
 
     private void Start()
     {
         if (_cameraController == null)
         {
-            _cameraController = MMOCameraController.Instance;
-            if (_cameraController == null)
-            {
-                _cameraController = FindObjectOfType<MMOCameraController>();
-            }
+            _cameraController =
+                MMOCameraController.Instance;
         }
 
-        if (_inputEnabled && _cameraController != null)
+        if (_cameraController == null)
+        {
+            _cameraController =
+                FindObjectOfType<MMOCameraController>();
+        }
+
+        if (_inputEnabled &&
+            _cameraController != null)
         {
             _cameraController.SetTarget(transform);
         }
     }
 
+    // =========================================================
+    // UPDATE
+    // =========================================================
+
     private void Update()
     {
-        if (!_inputEnabled || !_characterController.enabled || animator == null)
+        if (!_inputEnabled ||
+            !_characterController.enabled ||
+            animator == null)
         {
             return;
         }
 
         float deltaTime = Time.deltaTime;
-        bool gameplayInputAllowed = _cameraController == null
-            ? allowStandaloneInput
-            : _cameraController.GameplayEnabled;
 
-        if (gameplayInputAllowed && Input.GetKeyDown(KeyCode.CapsLock))
-        {
-            _walkMode = !_walkMode;
-        }
+        bool gameplayInputAllowed =
+            _cameraController == null
+                ? allowStandaloneInput
+                : _cameraController.GameplayEnabled;
+
+        // =====================================================
+        // INPUT
+        // =====================================================
 
         Vector2 moveInput = Vector2.zero;
+
         if (gameplayInputAllowed)
         {
-            moveInput.x = Input.GetAxisRaw("Horizontal");
-            moveInput.y = Input.GetAxisRaw("Vertical");
-            moveInput = Vector2.ClampMagnitude(moveInput, 1f);
+            moveInput.x =
+                Input.GetAxisRaw("Horizontal");
+
+            moveInput.y =
+                Input.GetAxisRaw("Vertical");
+
+            moveInput =
+                Vector2.ClampMagnitude(moveInput, 1f);
         }
 
-        Vector3 cameraForward = _cameraController != null
-            ? _cameraController.PlanarAimDirection
-            : transform.forward;
-        Vector3 cameraRight = _cameraController != null
-            ? _cameraController.PlanarAimRight
-            : transform.right;
+        // =====================================================
+        // CAMERA RELATIVE MOVEMENT
+        // =====================================================
 
-        Vector3 moveDirection = cameraForward * moveInput.y + cameraRight * moveInput.x;
+        Vector3 cameraForward =
+            _cameraController != null
+                ? _cameraController.PlanarAimDirection
+                : transform.forward;
+
+        Vector3 cameraRight =
+            _cameraController != null
+                ? _cameraController.PlanarAimRight
+                : transform.right;
+
+        Vector3 moveDirection =
+            cameraForward * moveInput.y +
+            cameraRight * moveInput.x;
+
         moveDirection.y = 0f;
+
         if (moveDirection.sqrMagnitude > 1f)
         {
             moveDirection.Normalize();
         }
 
+        // =====================================================
+        // GROUND CHECK
+        // =====================================================
+
         UpdateGroundedState();
 
-        if (_isGrounded && _verticalVelocity <= 0f && _networkActionCode == 1)
-        {
-            _networkActionCode = 0;
-        }
+        UpdateJumpLock();
 
-        if (gameplayInputAllowed && Input.GetKeyDown(KeyCode.Space) && _isGrounded && !_attackActive)
+        // =====================================================
+        // JUMP INPUT
+        // =====================================================
+
+        if (gameplayInputAllowed &&
+            Input.GetKeyDown(KeyCode.Space) &&
+            _isGrounded &&
+            !_attackActive &&
+            !_jumpLocked)
         {
             BeginJump();
         }
 
-        if (gameplayInputAllowed && Input.GetMouseButtonDown(0) && CanStartAttackFromMouse())
+        // =====================================================
+        // ATTACK INPUT
+        // =====================================================
+
+        if (gameplayInputAllowed &&
+            Input.GetMouseButtonDown(0) &&
+            CanStartAttackFromMouse())
         {
             HandleAttackClick();
         }
 
         UpdateAttackComboState();
 
-        bool hasMoveInput = moveInput.sqrMagnitude > 0.0001f;
-        bool forceRun = gameplayInputAllowed && Input.GetKey(KeyCode.LeftShift);
-        bool shouldRun = forceRun || !_walkMode;
-        float desiredMoveSpeed = hasMoveInput
-            ? (shouldRun ? runSpeed : walkSpeed)
-            : 0f;
+        // =====================================================
+        // MOVEMENT MODE
+        // =====================================================
+
+        bool hasMoveInput =
+            moveInput.sqrMagnitude > 0.0001f;
+
+        bool isMovingBackward =
+            moveInput.y < -0.1f;
+
+        // Left Shift runs only when moving forward.
+        // S always uses backward walking.
+
+        bool shouldRun =
+            gameplayInputAllowed &&
+            Input.GetKey(KeyCode.LeftShift) &&
+            moveInput.y > 0.1f;
+
+        float desiredMoveSpeed =
+            hasMoveInput
+                ? (shouldRun ? runSpeed : walkSpeed)
+                : 0f;
+
+        // =====================================================
+        // ATTACK MOVEMENT LOCK
+        // =====================================================
 
         if (_attackActive)
         {
-            // Hard-stop horizontal motion during weapon swings to avoid foot sliding.
             _currentMoveSpeed = 0f;
+
             _speedSmoothVelocity = 0f;
         }
         else
         {
-            _currentMoveSpeed = Mathf.SmoothDamp(
-                _currentMoveSpeed,
-                desiredMoveSpeed,
-                ref _speedSmoothVelocity,
-                accelerationSmoothTime,
-                Mathf.Infinity,
-                deltaTime);
+            _currentMoveSpeed =
+                Mathf.SmoothDamp(
+                    _currentMoveSpeed,
+                    desiredMoveSpeed,
+                    ref _speedSmoothVelocity,
+                    accelerationSmoothTime,
+                    Mathf.Infinity,
+                    deltaTime
+                );
         }
 
-        UpdateFacing(moveDirection, hasMoveInput, deltaTime);
+        // =====================================================
+        // ROTATION
+        // =====================================================
+
+        UpdateFacing(
+            moveDirection,
+            hasMoveInput,
+            isMovingBackward,
+            deltaTime
+        );
+
+        // =====================================================
+        // GRAVITY
+        // =====================================================
+
+        UpdateVerticalVelocity(deltaTime);
+
+        // =====================================================
+        // CHARACTER MOVEMENT
+        // =====================================================
+
+        Vector3 horizontalVelocity =
+            _attackActive
+                ? Vector3.zero
+                : moveDirection * _currentMoveSpeed;
+
+        Vector3 totalVelocity =
+            horizontalVelocity +
+            Vector3.up * _verticalVelocity;
+
+        _characterController.Move(
+            totalVelocity * deltaTime
+        );
+
+        // =====================================================
+        // ANIMATION SPEED
+        // =====================================================
+
+        if (_attackActive || !hasMoveInput)
+        {
+            _networkAnimationSpeed = 0f;
+        }
+        else if (isMovingBackward)
+        {
+            // Negative value selects Backward Walk.
+            _networkAnimationSpeed = -1f;
+        }
+        else
+        {
+            // 1 = Walk
+            // 2 = Run
+
+            _networkAnimationSpeed =
+                shouldRun ? 2f : 1f;
+        }
+
+        if (_hasSpeedParameter)
+        {
+            animator.SetFloat(
+                SpeedHash,
+                _networkAnimationSpeed,
+                animatorDampTime,
+                deltaTime
+            );
+        }
+
+        if (_hasGroundedParameter)
+        {
+            animator.SetBool(
+                IsGroundedHash,
+                _isGrounded
+            );
+        }
+    }
+
+    // =========================================================
+    // GROUNDING
+    // =========================================================
+
+    private void UpdateGroundedState()
+    {
+        Vector3 checkPosition =
+            groundCheck != null
+                ? groundCheck.position
+                : transform.position + Vector3.up * 0.1f;
+
+        // Do not detect ground while rising.
+
+        bool movingUpward =
+            _verticalVelocity > 0.05f;
+
+        if (movingUpward)
+        {
+            _isGrounded = false;
+            return;
+        }
+
+        int effectiveGroundMask =
+            groundLayers.value;
+
+        // Exclude Player layer.
+
+        int playerLayer =
+            gameObject.layer;
+
+        if (playerLayer >= 0 && playerLayer < 32)
+        {
+            effectiveGroundMask &=
+                ~(1 << playerLayer);
+        }
+
+        bool sphereGrounded = false;
+
+        if (effectiveGroundMask != 0)
+        {
+            sphereGrounded =
+                Physics.CheckSphere(
+                    checkPosition,
+                    groundCheckRadius,
+                    effectiveGroundMask,
+                    QueryTriggerInteraction.Ignore
+                );
+        }
+
+        _isGrounded =
+            sphereGrounded ||
+            _characterController.isGrounded;
+    }
+
+    // =========================================================
+    // GRAVITY
+    // =========================================================
+
+    private void UpdateVerticalVelocity(float deltaTime)
+    {
+        float downwardGravity =
+            -Mathf.Abs(gravity);
 
         if (_isGrounded)
         {
             if (_verticalVelocity < 0f)
             {
-                _verticalVelocity = -groundStickForce;
+                _verticalVelocity =
+                    -groundStickForce;
             }
         }
         else
         {
-            _verticalVelocity += gravity * deltaTime;
-        }
-
-        Vector3 horizontalVelocity = _attackActive ? Vector3.zero : moveDirection * _currentMoveSpeed;
-        Vector3 totalVelocity = horizontalVelocity + Vector3.up * _verticalVelocity;
-        _characterController.Move(totalVelocity * deltaTime);
-
-        _networkAnimationSpeed = _attackActive ? 0f : (hasMoveInput ? (shouldRun ? 2f : 1f) : 0f);
-        if (_hasSpeedParameter)
-        {
-            animator.SetFloat(SpeedHash, _networkAnimationSpeed, animatorDampTime, deltaTime);
-        }
-        if (_hasGroundedParameter)
-        {
-            animator.SetBool(IsGroundedHash, _isGrounded);
+            _verticalVelocity +=
+                downwardGravity * deltaTime;
         }
     }
 
-    private void UpdateGroundedState()
-    {
-        Vector3 checkPosition = groundCheck != null
-            ? groundCheck.position
-            : transform.position + Vector3.up * 0.12f;
-
-        bool sphereGrounded = Physics.CheckSphere(
-            checkPosition,
-            groundCheckRadius,
-            groundLayers,
-            QueryTriggerInteraction.Ignore);
-
-        _isGrounded = sphereGrounded || _characterController.isGrounded;
-    }
+    // =========================================================
+    // JUMP
+    // =========================================================
 
     private void BeginJump()
     {
-        _isGrounded = false;
-        if (_hasGroundedParameter)
+        if (_jumpLocked ||
+            !_isGrounded ||
+            _attackActive)
         {
-            animator.SetBool(IsGroundedHash, false);
+            return;
         }
 
-        _verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
+        _jumpLocked = true;
+
+        _jumpAnimationEntered = false;
+
+        _jumpLockStartedAt = Time.time;
+
+        _isGrounded = false;
+
+        _verticalVelocity =
+            Mathf.Sqrt(
+                jumpHeight *
+                2f *
+                Mathf.Abs(gravity)
+            );
+
+        if (_hasGroundedParameter)
+        {
+            animator.SetBool(
+                IsGroundedHash,
+                false
+            );
+        }
+
         _networkActionCode = 1;
+
         _networkActionSequence++;
 
         if (_hasJumpParameter)
         {
             animator.ResetTrigger(JumpHash);
+
             animator.SetTrigger(JumpHash);
         }
     }
 
+    private bool IsJumpAnimationPlaying()
+    {
+        AnimatorStateInfo current =
+            animator.GetCurrentAnimatorStateInfo(0);
+
+        if (current.shortNameHash == JumpStateHash)
+        {
+            return true;
+        }
+
+        if (animator.IsInTransition(0))
+        {
+            AnimatorStateInfo next =
+                animator.GetNextAnimatorStateInfo(0);
+
+            if (next.shortNameHash == JumpStateHash)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void UpdateJumpLock()
+    {
+        if (!_jumpLocked)
+        {
+            return;
+        }
+
+        bool jumpAnimationPlaying =
+            IsJumpAnimationPlaying();
+
+        if (jumpAnimationPlaying)
+        {
+            _jumpAnimationEntered = true;
+        }
+
+        bool grounded =
+            _isGrounded ||
+            _characterController.isGrounded;
+
+        float lockElapsed =
+            Time.time - _jumpLockStartedAt;
+
+        // Normal unlock.
+        // Character must land and leave Jump state.
+
+        if (grounded &&
+            _jumpAnimationEntered &&
+            !jumpAnimationPlaying &&
+            !animator.IsInTransition(0))
+        {
+            UnlockJump();
+            return;
+        }
+
+        // Safety fallback only while grounded.
+
+        if (grounded &&
+            lockElapsed >= jumpLockSafetyTimeout)
+        {
+            Debug.LogWarning(
+                "[MMOPlayerController] Jump lock safety timeout.",
+                this
+            );
+
+            if (jumpAnimationPlaying ||
+                animator.IsInTransition(0))
+            {
+                animator.CrossFade(
+                    "Locomotion",
+                    0.12f,
+                    0
+                );
+            }
+
+            UnlockJump();
+        }
+    }
+
+    private void UnlockJump()
+    {
+        _jumpLocked = false;
+
+        _jumpAnimationEntered = false;
+
+        if (_hasJumpParameter)
+        {
+            animator.ResetTrigger(JumpHash);
+        }
+
+        if (_networkActionCode == 1)
+        {
+            _networkActionCode = 0;
+        }
+    }
+
+    // =========================================================
+    // ATTACK INPUT
+    // =========================================================
+
     private bool CanStartAttackFromMouse()
     {
-        // Check the key directly as well as the camera lock state so execution order between Update methods cannot cause a UI click to become an attack.
-        if (Input.GetKey(KeyCode.LeftAlt) || !gameplayInputAllowedForAttack())
+        if (Input.GetKey(KeyCode.LeftAlt) ||
+            !GameplayInputAllowedForAttack())
         {
             return false;
         }
@@ -296,22 +791,25 @@ public sealed class MMOPlayerController : MonoBehaviour
             return _cameraController.IsGameplayInputLocked;
         }
 
-        return Cursor.lockState == CursorLockMode.Locked;
+        return Cursor.lockState ==
+               CursorLockMode.Locked;
     }
 
-    private bool gameplayInputAllowedForAttack()
+    private bool GameplayInputAllowedForAttack()
     {
-        return _cameraController == null || _cameraController.GameplayEnabled;
+        return _cameraController == null ||
+               _cameraController.GameplayEnabled;
     }
 
     private void HandleAttackClick()
     {
         if (!_attackActive)
         {
-            if (_isGrounded)
+            if (_isGrounded && !_jumpLocked)
             {
                 BeginAttackOne();
             }
+
             return;
         }
 
@@ -320,7 +818,8 @@ public sealed class MMOPlayerController : MonoBehaviour
             return;
         }
 
-        if (TryGetAttackOneNormalizedTime(out float normalizedTime))
+        if (TryGetAttackOneNormalizedTime(
+            out float normalizedTime))
         {
             if (normalizedTime > comboWindowEnd)
             {
@@ -336,30 +835,69 @@ public sealed class MMOPlayerController : MonoBehaviour
                 _comboQueued = true;
             }
         }
-        else if (Time.time - _attackCommandTime <= attackStartGraceTime)
+        else if (Time.time - _attackCommandTime <=
+                 attackStartGraceTime)
         {
-            // A quick second click can be buffered while the first state is blending in.
             _comboQueued = true;
         }
     }
 
+    // =========================================================
+    // ATTACK ONE
+    // =========================================================
+
     private void BeginAttackOne()
     {
+        if (_attackActive ||
+            _jumpLocked ||
+            !_isGrounded)
+        {
+            return;
+        }
+
         _attackActive = true;
+
+        _attackStateEntered = false;
+
         _comboQueued = false;
+
         _attackStep = 1;
+
         _attackCommandTime = Time.time;
+
+        _attackSequenceStartedAt = Time.time;
+
         _lastAttackStateSeenTime = Time.time;
+
         _networkActionCode = 2;
+
         _networkActionSequence++;
 
         if (_hasAttack1Parameter)
         {
             animator.ResetTrigger(Attack1Hash);
+
             animator.ResetTrigger(Attack2Hash);
+
             animator.SetTrigger(Attack1Hash);
         }
+
+        _currentMoveSpeed = 0f;
+
+        _speedSmoothVelocity = 0f;
+
+        if (_hasSpeedParameter)
+        {
+            animator.SetFloat(
+                SpeedHash,
+                0f
+            );
+        }
     }
+
+    // =========================================================
+    // ATTACK TWO
+    // =========================================================
 
     private void BeginAttackTwo()
     {
@@ -369,17 +907,30 @@ public sealed class MMOPlayerController : MonoBehaviour
         }
 
         _comboQueued = false;
+
         _attackStep = 2;
+
         _attackCommandTime = Time.time;
+
         _networkActionCode = 3;
+
         _networkActionSequence++;
 
         if (_hasAttack2Parameter)
         {
             animator.ResetTrigger(Attack2Hash);
+
             animator.SetTrigger(Attack2Hash);
         }
+
+        _currentMoveSpeed = 0f;
+
+        _speedSmoothVelocity = 0f;
     }
+
+    // =========================================================
+    // ATTACK COMBO STATE
+    // =========================================================
 
     private void UpdateAttackComboState()
     {
@@ -388,17 +939,30 @@ public sealed class MMOPlayerController : MonoBehaviour
             return;
         }
 
-        bool attackStateIsPlaying = TryGetAttackStateInfo(out AnimatorStateInfo attackStateInfo);
+        bool attackStateIsPlaying =
+            TryGetAttackStateInfo(out _);
+
         if (attackStateIsPlaying)
         {
+            _attackStateEntered = true;
+
             _lastAttackStateSeenTime = Time.time;
         }
 
-        if (_attackStep == 1 && TryGetAttackOneNormalizedTime(out float normalizedTime))
+        // Buffered second click.
+
+        if (_attackStep == 1 &&
+            TryGetAttackOneNormalizedTime(
+                out float normalizedTime))
         {
-            if (_comboQueued && normalizedTime >= comboWindowStart && normalizedTime <= comboWindowEnd)
+            if (_comboQueued &&
+                normalizedTime >= comboWindowStart &&
+                normalizedTime <= comboWindowEnd)
             {
                 BeginAttackTwo();
+
+                attackStateIsPlaying =
+                    TryGetAttackStateInfo(out _);
             }
             else if (normalizedTime > comboWindowEnd)
             {
@@ -406,42 +970,70 @@ public sealed class MMOPlayerController : MonoBehaviour
             }
         }
 
-        // Wait for the trigger-to-state transition and then for the attack state to exit.
-        bool attackStateHasBeenSeen = Time.time - _lastAttackStateSeenTime < 0.12f;
-        bool commandIsStillStarting = Time.time - _attackCommandTime <= attackStartGraceTime;
-        if (!attackStateIsPlaying && !attackStateHasBeenSeen && !commandIsStillStarting)
+        float elapsed =
+            Time.time - _attackSequenceStartedAt;
+
+        if (!_attackStateEntered)
+        {
+            if (elapsed >= attackEntryTimeout)
+            {
+                Debug.LogWarning(
+                    "[MMOPlayerController] Attack Animator state was not entered.",
+                    this
+                );
+
+                FinishAttack();
+            }
+
+            return;
+        }
+
+        if (elapsed >= attackSafetyTimeout)
+        {
+            Debug.LogWarning(
+                "[MMOPlayerController] Attack safety timeout.",
+                this
+            );
+
+            animator.CrossFade(
+                "Locomotion",
+                0.12f,
+                0
+            );
+
+            FinishAttack();
+
+            return;
+        }
+
+        // Only unlock after leaving both attack states.
+
+        if (!attackStateIsPlaying &&
+            !animator.IsInTransition(0))
         {
             FinishAttack();
         }
     }
 
-    private bool TryGetAttackOneNormalizedTime(out float normalizedTime)
+    // =========================================================
+    // CHECK ATTACK STATE
+    // =========================================================
+
+    private bool IsAttackState(
+        AnimatorStateInfo stateInfo)
     {
-        AnimatorStateInfo current = animator.GetCurrentAnimatorStateInfo(0);
-        if (current.shortNameHash == Attack1StateHash)
-        {
-            normalizedTime = current.normalizedTime;
-            return true;
-        }
-
-        if (animator.IsInTransition(0))
-        {
-            AnimatorStateInfo next = animator.GetNextAnimatorStateInfo(0);
-            if (next.shortNameHash == Attack1StateHash)
-            {
-                normalizedTime = next.normalizedTime;
-                return true;
-            }
-        }
-
-        normalizedTime = 0f;
-        return false;
+        return stateInfo.tagHash == AttackTagHash ||
+               stateInfo.shortNameHash == Attack1StateHash ||
+               stateInfo.shortNameHash == Attack2StateHash;
     }
 
-    private bool TryGetAttackStateInfo(out AnimatorStateInfo stateInfo)
+    private bool TryGetAttackStateInfo(
+        out AnimatorStateInfo stateInfo)
     {
-        AnimatorStateInfo current = animator.GetCurrentAnimatorStateInfo(0);
-        if (current.tagHash == AttackTagHash)
+        AnimatorStateInfo current =
+            animator.GetCurrentAnimatorStateInfo(0);
+
+        if (IsAttackState(current))
         {
             stateInfo = current;
             return true;
@@ -449,8 +1041,10 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         if (animator.IsInTransition(0))
         {
-            AnimatorStateInfo next = animator.GetNextAnimatorStateInfo(0);
-            if (next.tagHash == AttackTagHash)
+            AnimatorStateInfo next =
+                animator.GetNextAnimatorStateInfo(0);
+
+            if (IsAttackState(next))
             {
                 stateInfo = next;
                 return true;
@@ -458,62 +1052,176 @@ public sealed class MMOPlayerController : MonoBehaviour
         }
 
         stateInfo = default;
+
         return false;
     }
+
+    private bool TryGetAttackOneNormalizedTime(
+        out float normalizedTime)
+    {
+        AnimatorStateInfo current =
+            animator.GetCurrentAnimatorStateInfo(0);
+
+        if (current.shortNameHash == Attack1StateHash)
+        {
+            normalizedTime = current.normalizedTime;
+
+            return true;
+        }
+
+        if (animator.IsInTransition(0))
+        {
+            AnimatorStateInfo next =
+                animator.GetNextAnimatorStateInfo(0);
+
+            if (next.shortNameHash == Attack1StateHash)
+            {
+                normalizedTime = next.normalizedTime;
+
+                return true;
+            }
+        }
+
+        normalizedTime = 0f;
+
+        return false;
+    }
+
+    // =========================================================
+    // FINISH ATTACK
+    // =========================================================
 
     private void FinishAttack()
     {
         _attackActive = false;
+
+        _attackStateEntered = false;
+
         _comboQueued = false;
+
         _attackStep = 0;
+
         _networkActionCode = 0;
+
         _currentMoveSpeed = 0f;
+
         _speedSmoothVelocity = 0f;
+
+        if (_hasAttack1Parameter)
+        {
+            animator.ResetTrigger(Attack1Hash);
+        }
+
+        if (_hasAttack2Parameter)
+        {
+            animator.ResetTrigger(Attack2Hash);
+        }
+
+        if (_hasSpeedParameter)
+        {
+            animator.SetFloat(
+                SpeedHash,
+                0f,
+                animatorDampTime,
+                Time.deltaTime
+            );
+        }
     }
 
-    private void UpdateFacing(Vector3 moveDirection, bool hasMoveInput, float deltaTime)
+    // =========================================================
+    // FACING AND ROTATION
+    // =========================================================
+
+    private void UpdateFacing(
+        Vector3 moveDirection,
+        bool hasMoveInput,
+        bool isMovingBackward,
+        float deltaTime)
     {
         Vector3 facingDirection = Vector3.zero;
 
         if (_attackActive)
         {
-            facingDirection = _cameraController != null
-                ? _cameraController.PlanarAimDirection
-                : transform.forward;
+            facingDirection =
+                _cameraController != null
+                    ? _cameraController.PlanarAimDirection
+                    : transform.forward;
         }
         else if (hasMoveInput)
         {
-            bool actionCamera = _cameraController != null &&
-                                _cameraController.CurrentPreset == MMOCameraController.CameraPreset.ActionCombat;
-            facingDirection = actionCamera && _cameraController.GameplayEnabled
-                ? _cameraController.PlanarAimDirection
-                : moveDirection;
+            if (isMovingBackward)
+            {
+                // Backward walking keeps the character facing forward.
+
+                facingDirection =
+                    _cameraController != null
+                        ? _cameraController.PlanarAimDirection
+                        : transform.forward;
+            }
+            else
+            {
+                bool actionCamera =
+                    _cameraController != null &&
+                    _cameraController.CurrentPreset ==
+                    MMOCameraController.CameraPreset.ActionCombat;
+
+                facingDirection =
+                    actionCamera &&
+                    _cameraController.GameplayEnabled
+                        ? _cameraController.PlanarAimDirection
+                        : moveDirection;
+            }
         }
 
         facingDirection.y = 0f;
+
         if (facingDirection.sqrMagnitude < 0.0001f)
         {
             return;
         }
 
-        float targetAngle = Mathf.Atan2(facingDirection.x, facingDirection.z) * Mathf.Rad2Deg;
-        float smoothTime = _attackActive ? attackTurnSmoothTime : turnSmoothTime;
-        float currentAngle = transform.eulerAngles.y;
-        float smoothedAngle = Mathf.SmoothDampAngle(
-            currentAngle,
-            targetAngle,
-            ref _rotationSmoothVelocity,
-            smoothTime,
-            Mathf.Infinity,
-            deltaTime);
+        float targetAngle =
+            Mathf.Atan2(
+                facingDirection.x,
+                facingDirection.z
+            ) * Mathf.Rad2Deg;
 
-        transform.rotation = Quaternion.Euler(0f, smoothedAngle, 0f);
+        float smoothTime =
+            _attackActive
+                ? attackTurnSmoothTime
+                : turnSmoothTime;
+
+        float currentAngle =
+            transform.eulerAngles.y;
+
+        float smoothedAngle =
+            Mathf.SmoothDampAngle(
+                currentAngle,
+                targetAngle,
+                ref _rotationSmoothVelocity,
+                smoothTime,
+                Mathf.Infinity,
+                deltaTime
+            );
+
+        transform.rotation =
+            Quaternion.Euler(
+                0f,
+                smoothedAngle,
+                0f
+            );
     }
 
-    /// <summary>Called by MMOPlayerFusion after Fusion assigns this object's authority.</summary>
-    public void SetLocalAuthority(bool isLocal, MMOCameraController cameraController)
+    // =========================================================
+    // LOCAL / REMOTE AUTHORITY
+    // =========================================================
+
+    public void SetLocalAuthority(
+        bool isLocal,
+        MMOCameraController cameraController)
     {
         _inputEnabled = isLocal;
+
         _cameraController = cameraController;
 
         if (_characterController != null)
@@ -534,10 +1242,15 @@ public sealed class MMOPlayerController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Drives the remote Animator from replicated Fusion values. This method is never used for the owner.
-    /// </summary>
-    public void ApplyNetworkAnimation(float speed, bool grounded, int actionCode, int actionSequence)
+    // =========================================================
+    // REMOTE PLAYER ANIMATION
+    // =========================================================
+
+    public void ApplyNetworkAnimation(
+        float speed,
+        bool grounded,
+        int actionCode,
+        int actionSequence)
     {
         if (_inputEnabled || animator == null)
         {
@@ -546,12 +1259,23 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         if (_hasSpeedParameter)
         {
-            animator.SetFloat(SpeedHash, Mathf.Clamp(speed, 0f, 2f), animatorDampTime, Time.deltaTime);
+            animator.SetFloat(
+                SpeedHash,
+                Mathf.Clamp(speed, -1f, 2f),
+                animatorDampTime,
+                Time.deltaTime
+            );
         }
+
         if (_hasGroundedParameter)
         {
-            animator.SetBool(IsGroundedHash, grounded);
+            animator.SetBool(
+                IsGroundedHash,
+                grounded
+            );
         }
+
+        // Prevent repeating one-shot animation events.
 
         if (actionSequence == _lastRemoteActionSequence)
         {
@@ -559,45 +1283,111 @@ public sealed class MMOPlayerController : MonoBehaviour
         }
 
         _lastRemoteActionSequence = actionSequence;
+
         switch (actionCode)
         {
             case 1:
+
                 if (_hasJumpParameter)
                 {
                     animator.ResetTrigger(JumpHash);
+
                     animator.SetTrigger(JumpHash);
                 }
+
                 break;
 
             case 2:
+
                 if (_hasAttack1Parameter)
                 {
                     animator.ResetTrigger(Attack1Hash);
+
                     animator.SetTrigger(Attack1Hash);
                 }
+
                 break;
 
             case 3:
+
                 if (_hasAttack2Parameter)
                 {
                     animator.ResetTrigger(Attack2Hash);
+
                     animator.SetTrigger(Attack2Hash);
                 }
+
                 break;
         }
     }
 
-    private bool HasParameter(int parameterHash, AnimatorControllerParameterType parameterType)
+    // =========================================================
+    // ANIMATOR PARAMETER VALIDATION
+    // =========================================================
+
+    private void CacheAnimatorParameters()
+    {
+        _hasSpeedParameter =
+            HasParameter(
+                SpeedHash,
+                AnimatorControllerParameterType.Float
+            );
+
+        _hasGroundedParameter =
+            HasParameter(
+                IsGroundedHash,
+                AnimatorControllerParameterType.Bool
+            );
+
+        _hasJumpParameter =
+            HasParameter(
+                JumpHash,
+                AnimatorControllerParameterType.Trigger
+            );
+
+        _hasAttack1Parameter =
+            HasParameter(
+                Attack1Hash,
+                AnimatorControllerParameterType.Trigger
+            );
+
+        _hasAttack2Parameter =
+            HasParameter(
+                Attack2Hash,
+                AnimatorControllerParameterType.Trigger
+            );
+
+        if (!_hasSpeedParameter ||
+            !_hasGroundedParameter ||
+            !_hasJumpParameter ||
+            !_hasAttack1Parameter ||
+            !_hasAttack2Parameter)
+        {
+            Debug.LogError(
+                "[MMOPlayerController] Animator parameters must be " +
+                "Speed (Float), IsGrounded (Bool), Jump (Trigger), " +
+                "Attack1 (Trigger), and Attack2 (Trigger).",
+                this
+            );
+        }
+    }
+
+    private bool HasParameter(
+        int parameterHash,
+        AnimatorControllerParameterType parameterType)
     {
         if (animator == null)
         {
             return false;
         }
 
-        AnimatorControllerParameter[] parameters = animator.parameters;
+        AnimatorControllerParameter[] parameters =
+            animator.parameters;
+
         for (int i = 0; i < parameters.Length; i++)
         {
-            if (parameters[i].nameHash == parameterHash && parameters[i].type == parameterType)
+            if (parameters[i].nameHash == parameterHash &&
+                parameters[i].type == parameterType)
             {
                 return true;
             }
@@ -606,12 +1396,65 @@ public sealed class MMOPlayerController : MonoBehaviour
         return false;
     }
 
+    // =========================================================
+    // INSPECTOR VALIDATION
+    // =========================================================
+
+    private void OnValidate()
+    {
+        walkSpeed = Mathf.Max(0f, walkSpeed);
+
+        runSpeed = Mathf.Max(walkSpeed, runSpeed);
+
+        jumpHeight = Mathf.Max(0.1f, jumpHeight);
+
+        if (gravity >= 0f)
+        {
+            gravity = -Mathf.Max(
+                9.81f,
+                Mathf.Abs(gravity)
+            );
+        }
+
+        groundCheckRadius =
+            Mathf.Max(0.01f, groundCheckRadius);
+
+        jumpLockSafetyTimeout =
+            Mathf.Max(0.5f, jumpLockSafetyTimeout);
+
+        attackEntryTimeout =
+            Mathf.Max(0.1f, attackEntryTimeout);
+
+        attackSafetyTimeout =
+            Mathf.Max(1f, attackSafetyTimeout);
+
+        comboWindowStart =
+            Mathf.Clamp(comboWindowStart, 0f, 0.95f);
+
+        comboWindowEnd =
+            Mathf.Clamp(
+                comboWindowEnd,
+                comboWindowStart + 0.05f,
+                1f
+            );
+    }
+
+    // =========================================================
+    // GROUND CHECK GIZMOS
+    // =========================================================
+
     private void OnDrawGizmosSelected()
     {
-        Vector3 checkPosition = groundCheck != null
-            ? groundCheck.position
-            : transform.position + Vector3.up * 0.12f;
+        Vector3 checkPosition =
+            groundCheck != null
+                ? groundCheck.position
+                : transform.position + Vector3.up * 0.1f;
+
         Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(checkPosition, groundCheckRadius);
+
+        Gizmos.DrawWireSphere(
+            checkPosition,
+            groundCheckRadius
+        );
     }
 }

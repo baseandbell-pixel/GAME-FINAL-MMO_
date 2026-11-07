@@ -395,7 +395,7 @@ CharacterController:
   m_StepOffset: 0.3
   m_SkinWidth: 0.08
   m_MinMoveDistance: 0.001
-  m_Center: {x: 0, y: 1.8, z: 0}
+  m_Center: {x: 0, y: 1, z: 0}
 --- !u!114 &5420888514414568722
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -412,22 +412,24 @@ MonoBehaviour:
   groundCheck: {fileID: 351022320991920721}
   groundLayers:
     serializedVersion: 2
-    m_Bits: 4294967295
+    m_Bits: 64
   allowStandaloneInput: 1
   walkSpeed: 2.2
-  runSpeed: 5.6
-  startInWalkMode: 0
+  runSpeed: 4.2
   accelerationSmoothTime: 0.12
   turnSmoothTime: 0.1
   attackTurnSmoothTime: 0.045
   animatorDampTime: 0.12
-  groundCheckRadius: 0.22
-  jumpHeight: 1.65
+  groundCheckRadius: 0.1
+  jumpHeight: 0.5
   gravity: -25
   groundStickForce: 2.5
-  comboWindowStart: 0.38
-  comboWindowEnd: 0.88
+  jumpLockSafetyTimeout: 5
+  comboWindowStart: 0.7
+  comboWindowEnd: 0.8
   attackStartGraceTime: 0.25
+  attackEntryTimeout: 1
+  attackSafetyTimeout: 5
 --- !u!114 &3332517906185699313
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -451,7 +453,7 @@ MonoBehaviour:
     _data:
       Data: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
   nameLabel: {fileID: 3959170726157461673}
-  nameLabelLocalPosition: {x: 0, y: 2.8, z: 0}
+  nameLabelLocalPosition: {x: 0, y: 2, z: 0}
   showYouSuffix: 1
   cameraController: {fileID: 0}
 --- !u!1 &8148693632911016542
@@ -479,7 +481,7 @@ Transform:
   m_GameObject: {fileID: 8148693632911016542}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 0, y: 0.5, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -508,7 +510,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2050e293c84951248bba14bb20682fc9, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0
+      value: -0.5
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2050e293c84951248bba14bb20682fc9, type: 3}
       propertyPath: m_LocalPosition.z
@@ -725,6 +727,14 @@ PrefabInstance:
     - target: {fileID: 1711505207429034123, guid: 2050e293c84951248bba14bb20682fc9, type: 3}
       propertyPath: m_Layer
       value: 7
+      objectReference: {fileID: 0}
+    - target: {fileID: 2042953256698253358, guid: 2050e293c84951248bba14bb20682fc9, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0.27
+      objectReference: {fileID: 0}
+    - target: {fileID: 2042953256698253358, guid: 2050e293c84951248bba14bb20682fc9, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0.14
       objectReference: {fileID: 0}
     - target: {fileID: 2158975759703390516, guid: 2050e293c84951248bba14bb20682fc9, type: 3}
       propertyPath: m_Layer
