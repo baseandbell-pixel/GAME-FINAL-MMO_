@@ -1,181 +1,88 @@
 
+
 using Fusion;
 using UnityEngine;
 
 /// <summary>
-/// Spawns the local network player in the gameplay scene.
-/// Supports any registered Fusion NetworkObject prefab,
-/// including a Mixamo character with Animator and CharacterController.
+/// Put one of these in the map scene. As soon as the runner is ready it spawns
+/// the local player's capsule (shared mode: each client spawns and owns its own)
+/// and points the follow camera at it.
 /// </summary>
 public class GameSceneController : MonoBehaviour
 {
-    [Header("Player Prefab")]
-    [Tooltip("Assign the new character prefab containing a NetworkObject.")]
-    public NetworkObject playerPrefab;
+    [Header("Prefab")]
+    public PlayerCapsule playerCapsulePrefab;
 
-    [Header("Spawn Settings")]
-    [Tooltip("Optional spawn positions for players.")]
+    [Header("Spawn")]
+    [Tooltip("Optional. One empty transform per seat; leave empty to spawn on a small circle.")]
     public Transform[] spawnPoints;
-
-    [Tooltip("Fallback spawn radius when no spawn points are assigned.")]
     public float fallbackSpawnRadius = 3f;
 
     [Header("Camera")]
-    [Tooltip("Assign the local player's follow camera.")]
     public PlayerFollowCamera followCamera;
 
-    private NetworkRunner runner;
-    private NetworkObject localPlayerObject;
+    NetworkRunner _runner;
+    bool _spawnRequested;
+    float _nextSpawnAttempt;
 
-    private bool spawnRequested;
-    private float nextSpawnAttempt;
-
-    private void Update()
+    void Update()
     {
-        FindRunner();
-
-        if (runner == null || !runner.IsRunning)
+        if (_runner == null)
         {
-            return;
+            _runner = LobbyNetwork.Instance != null ? LobbyNetwork.Instance.Runner : null;
+            if (_runner == null) _runner = FindAnyObjectByType<NetworkRunner>();
         }
 
-        if (!spawnRequested)
-        {
-            TrySpawnLocalPlayer();
-        }
+        // This controller only lives in the map scene, so by the time Update runs the
+        // scene load is already done - we just need the runner to be alive.
+        if (_runner == null || !_runner.IsRunning) return;
 
-        UpdateCameraTarget();
+        if (!_spawnRequested) TrySpawnLocalCapsule();
+
+        // With EnqueueIncompleteSynchronousSpawns the capsule can appear a few frames
+        // after Spawn() was called, so the camera is hooked up as soon as it exists.
+        if (followCamera != null && followCamera.target == null && PlayerCapsule.Local != null)
+            followCamera.target = PlayerCapsule.Local.transform;
     }
 
-    private void FindRunner()
+    void TrySpawnLocalCapsule()
     {
-        if (runner != null)
+        if (playerCapsulePrefab == null)
         {
+            Debug.LogError("[GameSceneController] playerCapsulePrefab is not assigned.");
+            _spawnRequested = true;   // stop retrying every frame
             return;
         }
 
-        if (LobbyNetwork.Instance != null)
-        {
-            runner = LobbyNetwork.Instance.Runner;
-        }
+        if (Time.time < _nextSpawnAttempt) return;
 
-        if (runner == null)
-        {
-            runner = FindAnyObjectByType<NetworkRunner>();
-        }
-    }
-
-    private void TrySpawnLocalPlayer()
-    {
-        if (playerPrefab == null)
-        {
-            Debug.LogError(
-                "[GameSceneController] Player Prefab is not assigned. " +
-                "Please assign a NetworkObject prefab in the Inspector."
-            );
-
-            spawnRequested = true;
-            return;
-        }
-
-        if (Time.time < nextSpawnAttempt)
-        {
-            return;
-        }
-
-        if (runner.LocalPlayer == PlayerRef.None)
-        {
-            return;
-        }
-
-        int seat = runner.LocalPlayer.PlayerId;
+        int seat = _runner.LocalPlayer.PlayerId;
 
         try
         {
-            NetworkObject spawnedPlayer = runner.Spawn(
-                playerPrefab,
-                GetSpawnPosition(seat),
-                Quaternion.identity,
-                runner.LocalPlayer
-            );
+            var capsule = _runner.Spawn(playerCapsulePrefab, GetSpawnPosition(seat), Quaternion.identity, _runner.LocalPlayer);
+            _spawnRequested = true;
 
-            if (spawnedPlayer == null)
-            {
-                nextSpawnAttempt = Time.time + 0.5f;
-
-                Debug.LogWarning(
-                    "[GameSceneController] Spawn returned null. Retrying."
-                );
-
-                return;
-            }
-
-            localPlayerObject = spawnedPlayer;
-            spawnRequested = true;
-
-            Debug.Log(
-                "[GameSceneController] Player spawned successfully: " +
-                spawnedPlayer.name
-            );
-
-            UpdateCameraTarget();
+            if (followCamera != null && capsule != null) followCamera.target = capsule.transform;
         }
-        catch (NetworkObjectSpawnException exception)
+        catch (NetworkObjectSpawnException e)
         {
-            nextSpawnAttempt = Time.time + 0.5f;
-
-            Debug.LogWarning(
-                "[GameSceneController] Player prefab is not ready. " +
-                "Retrying spawn: " + exception.Message
-            );
+            // The prefab source was not in memory yet - Fusion loads it in the background,
+            // so simply try again shortly instead of giving up.
+            _nextSpawnAttempt = Time.time + 0.25f;
+            Debug.LogWarning($"[GameSceneController] Capsule spawn not ready yet, retrying: {e.Message}");
         }
     }
 
-    private void UpdateCameraTarget()
-    {
-        if (followCamera == null)
-        {
-            return;
-        }
-
-        if (followCamera.target != null)
-        {
-            return;
-        }
-
-        if (localPlayerObject == null)
-        {
-            return;
-        }
-
-        followCamera.target = localPlayerObject.transform;
-    }
-
-    private Vector3 GetSpawnPosition(int seat)
+    Vector3 GetSpawnPosition(int seat)
     {
         if (spawnPoints != null && spawnPoints.Length > 0)
         {
-            int index = Mathf.Abs(seat) % spawnPoints.Length;
-
-            Transform spawnPoint = spawnPoints[index];
-
-            if (spawnPoint != null)
-            {
-                return spawnPoint.position;
-            }
+            var t = spawnPoints[Mathf.Abs(seat) % spawnPoints.Length];
+            if (t != null) return t.position;
         }
 
-        int maxPlayers = Mathf.Max(1, LobbyNetwork.MaxPlayers);
-
-        float angle =
-            (Mathf.Abs(seat) % maxPlayers) *
-            (360f / maxPlayers) *
-            Mathf.Deg2Rad;
-
-        return new Vector3(
-            Mathf.Cos(angle) * fallbackSpawnRadius,
-            1f,
-            Mathf.Sin(angle) * fallbackSpawnRadius
-        );
+        float angle = (Mathf.Abs(seat) % LobbyNetwork.MaxPlayers) * (360f / LobbyNetwork.MaxPlayers) * Mathf.Deg2Rad;
+        return new Vector3(Mathf.Cos(angle), 1f, Mathf.Sin(angle)) * fallbackSpawnRadius;
     }
 }
