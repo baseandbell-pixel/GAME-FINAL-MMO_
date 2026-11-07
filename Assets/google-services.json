@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "502120269814",
+    "project_id": "together-we-strong-game",
+    "storage_bucket": "together-we-strong-game.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:502120269814:android:bf84d3da3538bed06569d7",
+        "android_client_info": {
+          "package_name": "com.PLKRT.TogetherWeStrong"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "502120269814-j1ou98nk619upbm8n6tp689iv3blb9re.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDsM993fuL3Pp4pLYxDNixbEDsDvs3gIWU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "502120269814-j1ou98nk619upbm8n6tp689iv3blb9re.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
