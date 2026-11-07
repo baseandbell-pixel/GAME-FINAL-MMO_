@@ -21,6 +21,15 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     [Header("Gameplay")]
     [Tooltip("Name of the map scene to load when the first player presses PLAY. It must be in Build Settings.")]
     public string gameSceneName = "SimpleScene";
+    [Tooltip("Fusion Network Prefab Ref for the actual playable character prefab (NetworkObject + NetworkTransform + MMOPlayerFusion).")]
+    public NetworkPrefabRef gameplayPlayerPrefab;
+    [Tooltip("World position where gameplay characters spawn after the game scene loads.")]
+    public Vector3 gameplaySpawnPosition = Vector3.zero;
+    [Tooltip("Extra world-space spacing multiplied by the local PlayerId modulo MaxPlayers to avoid spawning everyone at exactly the same point.")]
+    public Vector3 gameplaySpawnOffsetPerPlayer = new Vector3(2f, 0f, 0f);
+
+    private bool _localGameplayPlayerSpawned;
+    private NetworkObject _localGameplayPlayer;
 
     /// <summary>Raised whenever the connection state changes (state, human readable message).</summary>
     public event Action<State, string> OnStateChanged;
@@ -49,6 +58,10 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
             return;
         }
         Instance = this;
+
+        // Keep the NetworkRunner and its callbacks alive while Fusion changes scenes.
+        // Place this manager on its own root GameObject in the initial scene.
+        DontDestroyOnLoad(transform.root.gameObject);
 
         Runner = GetComponent<NetworkRunner>();
         Runner.ProvideInput = false;
@@ -195,6 +208,8 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         LobbyPlayer.All.Clear();
         MasterClient = PlayerRef.None;
         _lastMaster = PlayerRef.None;
+        _localGameplayPlayer = null;
+        _localGameplayPlayerSpawned = false;
         SetState(State.Idle, $"Disconnected ({shutdownReason}).");
     }
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
@@ -216,9 +231,69 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) { }
     public void OnSceneLoadDone(NetworkRunner runner)
     {
-        if (CurrentState == State.Starting) SetState(State.InGame, "In game.");
+        if (CurrentState != State.Starting)
+        {
+            return;
+        }
+
+        SetState(State.InGame, "In game.");
+        SpawnLocalGameplayPlayer();
     }
-    public void OnSceneLoadStart(NetworkRunner runner) { }
+
+    /// <summary>
+    /// Each Fusion Shared Mode client spawns the character it owns after the synchronized
+    /// gameplay scene has finished loading. The lobby LobbyPlayer remains responsible for lobby UI.
+    /// </summary>
+    private void SpawnLocalGameplayPlayer()
+    {
+        if (_localGameplayPlayerSpawned)
+        {
+            return;
+        }
+
+        if (Runner == null || !Runner.IsRunning)
+        {
+            Debug.LogError("[LobbyNetwork] Cannot spawn gameplay player because the NetworkRunner is not running.");
+            return;
+        }
+
+        if (!gameplayPlayerPrefab.IsValid)
+        {
+            Debug.LogError("[LobbyNetwork] gameplayPlayerPrefab is not assigned. Assign the Fusion gameplay character prefab in the Inspector.");
+            return;
+        }
+
+        try
+        {
+            int spawnSlot = Runner.LocalPlayer.PlayerId % MaxPlayers;
+            Vector3 spawnPosition = gameplaySpawnPosition + gameplaySpawnOffsetPerPlayer * spawnSlot;
+
+            _localGameplayPlayer = Runner.Spawn(
+                gameplayPlayerPrefab,
+                spawnPosition,
+                Quaternion.identity);
+
+            _localGameplayPlayerSpawned = _localGameplayPlayer != null;
+            if (!_localGameplayPlayerSpawned)
+            {
+                Debug.LogError("[LobbyNetwork] Fusion returned no NetworkObject when spawning the gameplay player.");
+            }
+        }
+        catch (Exception exception)
+        {
+            _localGameplayPlayerSpawned = false;
+            Debug.LogError("[LobbyNetwork] Gameplay player spawn failed: " + exception);
+        }
+    }
+    public void OnSceneLoadStart(NetworkRunner runner)
+    {
+        // The MasterClient initiates LoadScene, but every peer receives this callback.
+        // Mark every peer as Starting so each one spawns its own Shared Mode character in OnSceneLoadDone.
+        if (CurrentState != State.Starting)
+        {
+            SetState(State.Starting, "Loading the map...");
+        }
+    }
     public void OnObjectExitAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
     public void OnObjectEnterAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
     public void OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, ReadOnlySpan<byte> data) { }

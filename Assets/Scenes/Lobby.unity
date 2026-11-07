@@ -1484,6 +1484,8 @@ MonoBehaviour:
   quickJoinButton: {fileID: 457761258}
   lobbyPanel: {fileID: 1891989695}
   lobbyNetwork: {fileID: 822562827}
+  mmoCameraController: {fileID: 0}
+  persistAcrossScenes: 1
 --- !u!1 &582280946
 GameObject:
   m_ObjectHideFlags: 0
@@ -2098,6 +2100,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LobbyNetwork
   lobbyPlayerPrefab: {fileID: 21127809959360558, guid: 80402fad062a5b94f99f68d0938fc5af, type: 3}
   gameSceneName: Map1
+  gameplayPlayerPrefab:
+    RawGuidValue: 78f2f5d838f586b469c66a41bc737ad5
+  gameplaySpawnPosition: {x: 0, y: 0, z: 0}
+  gameplaySpawnOffsetPerPlayer: {x: 2, y: 0, z: 0}
 --- !u!114 &822562828
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2276,6 +2282,7 @@ GameObject:
   - component: {fileID: 961739752}
   - component: {fileID: 961739751}
   - component: {fileID: 961739750}
+  - component: {fileID: 961739754}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -2401,6 +2408,35 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &961739754
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 961739749}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7e50dfa995944ec46bf77e0b225dbeaa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MMOCameraController
+  target: {fileID: 0}
+  startingPreset: 0
+  mouseSensitivity: 2.5
+  minPitch: -10
+  maxPitch: 75
+  orbitSmoothTime: 0.08
+  zoomSensitivity: 2
+  distanceSmooth: 10
+  offsetSmoothTime: 0.12
+  fovSmooth: 8
+  obstructionMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  playerLayerName: Player
+  collisionRadius: 0.22
+  collisionPadding: 0.12
+  collisionReturnSmooth: 8
 --- !u!1 &987203764
 GameObject:
   m_ObjectHideFlags: 0
@@ -3959,6 +3995,6 @@ SceneRoots:
   m_Roots:
   - {fileID: 961739753}
   - {fileID: 203844589}
+  - {fileID: 822562826}
   - {fileID: 547447430}
   - {fileID: 320417878}
-  - {fileID: 822562826}
