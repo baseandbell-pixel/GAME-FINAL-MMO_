@@ -226,6 +226,10 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
             return;
         }
 
+        // CharacterController movement must happen on Fusion's simulation tick.
+        // NetworkTransform then captures a coherent state for remote interpolation.
+        playerController.SimulateNetworked(Runner.DeltaTime); // <--- จุดที่แก้ไข/เพิ่มเติม
+
         NetworkSpeed =
             playerController.NetworkAnimationSpeed;
 

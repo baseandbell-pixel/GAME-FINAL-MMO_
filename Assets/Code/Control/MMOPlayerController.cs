@@ -219,6 +219,14 @@ public sealed class MMOPlayerController : MonoBehaviour
 
     private float _networkAnimationSpeed;
 
+    // Input is sampled once per rendered frame, then consumed by Fusion's simulation tick.
+    // This keeps the local owner and every remote client on the same movement timeline.
+    private Vector2 _cachedMoveInput;
+    private bool _cachedSprintHeld;
+    private bool _cachedGameplayInputAllowed;
+    private bool _jumpPressed;
+    private bool _attackPressed;
+
     // =========================================================
     // ANIMATOR PARAMETER VALIDATION
     // =========================================================
@@ -344,8 +352,6 @@ public sealed class MMOPlayerController : MonoBehaviour
             return;
         }
 
-        float deltaTime = Time.deltaTime;
-
         bool gameplayInputAllowed =
             _cameraController == null
                 ? allowStandaloneInput
@@ -355,19 +361,47 @@ public sealed class MMOPlayerController : MonoBehaviour
         // INPUT
         // =====================================================
 
-        Vector2 moveInput = Vector2.zero;
+        _cachedMoveInput = Vector2.zero;
+        _cachedGameplayInputAllowed = gameplayInputAllowed;
 
         if (gameplayInputAllowed)
         {
-            moveInput.x =
+            _cachedMoveInput.x =
                 Input.GetAxisRaw("Horizontal");
 
-            moveInput.y =
+            _cachedMoveInput.y =
                 Input.GetAxisRaw("Vertical");
 
-            moveInput =
-                Vector2.ClampMagnitude(moveInput, 1f);
+            _cachedMoveInput =
+                Vector2.ClampMagnitude(_cachedMoveInput, 1f);
+
+            _cachedSprintHeld = Input.GetKey(KeyCode.LeftShift);
+
+            // Keep one-frame button presses until the next Fusion simulation tick.
+            _jumpPressed |= Input.GetKeyDown(KeyCode.Space); // <--- จุดที่แก้ไข/เพิ่มเติม
+            _attackPressed |= Input.GetMouseButtonDown(0) && CanStartAttackFromMouse(); // <--- จุดที่แก้ไข/เพิ่มเติม
         }
+        else
+        {
+            _cachedSprintHeld = false;
+        }
+    }
+
+    /// <summary>
+    /// Runs only on the Fusion State Authority from FixedUpdateNetwork.
+    /// Never move a NetworkTransform-owned character from Unity Update.
+    /// </summary>
+    public void SimulateNetworked(float deltaTime) // <--- จุดที่แก้ไข/เพิ่มเติม
+    {
+        if (!_inputEnabled || !_characterController.enabled || animator == null)
+        {
+            _jumpPressed = false;
+            _attackPressed = false;
+            return;
+        }
+
+        bool gameplayInputAllowed = _cachedGameplayInputAllowed;
+        Vector2 moveInput = _cachedMoveInput;
 
         // =====================================================
         // CAMERA RELATIVE MOVEMENT
@@ -407,24 +441,24 @@ public sealed class MMOPlayerController : MonoBehaviour
         // =====================================================
 
         if (gameplayInputAllowed &&
-            Input.GetKeyDown(KeyCode.Space) &&
+            _jumpPressed &&
             _isGrounded &&
             !_attackActive &&
             !_jumpLocked)
         {
             BeginJump();
         }
+        _jumpPressed = false; // <--- จุดที่แก้ไข/เพิ่มเติม
 
         // =====================================================
         // ATTACK INPUT
         // =====================================================
 
-        if (gameplayInputAllowed &&
-            Input.GetMouseButtonDown(0) &&
-            CanStartAttackFromMouse())
+        if (gameplayInputAllowed && _attackPressed)
         {
             HandleAttackClick();
         }
+        _attackPressed = false; // <--- จุดที่แก้ไข/เพิ่มเติม
 
         UpdateAttackComboState();
 
@@ -443,7 +477,7 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         bool shouldRun =
             gameplayInputAllowed &&
-            Input.GetKey(KeyCode.LeftShift) &&
+            _cachedSprintHeld &&
             moveInput.y > 0.1f;
 
         float desiredMoveSpeed =
@@ -1221,6 +1255,14 @@ public sealed class MMOPlayerController : MonoBehaviour
         MMOCameraController cameraController)
     {
         _inputEnabled = isLocal;
+
+        if (!isLocal)
+        {
+            _cachedMoveInput = Vector2.zero; // <--- จุดที่แก้ไข/เพิ่มเติม
+            _cachedSprintHeld = false;
+            _jumpPressed = false;
+            _attackPressed = false;
+        }
 
         _cameraController = cameraController;
 
