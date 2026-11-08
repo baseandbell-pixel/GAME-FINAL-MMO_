@@ -54,6 +54,15 @@ public sealed class MMOCameraController : MonoBehaviour
     [SerializeField, Min(0f)] private float collisionPadding = 0.12f;
     [SerializeField, Min(0.01f)] private float collisionReturnSmooth = 8f;
 
+    [Header("Target Lock")]
+    [Tooltip("Press once to acquire the target nearest the center of the screen; press again to release it.")]
+    [SerializeField] private KeyCode targetLockKey = KeyCode.CapsLock; // <--- จุดที่แก้ไข/เพิ่มเติม
+    [SerializeField, Min(0.1f)] private float targetLockRange = 25f;
+    [SerializeField, Min(0.1f)] private float targetUnlockRange = 32f;
+    [SerializeField, Range(0.05f, 0.7f)] private float targetSelectionViewportRadius = 0.35f;
+    [SerializeField] private bool requireLineOfSight = true;
+    [SerializeField, Min(0f)] private float lostSightGraceTime = 0.75f;
+
     private Camera _camera;
     private CameraPreset _currentPreset;
     private PresetSettings _settings;
@@ -76,6 +85,8 @@ public sealed class MMOCameraController : MonoBehaviour
     private bool _gameplayEnabled;
     private bool _altHeld;
     private bool _initialized;
+    private Targetable _lockedTarget; // <--- จุดที่แก้ไข/เพิ่มเติม
+    private float _lastTargetVisibleTime;
 
     public Transform Target => target;
     public Transform CameraTransform => transform;
@@ -83,6 +94,8 @@ public sealed class MMOCameraController : MonoBehaviour
     public bool GameplayEnabled => _gameplayEnabled;
     public bool IsGameplayInputLocked =>
         _gameplayEnabled && !_altHeld && Cursor.lockState == CursorLockMode.Locked;
+    public Targetable LockedTarget => _lockedTarget; // <--- จุดที่แก้ไข/เพิ่มเติม
+    public bool HasLockedTarget => _lockedTarget != null;
 
     /// <summary>Horizontal direction the camera is aiming toward.</summary>
     public Vector3 PlanarAimDirection
@@ -172,11 +185,23 @@ public sealed class MMOCameraController : MonoBehaviour
             CyclePreset();
         }
 
-        float mouseX = Input.GetAxis("Mouse X");
-        float mouseY = Input.GetAxis("Mouse Y");
-        _targetYaw += mouseX * mouseSensitivity;
-        _targetPitch -= mouseY * mouseSensitivity;
-        _targetPitch = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
+        if (Input.GetKeyDown(targetLockKey))
+        {
+            ToggleTargetLock(); // <--- จุดที่แก้ไข/เพิ่มเติม
+        }
+
+        if (_lockedTarget != null)
+        {
+            UpdateTargetLock(); // <--- จุดที่แก้ไข/เพิ่มเติม
+        }
+        else
+        {
+            float mouseX = Input.GetAxis("Mouse X");
+            float mouseY = Input.GetAxis("Mouse Y");
+            _targetYaw += mouseX * mouseSensitivity;
+            _targetPitch -= mouseY * mouseSensitivity;
+            _targetPitch = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
+        }
 
         float scroll = Input.GetAxis("Mouse ScrollWheel");
         if (Mathf.Abs(scroll) > 0.0001f)
@@ -258,6 +283,11 @@ public sealed class MMOCameraController : MonoBehaviour
 
     public void SetTarget(Transform newTarget)
     {
+        if (newTarget == null)
+        {
+            ClearTargetLock(); // <--- จุดที่แก้ไข/เพิ่มเติม
+        }
+
         target = newTarget;
         if (target != null)
         {
@@ -273,6 +303,12 @@ public sealed class MMOCameraController : MonoBehaviour
     {
         _gameplayEnabled = enabled;
         _altHeld = false;
+
+        if (!enabled)
+        {
+            ClearTargetLock(); // <--- จุดที่แก้ไข/เพิ่มเติม
+        }
+
         ApplyCursorState();
     }
 
@@ -289,6 +325,175 @@ public sealed class MMOCameraController : MonoBehaviour
         _desiredOffset = _settings.targetOffset;
         _targetDistance = _settings.distance;
         _targetPitch = Mathf.Clamp(_settings.pitch, minPitch, maxPitch);
+    }
+
+    private void ToggleTargetLock() // <--- จุดที่แก้ไข/เพิ่มเติม
+    {
+        if (_lockedTarget != null)
+        {
+            ClearTargetLock();
+            return;
+        }
+
+        Targetable bestTarget = FindBestLockTarget();
+        if (bestTarget == null)
+        {
+            return;
+        }
+
+        _lockedTarget = bestTarget;
+        _lockedTarget.SetCameraLocked(true);
+        _lastTargetVisibleTime = Time.unscaledTime;
+    }
+
+    private Targetable FindBestLockTarget()
+    {
+        if (target == null || _camera == null)
+        {
+            return null;
+        }
+
+        Targetable bestTarget = null;
+        float bestScore = float.PositiveInfinity;
+        Vector2 viewportCenter = new Vector2(0.5f, 0.5f);
+
+        foreach (Targetable candidate in Targetable.All)
+        {
+            if (candidate == null || IsLocalPlayer(candidate.transform))
+            {
+                continue;
+            }
+
+            Vector3 aimPosition = candidate.AimPosition;
+            float distance = Vector3.Distance(target.position, aimPosition);
+            if (distance > targetLockRange)
+            {
+                continue;
+            }
+
+            Vector3 viewportPosition = _camera.WorldToViewportPoint(aimPosition);
+            if (viewportPosition.z <= 0f)
+            {
+                continue;
+            }
+
+            float centerDistance = Vector2.Distance(
+                viewportCenter,
+                new Vector2(viewportPosition.x, viewportPosition.y));
+
+            if (centerDistance > targetSelectionViewportRadius)
+            {
+                continue;
+            }
+
+            if (requireLineOfSight && !HasLineOfSight(aimPosition))
+            {
+                continue;
+            }
+
+            float score = centerDistance * 100f + distance / targetLockRange;
+            if (score < bestScore)
+            {
+                bestScore = score;
+                bestTarget = candidate;
+            }
+        }
+
+        return bestTarget;
+    }
+
+    private void UpdateTargetLock()
+    {
+        if (target == null || _lockedTarget == null)
+        {
+            ClearTargetLock();
+            return;
+        }
+
+        Vector3 aimPosition = _lockedTarget.AimPosition;
+        float distance = Vector3.Distance(target.position, aimPosition);
+
+        if (distance > targetUnlockRange)
+        {
+            ClearTargetLock();
+            return;
+        }
+
+        if (!requireLineOfSight || HasLineOfSight(aimPosition))
+        {
+            _lastTargetVisibleTime = Time.unscaledTime;
+        }
+        else if (Time.unscaledTime - _lastTargetVisibleTime > lostSightGraceTime)
+        {
+            ClearTargetLock();
+            return;
+        }
+
+        // Calculate pitch from the camera focus height, not from the player's feet.
+        // This prevents an excessive up/down tilt when the locked target is taller.
+        Vector3 lockOrigin =
+            target.position + Vector3.up * _currentOffset.y; // <--- จุดที่แก้ไข/เพิ่มเติม
+
+        Vector3 aimDirection = aimPosition - lockOrigin;
+        Vector3 planarDirection = Vector3.ProjectOnPlane(aimDirection, Vector3.up);
+        if (planarDirection.sqrMagnitude < 0.0001f)
+        {
+            return;
+        }
+
+        _targetYaw = Mathf.Atan2(planarDirection.x, planarDirection.z) * Mathf.Rad2Deg;
+        float horizontalDistance = planarDirection.magnitude;
+        _targetPitch = Mathf.Clamp(
+            -Mathf.Atan2(aimDirection.y, horizontalDistance) * Mathf.Rad2Deg,
+            minPitch,
+            maxPitch);
+    }
+
+    private bool HasLineOfSight(Vector3 destination)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        Vector3 origin = target.position + _desiredOffset;
+        Vector3 direction = destination - origin;
+        float distance = direction.magnitude;
+        if (distance < 0.001f)
+        {
+            return true;
+        }
+
+        int mask = obstructionMask.value;
+        int playerLayer = LayerMask.NameToLayer(playerLayerName);
+        if (playerLayer >= 0)
+        {
+            mask &= ~(1 << playerLayer);
+        }
+
+        return !Physics.Raycast(
+            origin,
+            direction / distance,
+            distance,
+            mask,
+            QueryTriggerInteraction.Ignore);
+    }
+
+    private bool IsLocalPlayer(Transform candidate)
+    {
+        return candidate == target ||
+               candidate.IsChildOf(target) ||
+               target.IsChildOf(candidate);
+    }
+
+    private void ClearTargetLock()
+    {
+        if (_lockedTarget != null)
+        {
+            _lockedTarget.SetCameraLocked(false);
+        }
+
+        _lockedTarget = null;
     }
 
     private PresetSettings GetPresetSettings(CameraPreset preset)
