@@ -1,4 +1,3 @@
-
 using UnityEngine;
 
 [RequireComponent(typeof(Animator))]
@@ -35,6 +34,7 @@ public class IdleVariationController : MonoBehaviour
     public float variationTimeout = 20f;
 
     Animator anim;
+    NetworkCharacter netChar;
     int weaponLayer = -1;
 
     float idleTimer;
@@ -53,11 +53,16 @@ public class IdleVariationController : MonoBehaviour
     void Awake()
     {
         anim = GetComponent<Animator>();
+        netChar = GetComponent<NetworkCharacter>();
         weaponLayer = anim.GetLayerIndex(weaponLayerName);
     }
 
     void Update()
     {
+        // ให้เฉพาะเครื่องเจ้าของเป็นคนสุ่มท่า Idle แล้วส่งผ่าน NetworkCharacter ให้เครื่องเพื่อนเล่นท่าเดียวกัน
+        if (netChar != null && !netChar.IsOwner)
+            return;
+
         if (anim == null || !anim.isActiveAndEnabled)
             return;
 
@@ -96,6 +101,11 @@ public class IdleVariationController : MonoBehaviour
 
         anim.ResetTrigger(idleVariationTrigger);
         anim.SetTrigger(idleVariationTrigger);
+
+        if (netChar != null)
+        {
+            netChar.RecordAction(NetworkCharacter.ACT_IDLE_VARIATION, 0f, 0f, activeVariant);
+        }
 
         variationPending = true;
         variationStateSeen = false;

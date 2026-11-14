@@ -7,12 +7,17 @@ public class CombatState : MonoBehaviour
     public bool InCombat { get; private set; }
 
     Animator anim;
+    NetworkCharacter netChar;
     int enemiesInRange;
     float outTimer;
     float manualUntil = -1f;
     bool skipDrawNext;
 
-    void Awake() => anim = GetComponent<Animator>();
+    void Awake()
+    {
+        anim = GetComponent<Animator>();
+        netChar = GetComponent<NetworkCharacter>();
+    }
 
     public void EnemyEnter() => enemiesInRange++;
     public void EnemyExit() => enemiesInRange = Mathf.Max(0, enemiesInRange - 1);
@@ -36,6 +41,13 @@ public class CombatState : MonoBehaviour
 
     void Update()
     {
+        // ถ้าเป็นตัวละครของเครื่องเพื่อน ให้รับค่า InCombat จาก NetworkCharacter แทน
+        if (netChar != null && !netChar.IsOwner)
+        {
+            InCombat = netChar.NetInCombat;
+            return;
+        }
+
         bool wantCombat = enemiesInRange > 0 || Time.time < manualUntil;
 
         if (wantCombat)
@@ -55,9 +67,16 @@ public class CombatState : MonoBehaviour
         if (InCombat == value) return;
         InCombat = value;
 
-        // SkipDraw = true: Weapon Action ข้ามท่าชักดาบ ไปถือดาบเลย
-        anim.SetBool("SkipDraw", value && skipDrawNext);
+        bool skip = value && skipDrawNext;
         skipDrawNext = false;
+
+        // SkipDraw = true: Weapon Action ข้ามท่าชักดาบ ไปถือดาบเลย
+        anim.SetBool("SkipDraw", skip);
         anim.SetBool("InCombat", value);
+
+        if (netChar != null)
+        {
+            netChar.SyncCombat(value, skip);
+        }
     }
 }

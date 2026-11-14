@@ -18,7 +18,13 @@ public class LockOnSystem : MonoBehaviour
     public LockOnTarget Target { get; private set; }
     public bool HasTarget => Target != null;
 
+    NetworkCharacter netChar;
     float nextSwitchTime;
+
+    void Awake()
+    {
+        netChar = GetComponent<NetworkCharacter>();
+    }
 
     // ทิศแนวราบจากตำแหน่ง from ไปยังเป้า
     public Vector3 FlatDirFrom(Vector3 from)
@@ -30,6 +36,8 @@ public class LockOnSystem : MonoBehaviour
 
     void Update()
     {
+        if (netChar != null && !netChar.IsOwner) return;
+
         var kb = Keyboard.current;
         var mouse = Mouse.current;
         if (kb == null) return;

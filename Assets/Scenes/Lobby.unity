@@ -2097,7 +2097,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LobbyNetwork
   lobbyPlayerPrefab: {fileID: 21127809959360558, guid: 80402fad062a5b94f99f68d0938fc5af, type: 3}
-  gameSceneName: Map1
+  gameSceneName: Map 1
 --- !u!114 &822562828
 MonoBehaviour:
   m_ObjectHideFlags: 0

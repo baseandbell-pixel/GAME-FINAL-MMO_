@@ -57,6 +57,7 @@ public class PlayerController : MonoBehaviour
     Transform cam;
     LockOnSystem lockSys;
     CombatState combat;
+    NetworkCharacter netChar;
 
     Vector3 airMove;
     Vector3 carryVel;
@@ -85,12 +86,19 @@ public class PlayerController : MonoBehaviour
         anim = GetComponent<Animator>();
         lockSys = GetComponent<LockOnSystem>();
         combat = GetComponent<CombatState>();
-        cam = Camera.main.transform;
+        netChar = GetComponent<NetworkCharacter>();
+        if (Camera.main != null) cam = Camera.main.transform;
     }
 
-    // ใช้การขยับตัวจากคลิป "เฉพาะตอนอยู่ในท่าโจมตี" (ท่าอื่นโค้ดคุมเอง)
+    bool IsLocalOwner()
+    {
+        return netChar == null || netChar.IsOwner;
+    }
+
+    // ใช้การขยับตัวจากคลิป "เฉพาะตอนอยู่ในท่าโจมตี" (เฉพาะเครื่องเจ้าของ ส่วนเครื่องเพื่อน NetworkTransform ซิงก์ตำแหน่งให้แล้ว)
     void OnAnimatorMove()
     {
+        if (!IsLocalOwner()) return;
         if (!useAttackRootMotion) return;
         if (!anim.GetCurrentAnimatorStateInfo(0).IsTag("Attack")) return;
 
@@ -135,6 +143,15 @@ public class PlayerController : MonoBehaviour
         bufferedLight = false;
         bufferedHeavy = false;
         if (combat != null) combat.NotifyAttack(); // ต่อเวลาถือดาบ
+
+        if (netChar != null)
+        {
+            int actType = NetworkCharacter.TriggerNameToActionType(trigger);
+            if (actType != NetworkCharacter.ACT_NONE)
+            {
+                netChar.RecordAction(actType);
+            }
+        }
     }
 
     // เคลียร์ Trigger ที่ไม่มี Transition ไหนรับ กันไปยิงทีหลังแบบไม่ตั้งใจ
@@ -226,6 +243,12 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
+        // ถ้าไม่ใช่ตัวละครของเครื่องเรา ห้ามอ่านคีย์บอร์ด/เมาส์ และไม่ต้องคำนวณ CharacterController ซ้ำ
+        if (!IsLocalOwner()) return;
+
+        if (cam == null && Camera.main != null) cam = Camera.main.transform;
+        if (cam == null) return;
+
         var kb = Keyboard.current;
         var mouse = Mouse.current;
         if (kb == null) return;
@@ -272,6 +295,7 @@ public class PlayerController : MonoBehaviour
             cc.Move((rollDir * speed + Vector3.up * verticalVel) * Time.deltaTime);
             anim.SetBool("Grounded", cc.isGrounded);
             if (rollTimer >= Mathf.Max(rollLockTime, rollDuration)) rolling = false;
+            SyncAnimatorToNetwork(NetworkCharacter.STATE_ROLL, false);
             return;
         }
 
@@ -281,6 +305,7 @@ public class PlayerController : MonoBehaviour
         if (wantRoll && grounded && Time.time >= nextRollTime && rollAllowed)
         {
             StartRoll(input, moving, wishDir, camF, camR);
+            SyncAnimatorToNetwork(NetworkCharacter.STATE_ROLL, false);
             return;
         }
 
@@ -327,6 +352,8 @@ public class PlayerController : MonoBehaviour
                 Quaternion look = Quaternion.LookRotation(FaceDir(camF));
                 transform.rotation = Quaternion.Slerp(transform.rotation, look, attackTurnSpeed * Time.deltaTime);
             }
+
+            SyncAnimatorToNetwork(NetworkCharacter.STATE_ATTACK, false);
             return;
         }
 
@@ -347,6 +374,8 @@ public class PlayerController : MonoBehaviour
 
             anim.ResetTrigger("Jump");
             anim.SetTrigger("Jump");
+
+            if (netChar != null) netChar.RecordAction(NetworkCharacter.ACT_JUMP, jin.x, jin.y);
         }
 
         // ---- เคลื่อนที่แนวราบ ----
@@ -379,6 +408,24 @@ public class PlayerController : MonoBehaviour
             anim.SetFloat("MoveX", 0f, 0.1f, Time.deltaTime);
             anim.SetFloat("MoveY", input.magnitude * (run ? 2f : 1f), 0.1f, Time.deltaTime);
         }
+
+        int currentState = !cc.isGrounded
+            ? NetworkCharacter.STATE_JUMP
+            : (moving ? (run ? NetworkCharacter.STATE_RUN : NetworkCharacter.STATE_WALK) : NetworkCharacter.STATE_IDLE);
+
+        SyncAnimatorToNetwork(currentState, moving);
+    }
+
+    void SyncAnimatorToNetwork(int stateCode, bool moving)
+    {
+        if (netChar == null) return;
+        netChar.SyncLocomotion(
+            stateCode,
+            anim.GetBool("Moving"),
+            anim.GetBool("Grounded"),
+            anim.GetFloat("MoveX"),
+            anim.GetFloat("MoveY")
+        );
     }
 
     void StartRoll(Vector2 input, bool moving, Vector3 wishDir, Vector3 camF, Vector3 camR)
@@ -390,23 +437,27 @@ public class PlayerController : MonoBehaviour
         bufferedLight = false;
         bufferedHeavy = false;
 
+        float rx, ry;
         if (lockOn)
         {
             // หันหาเป้า แล้วกลิ้งตามทิศที่กด (ไม่กดทิศ = ถอยหลัง)
             Vector2 rin = moving ? input.normalized : new Vector2(0f, -1f);
             transform.rotation = Quaternion.LookRotation(FaceDir(camF));
             rollDir = (camF * rin.y + camR * rin.x).normalized;
-            anim.SetFloat("RollX", rin.x);
-            anim.SetFloat("RollY", rin.y);
+            rx = rin.x;
+            ry = rin.y;
         }
         else
         {
             // หันไปทางที่กด แล้วกลิ้งหน้า
             rollDir = moving ? wishDir.normalized : transform.forward;
             transform.rotation = Quaternion.LookRotation(rollDir);
-            anim.SetFloat("RollX", 0f);
-            anim.SetFloat("RollY", 1f);
+            rx = 0f;
+            ry = 1f;
         }
+
+        anim.SetFloat("RollX", rx);
+        anim.SetFloat("RollY", ry);
 
         rolling = true;
         rollTimer = 0f;
@@ -414,6 +465,8 @@ public class PlayerController : MonoBehaviour
         nextRollTime = Time.time + Mathf.Max(rollLockTime, rollDuration) + rollCooldown;
         anim.ResetTrigger("Roll");
         anim.SetTrigger("Roll");
+
+        if (netChar != null) netChar.RecordAction(NetworkCharacter.ACT_ROLL, rx, ry);
     }
 
     void ComputeCurveArea()

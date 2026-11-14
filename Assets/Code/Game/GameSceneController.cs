@@ -3,12 +3,15 @@ using UnityEngine;
 
 /// <summary>
 /// Put one of these in the map scene. As soon as the runner is ready it spawns
-/// the local player's capsule (shared mode: each client spawns and owns its own)
-/// and points the follow camera at it.
+/// the local player's character (shared mode: each client spawns and owns its own)
+/// and points the camera at it.
 /// </summary>
 public class GameSceneController : MonoBehaviour
 {
     [Header("Prefab")]
+    [Tooltip("ใส่ Prefab ตัวละครหลัก เช่น GreatSwordGirl")]
+    public NetworkObject characterPrefab;
+    [Tooltip("ของเดิมเพื่อน (เผื่อฉากเก่าใช้)")]
     public PlayerCapsule playerCapsulePrefab;
 
     [Header("Spawn")]
@@ -17,6 +20,7 @@ public class GameSceneController : MonoBehaviour
     public float fallbackSpawnRadius = 3f;
 
     [Header("Camera")]
+    public SoulsCamera soulsCamera;
     public PlayerFollowCamera followCamera;
 
     NetworkRunner _runner;
@@ -31,44 +35,77 @@ public class GameSceneController : MonoBehaviour
             if (_runner == null) _runner = FindAnyObjectByType<NetworkRunner>();
         }
 
-        // This controller only lives in the map scene, so by the time Update runs the
-        // scene load is already done - we just need the runner to be alive.
         if (_runner == null || !_runner.IsRunning) return;
 
-        if (!_spawnRequested) TrySpawnLocalCapsule();
+        if (!_spawnRequested) TrySpawnLocalPlayer();
 
-        // With EnqueueIncompleteSynchronousSpawns the capsule can appear a few frames
-        // after Spawn() was called, so the camera is hooked up as soon as it exists.
+        // ผูก SoulsCamera เข้ากับตัวละคร Local ทันทีที่ Spawn เสร็จ
+        if (soulsCamera != null && soulsCamera.target == null && NetworkCharacter.Local != null)
+        {
+            BindSoulsCamera(NetworkCharacter.Local.transform);
+        }
+
+        // รองรับระบบเก่าของเพื่อน
         if (followCamera != null && followCamera.target == null && PlayerCapsule.Local != null)
+        {
             followCamera.target = PlayerCapsule.Local.transform;
+        }
     }
 
-    void TrySpawnLocalCapsule()
+    void TrySpawnLocalPlayer()
     {
-        if (playerCapsulePrefab == null)
+        if (characterPrefab == null && playerCapsulePrefab == null)
         {
-            Debug.LogError("[GameSceneController] playerCapsulePrefab is not assigned.");
-            _spawnRequested = true;   // stop retrying every frame
+            Debug.LogError("[GameSceneController] No characterPrefab or playerCapsulePrefab is assigned.");
+            _spawnRequested = true;
             return;
         }
 
         if (Time.time < _nextSpawnAttempt) return;
 
         int seat = _runner.LocalPlayer.PlayerId;
+        Vector3 spawnPos = GetSpawnPosition(seat);
+        Quaternion spawnRot = GetSpawnRotation(seat);
 
         try
         {
-            var capsule = _runner.Spawn(playerCapsulePrefab, GetSpawnPosition(seat), Quaternion.identity, _runner.LocalPlayer);
-            _spawnRequested = true;
+            if (characterPrefab != null)
+            {
+                var spawnedObj = _runner.Spawn(characterPrefab, spawnPos, spawnRot, _runner.LocalPlayer);
+                _spawnRequested = true;
 
-            if (followCamera != null && capsule != null) followCamera.target = capsule.transform;
+                if (soulsCamera != null && spawnedObj != null)
+                {
+                    BindSoulsCamera(spawnedObj.transform);
+                }
+            }
+            else
+            {
+                var capsule = _runner.Spawn(playerCapsulePrefab, spawnPos, spawnRot, _runner.LocalPlayer);
+                _spawnRequested = true;
+
+                if (followCamera != null && capsule != null)
+                {
+                    followCamera.target = capsule.transform;
+                }
+            }
         }
         catch (NetworkObjectSpawnException e)
         {
-            // The prefab source was not in memory yet - Fusion loads it in the background,
-            // so simply try again shortly instead of giving up.
             _nextSpawnAttempt = Time.time + 0.25f;
-            Debug.LogWarning($"[GameSceneController] Capsule spawn not ready yet, retrying: {e.Message}");
+            Debug.LogWarning($"[GameSceneController] Spawn not ready yet, retrying: {e.Message}");
+        }
+    }
+
+    void BindSoulsCamera(Transform targetTransform)
+    {
+        if (soulsCamera == null || targetTransform == null) return;
+
+        soulsCamera.target = targetTransform;
+        var lockSys = targetTransform.GetComponent<LockOnSystem>();
+        if (lockSys != null)
+        {
+            soulsCamera.lockSys = lockSys;
         }
     }
 
@@ -82,5 +119,15 @@ public class GameSceneController : MonoBehaviour
 
         float angle = (Mathf.Abs(seat) % LobbyNetwork.MaxPlayers) * (360f / LobbyNetwork.MaxPlayers) * Mathf.Deg2Rad;
         return new Vector3(Mathf.Cos(angle), 1f, Mathf.Sin(angle)) * fallbackSpawnRadius;
+    }
+
+    Quaternion GetSpawnRotation(int seat)
+    {
+        if (spawnPoints != null && spawnPoints.Length > 0)
+        {
+            var t = spawnPoints[Mathf.Abs(seat) % spawnPoints.Length];
+            if (t != null) return t.rotation;
+        }
+        return Quaternion.identity;
     }
 }

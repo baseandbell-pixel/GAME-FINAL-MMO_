@@ -345,9 +345,6 @@ PrefabInstance:
       addedObject: {fileID: 3672673777363972018}
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
       insertIndex: -1
-      addedObject: {fileID: 8063416782401903677}
-    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
-      insertIndex: -1
       addedObject: {fileID: 8335322851966428224}
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
       insertIndex: -1
@@ -355,6 +352,12 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
       insertIndex: -1
       addedObject: {fileID: 8476462768960392874}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 8317789835554343271}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 4028354240697794520}
   m_SourcePrefab: {fileID: 100100000, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
 --- !u!4 &1183207650001422433 stripped
 Transform:
@@ -477,33 +480,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CombatState
   exitDelay: 1.5
   manualCombatTime: 5
---- !u!54 &8063416782401903677
-Rigidbody:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1183344994937220836}
-  serializedVersion: 5
-  m_Mass: 1
-  m_LinearDamping: 0
-  m_AngularDamping: 0.05
-  m_CenterOfMass: {x: 0, y: 0, z: 0}
-  m_InertiaTensor: {x: 1, y: 1, z: 1}
-  m_InertiaRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_IncludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_ExcludeLayers:
-    serializedVersion: 2
-    m_Bits: 0
-  m_ImplicitCom: 1
-  m_ImplicitTensor: 1
-  m_UseGravity: 1
-  m_IsKinematic: 0
-  m_Interpolate: 0
-  m_Constraints: 0
-  m_CollisionDetection: 0
 --- !u!114 &8335322851966428224
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -574,6 +550,62 @@ MonoBehaviour:
   drawStateName: Draw A Great Sword
   sheathStateName: Sheath A Great Sword
   variationTimeout: 20
+--- !u!114 &8317789835554343271
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1183344994937220836}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: -1552182283, guid: e725a070cec140c4caffb81624c8c787, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Fusion.Runtime.dll::Fusion.NetworkObject
+  SortKey: 4261205736
+  SendPriority: 1
+  EnableInterpolation: 1
+  Flags: 262146
+  NestedObjects: []
+  NetworkedBehaviours:
+  - {fileID: 4028354240697794520}
+  ForceRemoteRenderTimeframe: 0
+--- !u!114 &4028354240697794520
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1183344994937220836}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9a74963039336fc43aae8051216b1ae4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::NetworkCharacter
+  nameLabel: {fileID: 0}
+  detachNameLabel: 1
+  labelOffset: {x: 0, y: 2.2, z: 0}
+  _AvatarIndex: 0
+  _Nick:
+    _length: 0
+    _data:
+      Data: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  _AnimState: 0
+  _NetMoving:
+    RawValue: 0
+  _NetGrounded:
+    RawValue: 0
+  _NetInCombat:
+    RawValue: 0
+  _NetSkipDraw:
+    RawValue: 0
+  _NetMoveX: 0
+  _NetMoveY: 0
+  _ActionCounter: 0
+  _ActionType: 0
+  _ActionParamX: 0
+  _ActionParamY: 0
+  _ActionIntParam: 0
 --- !u!4 &2103095982623179365 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -9114496787053588016, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
