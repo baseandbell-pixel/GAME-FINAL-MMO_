@@ -1798,52 +1798,6 @@ public sealed class CombatHud : MonoBehaviour
         }
     }
 
-    private void DrawStatus()
-    {
-        if (_combat == null || !_combat.IsSpawned) return;
-        const float width = 268f, hpHeight = 24f, staHeight = 20f;
-        float x = 28f, y = Screen.height - 92f;
-
-        float hpFrac = Mathf.Clamp01(_combat.NetworkHealth / (float)Mathf.Max(1, _combat.MaxHealth));
-        float staFrac = Mathf.Clamp01(_combat.CurrentStamina / Mathf.Max(1f, _combat.MaxStamina));
-
-        var old = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, .76f);
-        GUI.DrawTexture(new Rect(x - 4f, y - 4f, width + 8f, hpHeight + staHeight + 34f), Texture2D.whiteTexture);
-
-        GUI.color = new Color(.18f, .05f, .06f, 1f);
-        GUI.DrawTexture(new Rect(x, y, width, hpHeight), Texture2D.whiteTexture);
-        GUI.color = Color.Lerp(new Color(.85f, .12f, .16f), new Color(.18f, .86f, .35f), hpFrac);
-        GUI.DrawTexture(new Rect(x, y, width * hpFrac, hpHeight), Texture2D.whiteTexture);
-
-        GUI.color = Color.white;
-        GUIStyle hpLabel = new GUIStyle(GUI.skin.label) { fontSize = 14, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-        GUI.Label(new Rect(x + 8f, y, width - 16f, hpHeight), $"HP  {_combat.NetworkHealth} / {_combat.MaxHealth}", hpLabel);
-
-        float staY = y + hpHeight + 4f;
-        GUI.color = new Color(.08f, .12f, .16f, 1f);
-        GUI.DrawTexture(new Rect(x, staY, width, staHeight), Texture2D.whiteTexture);
-        Color staColor = _combat.CurrentStamina <= 15f
-            ? new Color(1.0f, 0.35f, 0.12f)
-            : Color.Lerp(new Color(0.95f, 0.65f, 0.12f), new Color(0.20f, 0.82f, 0.98f), staFrac);
-        GUI.color = staColor;
-        GUI.DrawTexture(new Rect(x, staY, width * staFrac, staHeight), Texture2D.whiteTexture);
-
-        GUI.color = Color.white;
-        GUIStyle staLabel = new GUIStyle(GUI.skin.label) { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-        GUI.Label(new Rect(x + 8f, staY, width - 16f, staHeight), $"STAMINA  {_combat.CurrentStamina:0} / {_combat.MaxStamina:0}", staLabel);
-
-        GUIStyle caption = new GUIStyle(GUI.skin.label) { fontSize = 11, fontStyle = FontStyle.Bold, alignment = TextAnchor.UpperLeft };
-        string statusText = _combat.IsBlocking
-            ? "GUARD ACTIVE (75% DMG REDUCTION)"
-            : (_combat.CurrentStamina <= 0.5f ? "EXHAUSTED (RECOVERING STAMINA)" : (_combat.IsInCombat ? "STATUS: IN COMBAT" : "STATUS: COMBAT READY"));
-        if (_combat.ActiveBuffDamageBonus > 0)
-            statusText += $"  |  +ATK {_combat.ActiveBuffDamageBonus} ({_combat.ActiveBuffRemainingSeconds:0}s)";
-        GUI.Label(new Rect(x, staY + staHeight + 3f, width + 80f, 18f), statusText, caption);
-
-        GUI.color = old;
-    }
-
     private void DrawCrosshair()
     {
         if (!IsCrosshairVisible) return;
@@ -1860,6 +1814,36 @@ public sealed class CombatHud : MonoBehaviour
         GUI.DrawTexture(new Rect(x - thickness * .5f, y - radius - 7f, thickness, 6f), Texture2D.whiteTexture);
         GUI.DrawTexture(new Rect(x - thickness * .5f, y + radius + 1f, thickness, 6f), Texture2D.whiteTexture);
         GUI.DrawTexture(new Rect(x - 1.5f, y - 1.5f, 3f, 3f), Texture2D.whiteTexture);
+
+        // Minimal diegetic/crosshair stamina & exhaustion feedback (only visible when stamina is not full)
+        if (_combat != null && _combat.IsSpawned && _combat.CurrentStamina < _combat.MaxStamina - 0.5f)
+        {
+            float frac = Mathf.Clamp01(_combat.CurrentStamina / Mathf.Max(1f, _combat.MaxStamina));
+            const float barW = 56f, barH = 4f;
+            float bx = x - barW * 0.5f;
+            float by = y + radius + 11f;
+
+            GUI.color = new Color(0f, 0f, 0f, 0.65f);
+            GUI.DrawTexture(new Rect(bx - 1f, by - 1f, barW + 2f, barH + 2f), Texture2D.whiteTexture);
+
+            GUI.color = _combat.CurrentStamina <= 15f
+                ? new Color(1f, 0.32f, 0.12f, 0.92f)
+                : new Color(0.22f, 0.88f, 0.98f, 0.88f);
+            GUI.DrawTexture(new Rect(bx, by, barW * frac, barH), Texture2D.whiteTexture);
+
+            if (_combat.CurrentStamina <= 0.5f)
+            {
+                GUI.color = new Color(1f, 0.35f, 0.15f, 0.95f);
+                GUIStyle exStyle = new GUIStyle(GUI.skin.label)
+                {
+                    alignment = TextAnchor.UpperCenter,
+                    fontSize = 11,
+                    fontStyle = FontStyle.Bold
+                };
+                GUI.Label(new Rect(x - 60f, by + 5f, 120f, 18f), "EXHAUSTED", exStyle);
+            }
+        }
+
         GUI.color = old;
     }
 

@@ -6,20 +6,14 @@ using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
 /// <summary>
-/// Phase 2+ MMORPG Character, Inventory &amp; Blacksmith Enhancement Window:
-///   - Top navigation tabs: [ World Map (M) ] | [ Character &amp; Upgrade ] | [ Blacksmith (+Gear) ].
+/// Clean MMORPG Inventory &amp; Equipment Window ([I] / [Tab]):
+///   - Focused strictly on Inventory Management &amp; 4-Slot Gear Equipping (Sword, Shield, Armor, Pants).
 ///   - Exact slotIndex &amp; instanceId binding for Use / Equip / Drop (eliminating slot-0 bugs).
-///   - Full Drag-and-Drop between the 24-slot bag grid and onto the 4 Equipment Gear Cards.
-///   - Scaled attribute upgrade costs (Points + Gold) and +1 to +10 Blacksmith Enhancement.
+///   - Full Drag-and-Drop between the 24-slot bag grid and onto the 4 Equipment Gear Slots.
+///   - No World Map tab, no Enhancement/Blacksmith forging, and no manual Stat-Point allocation clutter.
 /// </summary>
 public class InventoryUI : MonoBehaviour
 {
-    public enum HubTab
-    {
-        Character = 0,
-        Blacksmith = 1
-    }
-
     public static InventoryUI Instance { get; private set; }
 
     private const int Columns = 6;
@@ -27,32 +21,18 @@ public class InventoryUI : MonoBehaviour
     private const float SlotGap = 8f;
 
     public bool IsOpen => _open;
-    public bool IsBlacksmithTabActive => _activeTab == HubTab.Blacksmith;
     public int SelectedSlotIndex => _selected;
-    public int EnhanceTargetSlotIndex => _enhanceTargetSlot;
-    public IReadOnlyList<int> SelectedFodderIndices => _fodderSlots;
     public string HeaderStatsText => _headerStatsText != null ? _headerStatsText.text : string.Empty;
-    public string LastEnhanceFeedback => _enhanceFeedbackText != null ? _enhanceFeedbackText.text : string.Empty;
 
     private InventoryManager _inv;
     private GameObject _panel;
     private RectTransform _panelInnerRect;
-    private HubTab _activeTab = HubTab.Character;
 
-    // Top Navigation Tabs
-    private Image _tabCharacterBg;
-    private Text _tabCharacterText;
-    private Image _tabBlacksmithBg;
-    private Text _tabBlacksmithText;
+    // Header
     private Text _headerStatsText;
 
-    // Character Column vs Blacksmith Column (Left side)
-    private GameObject _characterColumn;
-    private GameObject _blacksmithColumn;
-
-    // Character Column Widgets
+    // Left Column: Equipment Slots + Character Gear Totals + Selected Item Inspector
     private Text _totalStatsText;
-    private Text _statPointsText;
     private Text _detailTitleText;
     private Text _detailBodyText;
     private Image _detailRarityBar;
@@ -77,42 +57,6 @@ public class InventoryUI : MonoBehaviour
         public Button unequipBtn;
     }
     private readonly EquipSlotWidget[] _equipWidgets = new EquipSlotWidget[4];
-
-    // 4 Stat Allocation Rows
-    private class StatAllocWidget
-    {
-        public PlayerStatType statType;
-        public string shortName;
-        public string effectDesc;
-        public Text labelText;
-        public Text costText;
-        public Text valueText;
-        public Button plusBtn;
-    }
-    private readonly StatAllocWidget[] _statWidgets = new StatAllocWidget[4];
-
-    // Blacksmith Column Widgets
-    private readonly Button[] _bsEquippedBtns = new Button[4];
-    private readonly Text[] _bsEquippedTexts = new Text[4];
-    private Image _bsTargetBorder;
-    private Image _bsTargetIcon;
-    private Text _bsTargetTitleText;
-    private Text _bsTargetStatDiffText;
-    private Button _bsClearTargetBtn;
-    private Text _bsOddsText;
-    private Text _bsGoldCostText;
-    private Text _bsFodderReqText;
-    private readonly Button[] _bsFodderSlotBtns = new Button[3];
-    private readonly Image[] _bsFodderSlotBorders = new Image[3];
-    private readonly Text[] _bsFodderSlotTexts = new Text[3];
-    private Button _bsAutoPickBtn;
-    private Button _bsEnhanceBtn;
-    private Image _bsEnhanceBtnBg;
-    private Text _bsEnhanceBtnText;
-    private Text _enhanceFeedbackText;
-
-    private int _enhanceTargetSlot = -1;
-    private readonly List<int> _fodderSlots = new List<int>();
 
     // Floating Hover Rarity Tooltip
     private RectTransform _tooltipRect;
@@ -140,60 +84,76 @@ public class InventoryUI : MonoBehaviour
         return ui;
     }
 
-    // ------------------------------------------------------------------ build
-
     private void Init(InventoryManager inv)
     {
         Instance = this;
         _inv = inv;
         _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        if (_font == null) Debug.LogWarning("[InventoryUI] Built-in font not found; text may not render.");
-
         EnsureEventSystem();
+        BuildCanvas();
+        _inv.Changed += Refresh;
+        SetOpen(false);
+    }
 
-        var canvasGo = new GameObject("Canvas");
-        canvasGo.transform.SetParent(transform, false);
-        var canvas = canvasGo.AddComponent<Canvas>();
+    private void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+        if (_inv != null) _inv.Changed -= Refresh;
+        if (_open) GameplayInput.PopBlocker("InventoryUI");
+    }
+
+    private static void EnsureEventSystem()
+    {
+        if (EventSystem.current != null) return;
+        var go = new GameObject("EventSystem");
+        go.AddComponent<EventSystem>();
+        go.AddComponent<InputSystemUIInputModule>();
+    }
+
+    // ------------------------------------------------------------------ UI Construction
+
+    private void BuildCanvas()
+    {
+        var canvas = gameObject.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        canvas.sortingOrder = 55;
-        var scaler = canvasGo.AddComponent<CanvasScaler>();
+        canvas.sortingOrder = 50;
+
+        var scaler = gameObject.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920f, 1080f);
         scaler.matchWidthOrHeight = 0.5f;
-        canvasGo.AddComponent<GraphicRaycaster>();
 
-        // Main Obsidian Frame (980 x 650)
-        var outerFrame = MakeImage(canvasGo.transform, "CharacterHubFrame", new Color(0.55f, 0.45f, 0.22f, 0.95f));
-        _panel = outerFrame.gameObject;
-        var pr = outerFrame.rectTransform;
-        pr.anchorMin = pr.anchorMax = pr.pivot = new Vector2(0.5f, 0.5f);
-        pr.sizeDelta = new Vector2(980f, 650f);
-        pr.anchoredPosition = Vector2.zero;
+        gameObject.AddComponent<GraphicRaycaster>();
 
-        var inner = MakeImage(_panel.transform, "PanelInner", new Color(0.05f, 0.06f, 0.09f, 0.97f));
+        // Outer Gold Frame (980 x 646)
+        var outer = MakeImage(transform, "InventoryWindowFrame", new Color(0.58f, 0.48f, 0.24f, 0.96f));
+        _panel = outer.gameObject;
+        var prt = outer.rectTransform;
+        prt.anchorMin = prt.anchorMax = prt.pivot = new Vector2(0.5f, 0.5f);
+        prt.sizeDelta = new Vector2(980f, 646f);
+
+        var inner = MakeImage(outer.transform, "InnerDarkBg", new Color(0.05f, 0.06f, 0.09f, 0.97f));
         _panelInnerRect = inner.rectTransform;
         FillWithPadding(_panelInnerRect, 3f);
 
         // ============================================================
-        // TOP NAVIGATION TAB BAR (3 Tabs + Header Stats + Close)
+        // TOP HEADER BAR (Title + Level/Gold Summary + Close)
         // ============================================================
         var navBg = MakeImage(inner.transform, "TopNavigationTabs", new Color(0.08f, 0.09f, 0.13f, 1f));
         Place(navBg.rectTransform, 0f, 0f, 974f, 46f);
 
-        MakeTabButton(navBg.transform, "TabCharacter", "[ Character & Upgrade ]", 14f, 210f, true,
-            () => SetActiveTab(HubTab.Character), out _tabCharacterBg, out _tabCharacterText);
-        MakeTabButton(navBg.transform, "TabBlacksmith", "[ Blacksmith (+Gear) ]", 232f, 210f, false,
-            () => SetActiveTab(HubTab.Blacksmith), out _tabBlacksmithBg, out _tabBlacksmithText);
+        MakeLabel(navBg.transform, "WindowTitle", "INVENTORY & EQUIPMENT", 15, FontStyle.Bold, TextAnchor.MiddleLeft,
+            new Color(1f, 0.88f, 0.36f), 18f, 8f, 320f, 30f);
+
+        _headerStatsText = MakeLabel(navBg.transform, "HeaderStats", "", 13, FontStyle.Bold, TextAnchor.MiddleRight,
+            new Color(0.95f, 0.88f, 0.52f), 350f, 8f, 468f, 30f);
+
         MakeTabButton(navBg.transform, "CloseBtn", "Close [I / Esc]", 832f, 130f, false, () => SetOpen(false), out _, out _);
 
-        _headerStatsText = MakeLabel(navBg.transform, "HeaderStats", "", 12, FontStyle.Bold, TextAnchor.MiddleRight,
-            new Color(0.95f, 0.88f, 0.52f), 450f, 8f, 374f, 30f);
-
         // ============================================================
-        // LEFT COLUMN A: CHARACTER STATS, EQUIPPED GEAR & ATTRIBUTES
+        // LEFT COLUMN: EQUIPPED GEAR + TOTAL STATS + ITEM INSPECTOR
         // ============================================================
-        var leftCol = MakeImage(inner.transform, "CharacterColumn", new Color(0.07f, 0.08f, 0.12f, 1f));
-        _characterColumn = leftCol.gameObject;
+        var leftCol = MakeImage(inner.transform, "EquipmentColumn", new Color(0.07f, 0.08f, 0.12f, 1f));
         Place(leftCol.rectTransform, 14f, 58f, 418f, 548f);
 
         MakeLabel(leftCol.transform, "EquipSectionTitle", "EQUIPPED GEAR  (Drag Bag Gear Here or Click Equip)", 12, FontStyle.Bold, TextAnchor.MiddleLeft,
@@ -201,359 +161,194 @@ public class InventoryUI : MonoBehaviour
 
         BuildEquipSlotWidget(leftCol.transform, 0, EquipmentSlotType.Sword, "SWORD", 12f, 36f);
         BuildEquipSlotWidget(leftCol.transform, 1, EquipmentSlotType.Shield, "SHIELD", 212f, 36f);
-        BuildEquipSlotWidget(leftCol.transform, 2, EquipmentSlotType.Armor, "ARMOR", 12f, 128f);
-        BuildEquipSlotWidget(leftCol.transform, 3, EquipmentSlotType.Pants, "PANTS", 212f, 128f);
+        BuildEquipSlotWidget(leftCol.transform, 2, EquipmentSlotType.Armor, "ARMOR", 12f, 132f);
+        BuildEquipSlotWidget(leftCol.transform, 3, EquipmentSlotType.Pants, "PANTS", 212f, 132f);
 
-        var totalBox = MakeImage(leftCol.transform, "TotalStatsBox", new Color(0.05f, 0.06f, 0.09f, 1f));
-        Place(totalBox.rectTransform, 12f, 224f, 394f, 92f);
-        MakeLabel(totalBox.transform, "TotalTitle", "TOTAL CHARACTER STATS  (Base + Level + Enhanced Gear)", 12, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(0.55f, 0.82f, 1f), 10f, 6f, 374f, 20f);
-        _totalStatsText = MakeLabel(totalBox.transform, "TotalBody", "", 13, FontStyle.Bold, TextAnchor.UpperLeft,
-            Color.white, 10f, 30f, 374f, 58f);
+        // Total Combat Stats Box (Base + Level + Equipped Gear)
+        var statsBox = MakeImage(leftCol.transform, "TotalStatsBox", new Color(0.04f, 0.05f, 0.08f, 0.95f));
+        Place(statsBox.rectTransform, 12f, 232f, 394f, 94f);
 
-        var allocBox = MakeImage(leftCol.transform, "StatAllocBox", new Color(0.05f, 0.06f, 0.09f, 1f));
-        Place(allocBox.rectTransform, 12f, 326f, 394f, 210f);
-        MakeLabel(allocBox.transform, "AllocTitle", "ATTRIBUTES & UPGRADE", 13, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(1f, 0.84f, 0.28f), 10f, 8f, 210f, 22f);
-        _statPointsText = MakeLabel(allocBox.transform, "UnspentPts", "Points: 0", 13, FontStyle.Bold, TextAnchor.MiddleRight,
-            new Color(1f, 0.84f, 0.28f), 220f, 8f, 162f, 22f);
+        MakeLabel(statsBox.transform, "StatsHeader", "CHARACTER COMBAT TOTALS (Base + Gear)", 11, FontStyle.Bold, TextAnchor.MiddleLeft,
+            new Color(0.55f, 0.85f, 1f), 10f, 6f, 374f, 18f);
 
-        BuildStatRow(allocBox.transform, 0, PlayerStatType.STR, "STR", "+4 ATK", 42f);
-        BuildStatRow(allocBox.transform, 1, PlayerStatType.VIT, "VIT", "+15 HP", 82f);
-        BuildStatRow(allocBox.transform, 2, PlayerStatType.END, "END", "+12 STA", 122f);
-        BuildStatRow(allocBox.transform, 3, PlayerStatType.AGI, "AGI", "+3% CRIT", 162f);
+        _totalStatsText = MakeLabel(statsBox.transform, "TotalStatsBody", "", 12, FontStyle.Bold, TextAnchor.UpperLeft,
+            new Color(0.88f, 0.94f, 1f), 10f, 28f, 374f, 60f);
+
+        // Selected Item Inspector Box
+        var detailBox = MakeImage(leftCol.transform, "SelectedItemInspector", new Color(0.04f, 0.05f, 0.08f, 0.96f));
+        Place(detailBox.rectTransform, 12f, 336f, 394f, 200f);
+
+        _detailRarityBar = MakeImage(detailBox.transform, "RarityHeaderBar", new Color(0.3f, 0.32f, 0.38f, 1f));
+        Place(_detailRarityBar.rectTransform, 0f, 0f, 394f, 4f);
+
+        _detailTitleText = MakeLabel(detailBox.transform, "DetailTitle", "Select an inventory slot", 14, FontStyle.Bold,
+            TextAnchor.MiddleLeft, Color.white, 12f, 10f, 370f, 24f);
+        _detailBodyText = MakeLabel(detailBox.transform, "DetailBody",
+            "Click any bag slot to inspect its stats, or drag items between slots and onto the 4 Equipment slots above.",
+            12, FontStyle.Normal, TextAnchor.UpperLeft, new Color(0.78f, 0.82f, 0.88f), 12f, 38f, 370f, 108f);
+
+        _useBtn = MakeActionButton(detailBox.transform, "UseBtn", "Use", 12f, 154f, 116f, 34f, OnUseClicked, out _);
+        _equipBtn = MakeActionButton(detailBox.transform, "EquipBtn", "Equip", 138f, 154f, 116f, 34f, OnEquipClicked, out _equipBtnText);
+        _dropBtn = MakeActionButton(detailBox.transform, "DropBtn", "Drop", 264f, 154f, 118f, 34f, OnDropClicked, out _);
 
         // ============================================================
-        // LEFT COLUMN B: BLACKSMITH GEAR ENHANCEMENT (+1 TO +10)
+        // RIGHT COLUMN: 24-SLOT INVENTORY GRID (6x4) WITH DRAG & DROP
         // ============================================================
-        BuildBlacksmithColumn(inner.transform);
-
-        // ============================================================
-        // RIGHT COLUMN: DARK MMORPG INVENTORY GRID & RARITY INSPECTOR
-        // ============================================================
-        var rightCol = MakeImage(inner.transform, "InventoryColumn", new Color(0.07f, 0.08f, 0.12f, 1f));
+        var rightCol = MakeImage(inner.transform, "InventoryGridColumn", new Color(0.07f, 0.08f, 0.12f, 1f));
         Place(rightCol.rectTransform, 444f, 58f, 516f, 548f);
 
-        MakeLabel(rightCol.transform, "InvTitle", "INVENTORY  (Drag to Reorder/Equip  |  Click to Inspect)", 12, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(1f, 0.84f, 0.28f), 14f, 10f, 488f, 22f);
+        MakeLabel(rightCol.transform, "BagTitle",
+            "INVENTORY BAG (24 SLOTS)  —  Drag & Drop to Move, Swap, or Equip",
+            12, FontStyle.Bold, TextAnchor.MiddleLeft, new Color(1f, 0.84f, 0.28f), 14f, 10f, 488f, 22f);
 
-        int count = _inv.Capacity;
-        _slotBorders = new Image[count];
-        _slotBgs = new Image[count];
-        _slotIcons = new Image[count];
-        _slotLabels = new Text[count];
-        _slotQtyLabels = new Text[count];
+        int n = _inv.Capacity;
+        _slotBorders = new Image[n];
+        _slotBgs = new Image[n];
+        _slotIcons = new Image[n];
+        _slotLabels = new Text[n];
+        _slotQtyLabels = new Text[n];
 
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < n; i++)
         {
-            int col = i % Columns, row = i / Columns;
+            int col = i % Columns;
+            int row = i / Columns;
             float x = 14f + col * (SlotSize + SlotGap);
-            float y = 38f + row * (SlotSize + SlotGap);
+            float y = 42f + row * (SlotSize + SlotGap);
 
-            var borderImg = MakeImage(rightCol.transform, "SlotBorder" + i, new Color(0.22f, 0.25f, 0.32f, 1f));
-            Place(borderImg.rectTransform, x, y, SlotSize, SlotSize);
+            var border = MakeImage(rightCol.transform, $"Slot_{i:00}", new Color(0.24f, 0.27f, 0.34f, 1f));
+            Place(border.rectTransform, x, y, SlotSize, SlotSize);
+            _slotBorders[i] = border;
 
-            var bgImg = MakeImage(borderImg.transform, "SlotBg", new Color(0.10f, 0.12f, 0.16f, 1f));
-            FillWithPadding(bgImg.rectTransform, 2f);
+            var bg = MakeImage(border.transform, "InnerBg", new Color(0.10f, 0.11f, 0.16f, 1f));
+            bg.raycastTarget = false;
+            FillWithPadding(bg.rectTransform, 2f);
+            _slotBgs[i] = bg;
 
-            var btn = bgImg.gameObject.AddComponent<Button>();
-            btn.targetGraphic = bgImg;
+            var icon = MakeImage(bg.transform, "ItemIcon", Color.clear);
+            icon.raycastTarget = false;
+            Place(icon.rectTransform, 17f, 6f, 40f, 40f);
+            _slotIcons[i] = icon;
+
             int captured = i;
-            btn.onClick.AddListener(() => OnGridSlotClicked(captured));
+            var btn = border.gameObject.AddComponent<Button>();
+            btn.targetGraphic = border;
+            btn.onClick.AddListener(() => SelectSlot(captured));
 
-            var relay = bgImg.gameObject.AddComponent<SlotDragRelay>();
-            relay.owner = this;
-            relay.slotIndex = captured;
+            var dragRelay = border.gameObject.AddComponent<SlotDragRelay>();
+            dragRelay.owner = this;
+            dragRelay.slotIndex = captured;
 
-            var iconImg = MakeImage(bgImg.transform, "Icon", Color.white);
-            iconImg.raycastTarget = false;
-            Place(iconImg.rectTransform, 20f, 10f, 34f, 34f);
-            iconImg.gameObject.SetActive(false);
-
-            var label = MakeLabel(bgImg.transform, "Label", "", 10, FontStyle.Bold, TextAnchor.LowerCenter,
-                Color.white, 3f, 44f, SlotSize - 10f, 26f);
-
-            var qty = MakeLabel(bgImg.transform, "Qty", "", 10, FontStyle.Bold, TextAnchor.UpperRight,
-                new Color(1f, 0.92f, 0.45f), 4f, 3f, SlotSize - 12f, 16f);
-
-            _slotBorders[i] = borderImg;
-            _slotBgs[i] = bgImg;
-            _slotIcons[i] = iconImg;
-            _slotLabels[i] = label;
-            _slotQtyLabels[i] = qty;
+            _slotLabels[i] = MakeLabel(bg.transform, "Name", "", 10, FontStyle.Bold,
+                TextAnchor.LowerCenter, Color.white, 3f, 44f, SlotSize - 10f, 28f);
+            _slotQtyLabels[i] = MakeLabel(bg.transform, "Qty", "", 11, FontStyle.Bold,
+                TextAnchor.UpperRight, new Color(1f, 0.92f, 0.35f), 3f, 3f, SlotSize - 10f, 18f);
         }
 
-        // Selected Item Detail Box + Action Buttons (Bottom of Right Column)
-        var detailFrame = MakeImage(rightCol.transform, "SelectedDetailBox", new Color(0.05f, 0.06f, 0.09f, 1f));
-        Place(detailFrame.rectTransform, 14f, 384f, 488f, 114f);
+        MakeLabel(rightCol.transform, "BagFooterHint",
+            "• Click Use / Equip / Drop to act strictly on the selected slot.\n" +
+            "• Drag any slot onto another slot to move/swap, or drag gear onto SWORD / SHIELD / ARMOR / PANTS.",
+            11, FontStyle.Normal, TextAnchor.UpperLeft, new Color(0.68f, 0.75f, 0.84f), 14f, 396f, 488f, 48f);
 
-        _detailRarityBar = MakeImage(detailFrame.transform, "RarityStripe", new Color(0.35f, 0.38f, 0.45f, 1f));
-        Place(_detailRarityBar.rectTransform, 0f, 0f, 5f, 114f);
-
-        _detailTitleText = MakeLabel(detailFrame.transform, "DetailTitle", "Select an item to inspect.", 14, FontStyle.Bold, TextAnchor.MiddleLeft,
-            Color.white, 14f, 6f, 464f, 24f);
-        _detailBodyText = MakeLabel(detailFrame.transform, "DetailBody", "", 12, FontStyle.Normal, TextAnchor.UpperLeft,
-            new Color(0.84f, 0.87f, 0.92f), 14f, 32f, 464f, 76f);
-
-        _useBtn = MakeActionButton(rightCol.transform, "UseBtn", "Use", 14f, 506f, 156f, 32f, OnUseOrAutoClick, out _);
-        _equipBtn = MakeActionButton(rightCol.transform, "EquipBtn", "Equip", 180f, 506f, 156f, 32f, OnEquipOrTargetClick, out _equipBtnText);
-        _dropBtn = MakeActionButton(rightCol.transform, "DropBtn", "Drop", 346f, 506f, 156f, 32f, () =>
-        {
-            if (_selected >= 0) _inv.DropItem(_selected);
-        }, out _);
-
-        // Bottom Footer Hint
-        MakeLabel(inner.transform, "Hint",
-            "Rarity Tiers: Normal (Grey)  |  Rare (Blue)  |  Epic (Purple)  |  Legendary (Gold)  |  Blacksmith (+1..+10)",
+        // Footer Bar
+        MakeLabel(inner.transform, "FooterHint",
+            "Rarity Tiers: Normal (Grey)  |  Rare (Blue)  |  Epic (Purple)  |  Legendary (Gold)  |  Auto-Saved to Disk",
             12, FontStyle.Normal, TextAnchor.MiddleCenter, new Color(0.70f, 0.76f, 0.84f), 14f, 612f, 946f, 26f);
 
         // ============================================================
-        // FLOATING HOVER RARITY TOOLTIP
+        // FLOATING HOVER TOOLTIP & DRAG GHOST ICON
         // ============================================================
-        var tipBorder = MakeImage(_panel.transform, "HoverTooltip", new Color(0.75f, 0.78f, 0.82f, 0.98f));
-        tipBorder.raycastTarget = false;
-        _tooltipBorder = tipBorder;
-        _tooltipRect = tipBorder.rectTransform;
-        _tooltipRect.anchorMin = _tooltipRect.anchorMax = new Vector2(0f, 1f);
-        _tooltipRect.pivot = new Vector2(0f, 1f);
-        _tooltipRect.sizeDelta = new Vector2(280f, 134f);
-
-        var tipBg = MakeImage(_tooltipRect, "TipBg", new Color(0.04f, 0.05f, 0.08f, 0.98f));
-        tipBg.raycastTarget = false;
-        FillWithPadding(tipBg.rectTransform, 2f);
-
-        _tooltipTitle = MakeLabel(tipBg.transform, "TipTitle", "", 13, FontStyle.Bold, TextAnchor.UpperLeft,
-            Color.white, 8f, 6f, 260f, 34f);
-        _tooltipBody = MakeLabel(tipBg.transform, "TipBody", "", 11, FontStyle.Normal, TextAnchor.UpperLeft,
-            new Color(0.86f, 0.88f, 0.92f), 8f, 40f, 260f, 86f);
-
-        _tooltipRect.gameObject.SetActive(false);
-
-        // ============================================================
-        // FLOATING DRAG GHOST ICON
-        // ============================================================
-        _dragGhostBorder = MakeImage(_panel.transform, "DragGhost", Color.white);
-        _dragGhostBorder.raycastTarget = false;
-        _dragGhostObj = _dragGhostBorder.gameObject;
-        _dragGhostRect = _dragGhostBorder.rectTransform;
-        _dragGhostRect.sizeDelta = new Vector2(54f, 54f);
-        var ghostInner = MakeImage(_dragGhostRect, "Inner", new Color(0.07f, 0.09f, 0.14f, 0.92f));
-        ghostInner.raycastTarget = false;
-        FillWithPadding(ghostInner.rectTransform, 2f);
-        _dragGhostIcon = MakeImage(ghostInner.transform, "Icon", Color.white);
-        _dragGhostIcon.raycastTarget = false;
-        FillWithPadding(_dragGhostIcon.rectTransform, 6f);
-        _dragGhostObj.SetActive(false);
-
-        ApplyActiveTabVisuals();
-        _panel.SetActive(false);
-        _inv.Changed += Refresh;
-        Debug.Log("[InventoryUI] Upgraded MMORPG Hub built (" + count + " slots + Drag&Drop + Blacksmith).");
+        BuildHoverTooltip(inner.transform);
+        BuildDragGhost(inner.transform);
     }
 
-    private void BuildBlacksmithColumn(Transform parent)
+    private void BuildEquipSlotWidget(Transform parent, int index, EquipmentSlotType slotType, string slotTitle, float x, float y)
     {
-        var bsCol = MakeImage(parent, "BlacksmithColumn", new Color(0.07f, 0.08f, 0.12f, 1f));
-        _blacksmithColumn = bsCol.gameObject;
-        Place(bsCol.rectTransform, 14f, 58f, 418f, 548f);
+        var border = MakeImage(parent, $"EquipSlot_{slotType}", new Color(0.32f, 0.35f, 0.44f, 1f));
+        Place(border.rectTransform, x, y, 194f, 86f);
 
-        MakeLabel(bsCol.transform, "BsTitle", "BLACKSMITH ENHANCEMENT  (+1 to +10)", 13, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(1f, 0.78f, 0.25f), 12f, 10f, 394f, 22f);
-
-        // Quick-Select Equipped Gear Row (4 Buttons)
-        EquipmentSlotType[] eqOrder = { EquipmentSlotType.Sword, EquipmentSlotType.Shield, EquipmentSlotType.Armor, EquipmentSlotType.Pants };
-        string[] eqNames = { "Sword", "Shield", "Armor", "Pants" };
-        for (int i = 0; i < 4; i++)
-        {
-            EquipmentSlotType slotType = eqOrder[i];
-            float bx = 12f + i * 99f;
-            _bsEquippedBtns[i] = MakeActionButton(bsCol.transform, "BsEqBtn_" + eqNames[i], eqNames[i], bx, 38f, 94f, 44f, () =>
-            {
-                SelectEquippedAsEnhanceTarget(slotType);
-            }, out _bsEquippedTexts[i]);
-            _bsEquippedTexts[i].fontSize = 11;
-        }
-
-        // Target Gear Preview Box
-        _bsTargetBorder = MakeImage(bsCol.transform, "TargetPreviewBorder", new Color(0.26f, 0.30f, 0.38f, 1f));
-        Place(_bsTargetBorder.rectTransform, 12f, 92f, 394f, 140f);
-        var targetBg = MakeImage(_bsTargetBorder.transform, "TargetBg", new Color(0.05f, 0.06f, 0.09f, 1f));
-        FillWithPadding(targetBg.rectTransform, 2f);
-
-        var iconFrame = MakeImage(targetBg.transform, "IconFrame", new Color(0.11f, 0.13f, 0.18f, 1f));
-        Place(iconFrame.rectTransform, 10f, 14f, 64f, 64f);
-        _bsTargetIcon = MakeImage(iconFrame.transform, "Icon", Color.white);
-        FillWithPadding(_bsTargetIcon.rectTransform, 8f);
-        _bsTargetIcon.gameObject.SetActive(false);
-
-        _bsTargetTitleText = MakeLabel(targetBg.transform, "TargetTitle", "Select Equipment from Bag or Equipped Bar", 13, FontStyle.Bold, TextAnchor.UpperLeft,
-            Color.white, 84f, 10f, 238f, 36f);
-        _bsTargetStatDiffText = MakeLabel(targetBg.transform, "TargetStats", "Pick any gear to inspect +Next level stats, Gold cost, and required Fodder.", 11, FontStyle.Normal, TextAnchor.UpperLeft,
-            new Color(0.76f, 0.85f, 0.94f), 84f, 50f, 296f, 82f);
-
-        _bsClearTargetBtn = MakeActionButton(targetBg.transform, "ClearTargetBtn", "Clear", 328f, 8f, 54f, 24f, () =>
-        {
-            _enhanceTargetSlot = -1;
-            _fodderSlots.Clear();
-            SetEnhanceFeedback("Select Target Gear to enhance.", new Color(0.80f, 0.84f, 0.92f));
-            Refresh();
-        }, out _);
-
-        // Requirements & Success Odds Box
-        var reqBox = MakeImage(bsCol.transform, "RequirementsBox", new Color(0.05f, 0.06f, 0.09f, 1f));
-        Place(reqBox.rectTransform, 12f, 240f, 394f, 106f);
-        MakeLabel(reqBox.transform, "ReqHeader", "ENHANCEMENT COST & ODDS", 12, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(0.55f, 0.82f, 1f), 10f, 6f, 374f, 20f);
-        _bsOddsText = MakeLabel(reqBox.transform, "OddsText", "Success Chance: --", 13, FontStyle.Bold, TextAnchor.MiddleLeft,
-            Color.white, 10f, 28f, 374f, 22f);
-        _bsGoldCostText = MakeLabel(reqBox.transform, "GoldCostText", "Gold Required: --", 13, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(1f, 0.86f, 0.30f), 10f, 52f, 374f, 22f);
-        _bsFodderReqText = MakeLabel(reqBox.transform, "FodderReqText", "Material Fodder: --", 12, FontStyle.Normal, TextAnchor.MiddleLeft,
-            new Color(0.82f, 0.86f, 0.92f), 10f, 76f, 374f, 22f);
-
-        // Attached Fodder Slots (up to 3)
-        var fodderStrip = MakeImage(bsCol.transform, "FodderStrip", new Color(0.05f, 0.06f, 0.09f, 1f));
-        Place(fodderStrip.rectTransform, 12f, 354f, 394f, 88f);
-        MakeLabel(fodderStrip.transform, "FodderTitle", "SACRIFICE FODDER SLOTS  (Click bag gear to attach/remove)", 11, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(1f, 0.72f, 0.32f), 10f, 6f, 374f, 18f);
-
-        for (int i = 0; i < 3; i++)
-        {
-            int fodderIdx = i;
-            float fx = 10f + i * 126f;
-            var fBorder = MakeImage(fodderStrip.transform, "FodderSlotBorder" + i, new Color(0.24f, 0.28f, 0.36f, 1f));
-            Place(fBorder.rectTransform, fx, 28f, 118f, 52f);
-            var fBg = MakeImage(fBorder.transform, "Bg", new Color(0.10f, 0.12f, 0.16f, 1f));
-            FillWithPadding(fBg.rectTransform, 2f);
-            var fBtn = fBg.gameObject.AddComponent<Button>();
-            fBtn.targetGraphic = fBg;
-            fBtn.onClick.AddListener(() =>
-            {
-                if (fodderIdx < _fodderSlots.Count)
-                {
-                    _fodderSlots.RemoveAt(fodderIdx);
-                    Refresh();
-                }
-            });
-            var fTxt = MakeLabel(fBg.transform, "Text", "Empty", 10, FontStyle.Bold, TextAnchor.MiddleCenter,
-                new Color(0.65f, 0.70f, 0.78f), 4f, 4f, 106f, 40f);
-
-            _bsFodderSlotBorders[i] = fBorder;
-            _bsFodderSlotBtns[i] = fBtn;
-            _bsFodderSlotTexts[i] = fTxt;
-        }
-
-        // Action Row: Auto-Pick + ENHANCE
-        _bsAutoPickBtn = MakeActionButton(bsCol.transform, "AutoPickFodderBtn", "Auto-Pick Fodder", 12f, 452f, 152f, 40f, AutoPickEligibleFodder, out _);
-
-        var enhBorder = MakeImage(bsCol.transform, "EnhanceBtnBorder", new Color(0.85f, 0.65f, 0.18f, 1f));
-        Place(enhBorder.rectTransform, 174f, 452f, 232f, 40f);
-        var enhBg = MakeImage(enhBorder.transform, "EnhanceBtnBg", new Color(0.22f, 0.42f, 0.18f, 1f));
-        FillWithPadding(enhBg.rectTransform, 2f);
-        _bsEnhanceBtnBg = enhBg;
-        _bsEnhanceBtn = enhBg.gameObject.AddComponent<Button>();
-        _bsEnhanceBtn.targetGraphic = enhBg;
-        _bsEnhanceBtn.onClick.AddListener(ExecuteEnhanceClick);
-        _bsEnhanceBtnText = MakeLabel(enhBg.transform, "Text", "ENHANCE GEAR", 14, FontStyle.Bold, TextAnchor.MiddleCenter,
-            new Color(1f, 0.94f, 0.72f), 0f, 0f, 228f, 36f);
-
-        _enhanceFeedbackText = MakeLabel(bsCol.transform, "EnhanceFeedback",
-            "Select Target Gear (+0..+9), add required Fodder, and forge!",
-            12, FontStyle.Bold, TextAnchor.MiddleCenter, new Color(0.76f, 0.84f, 0.92f),
-            12f, 498f, 394f, 42f);
-
-        _blacksmithColumn.SetActive(false);
-    }
-
-    private void BuildEquipSlotWidget(Transform parent, int idx, EquipmentSlotType slotType, string slotTitle, float x, float y)
-    {
-        var border = MakeImage(parent, "EquipBorder_" + slotTitle, new Color(0.24f, 0.27f, 0.34f, 1f));
-        Place(border.rectTransform, x, y, 194f, 84f);
-
-        var bg = MakeImage(border.transform, "Bg", new Color(0.09f, 0.11f, 0.15f, 1f));
-        FillWithPadding(bg.rectTransform, 2f);
-
-        // Allow dropping dragged gear directly onto this Equipment card!
-        var dropRelay = bg.gameObject.AddComponent<EquipDropRelay>();
+        var dropRelay = border.gameObject.AddComponent<EquipDropRelay>();
         dropRelay.owner = this;
         dropRelay.slotType = slotType;
 
-        var iconFrame = MakeImage(bg.transform, "IconFrame", new Color(0.14f, 0.16f, 0.22f, 1f));
+        var inner = MakeImage(border.transform, "Inner", new Color(0.09f, 0.10f, 0.15f, 1f));
+        inner.raycastTarget = false;
+        FillWithPadding(inner.rectTransform, 2f);
+
+        MakeLabel(inner.transform, "SlotHeader", slotTitle, 10, FontStyle.Bold, TextAnchor.UpperLeft,
+            new Color(0.62f, 0.70f, 0.82f), 8f, 5f, 110f, 14f);
+
+        var iconFrame = MakeImage(inner.transform, "IconFrame", new Color(0.14f, 0.16f, 0.22f, 1f));
         iconFrame.raycastTarget = false;
-        Place(iconFrame.rectTransform, 8f, 12f, 54f, 54f);
+        Place(iconFrame.rectTransform, 8f, 24f, 46f, 46f);
 
-        var iconImg = MakeImage(iconFrame.transform, "Icon", Color.white);
+        var iconImg = MakeImage(iconFrame.transform, "Icon", new Color(1f, 1f, 1f, 0.25f));
         iconImg.raycastTarget = false;
+        FillWithPadding(iconImg.rectTransform, 4f);
         iconImg.sprite = HudIcons.GetForEquipmentSlot(slotType);
-        FillWithPadding(iconImg.rectTransform, 8f);
 
-        MakeLabel(bg.transform, "SlotTag", slotTitle, 10, FontStyle.Bold, TextAnchor.UpperLeft,
-            new Color(0.60f, 0.68f, 0.80f), 68f, 6f, 84f, 16f);
+        var nameTxt = MakeLabel(inner.transform, "EquippedName", "Empty", 11, FontStyle.Bold, TextAnchor.UpperLeft,
+            new Color(0.55f, 0.58f, 0.65f), 60f, 22f, 124f, 28f);
+        var statTxt = MakeLabel(inner.transform, "EquippedStats", "Drag gear here", 10, FontStyle.Normal, TextAnchor.UpperLeft,
+            new Color(0.52f, 0.82f, 0.62f), 60f, 48f, 124f, 30f);
 
-        var nameLbl = MakeLabel(bg.transform, "ItemName", "Empty", 11, FontStyle.Bold, TextAnchor.UpperLeft,
-            Color.white, 68f, 22f, 118f, 30f);
+        EquipmentSlotType capturedType = slotType;
+        var unequipBtn = MakeActionButton(inner.transform, "UnequipBtn", "Unequip", 124f, 4f, 62f, 18f,
+            () => _inv.UnequipSlot(capturedType), out _);
 
-        var statLbl = MakeLabel(bg.transform, "ItemStats", "-", 10, FontStyle.Normal, TextAnchor.LowerLeft,
-            new Color(0.55f, 0.90f, 0.65f), 68f, 52f, 118f, 24f);
-
-        var unequip = MakeActionButton(bg.transform, "UnequipBtn", "X", 162f, 4f, 24f, 20f,
-            () => { _inv.UnequipSlot(slotType); }, out _);
-
-        _equipWidgets[idx] = new EquipSlotWidget
+        _equipWidgets[index] = new EquipSlotWidget
         {
             slotType = slotType,
             border = border,
             icon = iconImg,
-            nameText = nameLbl,
-            statText = statLbl,
-            unequipBtn = unequip
+            nameText = nameTxt,
+            statText = statTxt,
+            unequipBtn = unequipBtn
         };
     }
 
-    private void BuildStatRow(Transform parent, int idx, PlayerStatType statType, string statName, string desc, float y)
+    private void BuildHoverTooltip(Transform parent)
     {
-        var rowBg = MakeImage(parent, "StatRow_" + statName, new Color(0.09f, 0.11f, 0.15f, 1f));
-        Place(rowBg.rectTransform, 10f, y, 374f, 34f);
+        var border = MakeImage(parent, "RarityHoverTooltip", new Color(0.95f, 0.78f, 0.22f, 0.98f));
+        border.raycastTarget = false;
+        _tooltipBorder = border;
+        _tooltipRect = border.rectTransform;
+        _tooltipRect.anchorMin = _tooltipRect.anchorMax = _tooltipRect.pivot = new Vector2(0f, 1f);
+        _tooltipRect.sizeDelta = new Vector2(280f, 118f);
 
-        var lbl = MakeLabel(rowBg.transform, "StatLabel", $"{statName} <color=#95A2B8>({desc})</color>", 11, FontStyle.Bold, TextAnchor.MiddleLeft,
-            Color.white, 8f, 4f, 158f, 26f);
+        var bg = MakeImage(border.transform, "Bg", new Color(0.04f, 0.05f, 0.08f, 0.96f));
+        bg.raycastTarget = false;
+        FillWithPadding(bg.rectTransform, 2f);
 
-        var costLbl = MakeLabel(rowBg.transform, "StatCost", "1pt+10g", 10, FontStyle.Bold, TextAnchor.MiddleRight,
-            new Color(1f, 0.84f, 0.32f), 166f, 4f, 94f, 26f);
+        _tooltipTitle = MakeLabel(bg.transform, "Title", "", 13, FontStyle.Bold, TextAnchor.UpperLeft,
+            Color.white, 10f, 8f, 256f, 22f);
+        _tooltipBody = MakeLabel(bg.transform, "Body", "", 11, FontStyle.Normal, TextAnchor.UpperLeft,
+            new Color(0.84f, 0.88f, 0.94f), 10f, 32f, 256f, 78f);
 
-        var valLbl = MakeLabel(rowBg.transform, "StatValue", "0", 13, FontStyle.Bold, TextAnchor.MiddleRight,
-            new Color(0.95f, 0.96f, 1f), 262f, 4f, 44f, 26f);
-
-        var plus = MakeActionButton(rowBg.transform, "PlusBtn", "+", 314f, 4f, 50f, 26f, () =>
-        {
-            if (PlayerCombat.Local != null && PlayerCombat.Local.AllocateStatPoint(statType))
-                Refresh();
-        }, out _);
-
-        _statWidgets[idx] = new StatAllocWidget
-        {
-            statType = statType,
-            shortName = statName,
-            effectDesc = desc,
-            labelText = lbl,
-            costText = costLbl,
-            valueText = valLbl,
-            plusBtn = plus
-        };
+        border.gameObject.SetActive(false);
     }
 
-    private static void EnsureEventSystem()
+    private void BuildDragGhost(Transform parent)
     {
-        if (EventSystem.current != null || FindAnyObjectByType<EventSystem>() != null) return;
+        var ghost = MakeImage(parent, "DragGhostIcon", new Color(1f, 0.85f, 0.25f, 0.92f));
+        ghost.raycastTarget = false;
+        _dragGhostObj = ghost.gameObject;
+        _dragGhostBorder = ghost;
+        _dragGhostRect = ghost.rectTransform;
+        _dragGhostRect.anchorMin = _dragGhostRect.anchorMax = _dragGhostRect.pivot = new Vector2(0.5f, 0.5f);
+        _dragGhostRect.sizeDelta = new Vector2(68f, 68f);
 
-        var es = new GameObject("EventSystem");
-        es.AddComponent<EventSystem>();
-        var module = es.AddComponent<InputSystemUIInputModule>();
-        module.AssignDefaultActions();
-        Debug.Log("[InventoryUI] No EventSystem found - created one with InputSystemUIInputModule.");
+        var inner = MakeImage(ghost.transform, "Inner", new Color(0.06f, 0.08f, 0.12f, 0.92f));
+        inner.raycastTarget = false;
+        FillWithPadding(inner.rectTransform, 2f);
+
+        _dragGhostIcon = MakeImage(inner.transform, "Icon", Color.white);
+        _dragGhostIcon.raycastTarget = false;
+        FillWithPadding(_dragGhostIcon.rectTransform, 6f);
+
+        _dragGhostObj.SetActive(false);
     }
 
-    // ------------------------------------------------------------------ input / tab switching
+    // ------------------------------------------------------------------ Input & Open/Close
 
     private void Update()
     {
@@ -574,328 +369,102 @@ public class InventoryUI : MonoBehaviour
             UpdateHoverTooltipPosition();
     }
 
-    public void SwitchToWorldMapTab()
-    {
-        // World Map has been removed per UI cleanup requirements.
-    }
-
-    public void OpenToEnhancementTab()
-    {
-        if (!_open) SetOpen(true);
-        SetActiveTab(HubTab.Blacksmith);
-    }
-
-    public void SetActiveTab(HubTab tab)
-    {
-        _activeTab = tab;
-        ApplyActiveTabVisuals();
-        Refresh();
-    }
-
-    public void SetEnhanceTargetSlot(int slotIndex)
-    {
-        _enhanceTargetSlot = slotIndex;
-        _fodderSlots.Clear();
-        Refresh();
-    }
-
-    private void ApplyActiveTabVisuals()
-    {
-        bool bs = _activeTab == HubTab.Blacksmith;
-        if (_characterColumn != null) _characterColumn.SetActive(!bs);
-        if (_blacksmithColumn != null) _blacksmithColumn.SetActive(bs);
-
-        Color activeBg = new Color(0.55f, 0.44f, 0.18f, 1f);
-        Color idleBg = new Color(0.14f, 0.17f, 0.24f, 1f);
-        Color activeTxt = new Color(1f, 0.94f, 0.72f);
-
-        if (_tabCharacterBg != null) _tabCharacterBg.color = bs ? idleBg : activeBg;
-        if (_tabCharacterText != null) _tabCharacterText.color = bs ? Color.white : activeTxt;
-        if (_tabBlacksmithBg != null) _tabBlacksmithBg.color = bs ? activeBg : idleBg;
-        if (_tabBlacksmithText != null) _tabBlacksmithText.color = bs ? activeTxt : Color.white;
-    }
-
     public void SetOpen(bool open)
     {
-        if (open == _open) return;
-
-        if (open && GameplayInput.IsBlocked)
+        if (_open != open)
         {
-            Debug.LogWarning("[InventoryUI] Another UI is already open - ignoring open request.");
-            return;
+            if (open) GameplayInput.PushBlocker("InventoryUI");
+            else GameplayInput.PopBlocker("InventoryUI");
         }
-
         _open = open;
-        _panel.SetActive(open);
+        if (_panel != null) _panel.SetActive(open);
+
         if (!open)
         {
-            HideTooltip();
-            EndDragGhost();
-        }
-
-        if (open)
-        {
-            GameplayInput.PushBlocker("InventoryUI");
-            Refresh();
+            _hoveredIndex = -1;
+            if (_tooltipBorder != null) _tooltipBorder.gameObject.SetActive(false);
+            CancelDragGhost();
         }
         else
         {
-            GameplayInput.PopBlocker("InventoryUI");
+            Refresh();
         }
-        Debug.Log("[InventoryUI] " + (open ? "Opened." : "Closed."));
     }
 
-    private void OnDestroy()
-    {
-        if (Instance == this) Instance = null;
-        if (_inv != null) _inv.Changed -= Refresh;
-        if (_open) GameplayInput.PopBlocker("InventoryUI");
-    }
-
-    // ------------------------------------------------------------------ slot interactions & Blacksmith actions
-
-    private void Select(int index)
+    public void SelectSlot(int index)
     {
         _selected = index;
         Refresh();
     }
 
-    private void OnGridSlotClicked(int index)
+    // ------------------------------------------------------------------ Exact Slot Button Callbacks
+
+    private void OnUseClicked()
     {
-        if (_inv == null) return;
-        _selected = index;
-
-        if (_activeTab == HubTab.Blacksmith)
-        {
-            var clicked = _inv.GetSlot(index);
-            if (clicked != null && !clicked.IsEmpty && clicked.item != null)
-            {
-                if (_enhanceTargetSlot < 0)
-                {
-                    if (clicked.item.IsEquippable)
-                    {
-                        _enhanceTargetSlot = index;
-                        _fodderSlots.Clear();
-                        SetEnhanceFeedback("Target set! Now click eligible bag gear to attach Fodder.", new Color(0.76f, 0.88f, 1f));
-                    }
-                    else
-                    {
-                        SetEnhanceFeedback("Only Equippable Gear can be enhanced.", new Color(1f, 0.55f, 0.35f));
-                    }
-                }
-                else if (index == _enhanceTargetSlot)
-                {
-                    // Clicking target again keeps it selected for inspection without error
-                }
-                else
-                {
-                    var targetSlot = _inv.GetSlot(_enhanceTargetSlot);
-                    if (targetSlot != null && !targetSlot.IsEmpty && targetSlot.item != null)
-                    {
-                        if (_fodderSlots.Contains(index))
-                        {
-                            _fodderSlots.Remove(index);
-                        }
-                        else if (_inv.IsSlotEquipped(index))
-                        {
-                            SetEnhanceFeedback("Unequip an item before using it as Enhancement Fodder.", new Color(1f, 0.65f, 0.30f));
-                        }
-                        else
-                        {
-                            var spec = EnhancementSystem.GetNextSpec(targetSlot.item, targetSlot.enhancementLevel);
-                            if (!EnhancementSystem.IsEligibleFodder(targetSlot.item, targetSlot.instanceId, clicked, spec.minFodderTier))
-                            {
-                                SetEnhanceFeedback(
-                                    $"Ineligible Fodder: needs {ItemData.GetTierDisplayName(spec.minFodderTier)}..{ItemData.GetTierDisplayName(targetSlot.item.tier)} gear.",
-                                    new Color(1f, 0.45f, 0.35f));
-                            }
-                            else if (_fodderSlots.Count >= spec.requiredFodderCount)
-                            {
-                                SetEnhanceFeedback($"Already attached {spec.requiredFodderCount} Fodder item(s). Click one to remove or click ENHANCE.", new Color(1f, 0.84f, 0.35f));
-                            }
-                            else
-                            {
-                                _fodderSlots.Add(index);
-                                SetEnhanceFeedback($"Fodder attached ({_fodderSlots.Count}/{spec.requiredFodderCount}).", new Color(0.45f, 0.96f, 0.72f));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Refresh();
-    }
-
-    private void SelectEquippedAsEnhanceTarget(EquipmentSlotType slotType)
-    {
-        if (_inv == null) return;
-        var eqRef = _inv.GetEquippedRef(slotType);
-        if (eqRef.IsEmpty)
-        {
-            SetEnhanceFeedback($"No {slotType} equipped. Click any bag gear on the right!", new Color(1f, 0.72f, 0.35f));
-            Refresh();
-            return;
-        }
-        int idx = _inv.FindSlotIndexByInstanceId(eqRef.instanceId);
-        if (idx >= 0)
-        {
-            _enhanceTargetSlot = idx;
-            _selected = idx;
-            _fodderSlots.Clear();
-            SetEnhanceFeedback($"Selected equipped {eqRef.ResolveItem()?.displayName ?? slotType.ToString()} as Target.", new Color(0.55f, 0.90f, 1f));
-        }
-        Refresh();
-    }
-
-    private void AutoPickEligibleFodder()
-    {
-        if (_inv == null) return;
-        var targetSlot = _inv.GetSlot(_enhanceTargetSlot);
-        if (targetSlot == null || targetSlot.IsEmpty || targetSlot.item == null || !targetSlot.item.IsEquippable)
-        {
-            SetEnhanceFeedback("Select valid Target Gear first.", new Color(1f, 0.55f, 0.35f));
-            return;
-        }
-
-        _fodderSlots.Clear();
-        var spec = EnhancementSystem.GetNextSpec(targetSlot.item, targetSlot.enhancementLevel);
-
-        // Prefer lower-tier unequipped gear first so valuable high-tier pieces are preserved
-        var candidates = new List<int>();
-        for (int i = 0; i < _inv.Slots.Count; i++)
-        {
-            if (i == _enhanceTargetSlot || _inv.IsSlotEquipped(i)) continue;
-            var s = _inv.Slots[i];
-            if (EnhancementSystem.IsEligibleFodder(targetSlot.item, targetSlot.instanceId, s, spec.minFodderTier))
-                candidates.Add(i);
-        }
-
-        candidates.Sort((a, b) =>
-        {
-            var sa = _inv.Slots[a];
-            var sb = _inv.Slots[b];
-            int tc = sa.item.tier.CompareTo(sb.item.tier);
-            if (tc != 0) return tc;
-            return sa.enhancementLevel.CompareTo(sb.enhancementLevel);
-        });
-
-        for (int i = 0; i < candidates.Count && _fodderSlots.Count < spec.requiredFodderCount; i++)
-            _fodderSlots.Add(candidates[i]);
-
-        if (_fodderSlots.Count >= spec.requiredFodderCount)
-            SetEnhanceFeedback($"Auto-picked {_fodderSlots.Count}/{spec.requiredFodderCount} Fodder item(s).", new Color(0.45f, 0.96f, 0.72f));
-        else
-            SetEnhanceFeedback($"Only found {_fodderSlots.Count}/{spec.requiredFodderCount} eligible Fodder item(s).", new Color(1f, 0.72f, 0.35f));
-
-        Refresh();
-    }
-
-    private void ExecuteEnhanceClick()
-    {
-        if (_inv == null) return;
-        EnhanceResult res = _inv.TryEnhanceItem(_enhanceTargetSlot, _fodderSlots);
-        _fodderSlots.Clear();
-
-        if (!res.attempted)
-            SetEnhanceFeedback(res.message, new Color(1f, 0.45f, 0.35f));
-        else if (res.succeeded)
-            SetEnhanceFeedback(res.message, new Color(0.32f, 0.98f, 0.65f));
-        else
-            SetEnhanceFeedback(res.message, new Color(1f, 0.55f, 0.25f));
-
-        Refresh();
-    }
-
-    private void SetEnhanceFeedback(string msg, Color col)
-    {
-        if (_enhanceFeedbackText == null) return;
-        _enhanceFeedbackText.text = msg;
-        _enhanceFeedbackText.color = col;
-    }
-
-    private void OnUseOrAutoClick()
-    {
-        if (_inv == null) return;
-        if (_activeTab == HubTab.Blacksmith)
-        {
-            AutoPickEligibleFodder();
-            return;
-        }
         if (_selected >= 0) _inv.UseItem(_selected);
     }
 
-    private void OnEquipOrTargetClick()
+    private void OnEquipClicked()
     {
-        if (_inv == null || _selected < 0) return;
-        if (_activeTab == HubTab.Blacksmith)
-        {
-            var s = _inv.GetSlot(_selected);
-            if (s != null && !s.IsEmpty && s.item != null && s.item.IsEquippable)
-            {
-                _enhanceTargetSlot = _selected;
-                _fodderSlots.Clear();
-                SetEnhanceFeedback($"Target switched to {s.item.displayName} +{s.enhancementLevel}.", new Color(0.55f, 0.90f, 1f));
-                Refresh();
-            }
-            return;
-        }
-        _inv.EquipItem(_selected);
+        if (_selected >= 0) _inv.EquipItem(_selected);
     }
 
-    // ------------------------------------------------------------------ Drag-and-Drop
-
-    private void OnSlotBeginDrag(int slotIndex, PointerEventData eventData)
+    private void OnDropClicked()
     {
-        if (!_open || _inv == null) return;
-        var slot = _inv.GetSlot(slotIndex);
+        if (_selected >= 0) _inv.DropItem(_selected);
+    }
+
+    // ------------------------------------------------------------------ Drag-and-Drop Handlers
+
+    private void OnSlotBeginDrag(int index, PointerEventData eventData)
+    {
+        var slot = _inv.GetSlot(index);
         if (slot == null || slot.IsEmpty || slot.item == null) return;
 
-        _draggingFromIndex = slotIndex;
-        HideTooltip();
+        _draggingFromIndex = index;
+        _selected = index;
+        if (_tooltipBorder != null) _tooltipBorder.gameObject.SetActive(false);
 
-        Color tierCol = ItemData.GetTierColor(slot.item.tier);
-        _dragGhostBorder.color = tierCol;
-        _dragGhostIcon.sprite = HudIcons.GetForItem(slot.item);
-        _dragGhostIcon.color = tierCol;
-        _dragGhostObj.SetActive(true);
-        UpdateDragGhostPosition(eventData);
+        if (_dragGhostObj != null)
+        {
+            _dragGhostObj.SetActive(true);
+            _dragGhostBorder.color = ItemData.GetTierColor(slot.item.tier);
+            _dragGhostIcon.sprite = HudIcons.GetForItem(slot.item);
+            _dragGhostIcon.color = slot.item.worldColor;
+            UpdateDragGhostPosition(eventData);
+        }
     }
 
     private void OnSlotDrag(PointerEventData eventData)
     {
-        if (_draggingFromIndex < 0 || _dragGhostObj == null || !_dragGhostObj.activeSelf) return;
+        if (_draggingFromIndex < 0) return;
         UpdateDragGhostPosition(eventData);
     }
 
-    private void OnSlotDrop(int targetSlotIndex)
+    private void OnSlotEndDrag()
     {
+        CancelDragGhost();
+    }
+
+    private void OnSlotDrop(int targetIndex)
+    {
+        if (_draggingFromIndex < 0) return;
         int from = _draggingFromIndex;
-        EndDragGhost();
-        if (from < 0 || from == targetSlotIndex || _inv == null) return;
+        CancelDragGhost();
 
-        if (_inv.SwapOrMoveSlots(from, targetSlotIndex))
+        if (from != targetIndex)
         {
-            // Keep target/fodder selections aligned if a Blacksmith item moved
-            if (_enhanceTargetSlot == from) _enhanceTargetSlot = targetSlotIndex;
-            else if (_enhanceTargetSlot == targetSlotIndex) _enhanceTargetSlot = from;
-
-            for (int i = 0; i < _fodderSlots.Count; i++)
-            {
-                if (_fodderSlots[i] == from) _fodderSlots[i] = targetSlotIndex;
-                else if (_fodderSlots[i] == targetSlotIndex) _fodderSlots[i] = from;
-            }
-
-            _selected = targetSlotIndex;
+            _inv.SwapOrMoveSlots(from, targetIndex);
+            _selected = targetIndex;
             Refresh();
         }
     }
 
     private void OnEquipSlotDrop(EquipmentSlotType targetSlotType)
     {
+        if (_draggingFromIndex < 0) return;
         int from = _draggingFromIndex;
-        EndDragGhost();
-        if (from < 0 || _inv == null) return;
+        CancelDragGhost();
 
         if (_inv.EquipFromDrag(from, targetSlotType))
         {
@@ -904,52 +473,41 @@ public class InventoryUI : MonoBehaviour
         }
     }
 
-    private void OnSlotEndDrag()
-    {
-        EndDragGhost();
-    }
-
-    private void EndDragGhost()
-    {
-        _draggingFromIndex = -1;
-        if (_dragGhostObj != null && _dragGhostObj.activeSelf)
-            _dragGhostObj.SetActive(false);
-    }
-
     private void UpdateDragGhostPosition(PointerEventData eventData)
     {
-        if (_panel == null || _dragGhostRect == null) return;
-        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                (RectTransform)_panel.transform, eventData.position, eventData.pressEventCamera, out Vector2 localPoint))
+        if (_dragGhostRect == null || _panelInnerRect == null) return;
+        Vector2 screenPos = eventData != null ? eventData.position : Vector2.zero;
+        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_panelInnerRect, screenPos, null, out Vector2 localPt))
         {
-            _dragGhostRect.localPosition = localPoint;
+            _dragGhostRect.anchoredPosition = localPt;
         }
+    }
+
+    private void CancelDragGhost()
+    {
+        _draggingFromIndex = -1;
+        if (_dragGhostObj != null) _dragGhostObj.SetActive(false);
     }
 
     // ------------------------------------------------------------------ Hover Tooltip
 
     private void OnSlotHoverEnter(int index)
     {
+        if (_draggingFromIndex >= 0) return;
         _hoveredIndex = index;
-        if (!_open || _draggingFromIndex >= 0 || _inv == null || index < 0 || index >= _inv.Slots.Count)
+        var slot = _inv.GetSlot(index);
+        if (slot == null || slot.IsEmpty || slot.item == null || _tooltipBorder == null)
         {
-            HideTooltip();
+            if (_tooltipBorder != null) _tooltipBorder.gameObject.SetActive(false);
             return;
         }
 
-        var slot = _inv.Slots[index];
-        if (slot == null || slot.IsEmpty) { HideTooltip(); return; }
-
-        var item = slot.item;
-        int enh = slot.enhancementLevel;
-        Color tierCol = ItemData.GetTierColor(item.tier);
+        Color tierCol = ItemData.GetTierColor(slot.item.tier);
         _tooltipBorder.color = tierCol;
         _tooltipTitle.color = tierCol;
-        string enhSuffix = enh > 0 ? $" +{enh}" : "";
-        _tooltipTitle.text = $"{item.displayName}{enhSuffix}\n[{ItemData.GetTierDisplayName(item.tier)} {FormatItemCategory(item)}]";
-        _tooltipBody.text = BuildItemStatSummary(item, enh, includeDesc: true);
-
-        _tooltipRect.gameObject.SetActive(true);
+        _tooltipTitle.text = $"[{ItemData.GetTierDisplayName(slot.item.tier)}] {slot.item.displayName}";
+        _tooltipBody.text = BuildItemStatDescription(slot.item, slot.quantity, index);
+        _tooltipBorder.gameObject.SetActive(true);
         UpdateHoverTooltipPosition();
     }
 
@@ -958,456 +516,203 @@ public class InventoryUI : MonoBehaviour
         if (_hoveredIndex == index)
         {
             _hoveredIndex = -1;
-            HideTooltip();
+            if (_tooltipBorder != null) _tooltipBorder.gameObject.SetActive(false);
         }
-    }
-
-    private void HideTooltip()
-    {
-        if (_tooltipRect != null && _tooltipRect.gameObject.activeSelf)
-            _tooltipRect.gameObject.SetActive(false);
     }
 
     private void UpdateHoverTooltipPosition()
     {
-        if (_tooltipRect == null || !_tooltipRect.gameObject.activeSelf || _hoveredIndex < 0 || _hoveredIndex >= _slotBorders.Length)
-            return;
-
-        var slotRt = _slotBorders[_hoveredIndex].rectTransform;
-        Vector3 worldTopRight = slotRt.TransformPoint(new Vector3(SlotSize + 8f, 0f, 0f));
-        Vector2 localPos = _panel.transform.InverseTransformPoint(worldTopRight);
-        localPos.x = Mathf.Clamp(localPos.x, -460f, 200f);
-        localPos.y = Mathf.Clamp(localPos.y, -280f, 240f);
-        _tooltipRect.localPosition = localPos;
+        if (_tooltipRect == null || _panelInnerRect == null || Mouse.current == null) return;
+        Vector2 mousePos = Mouse.current.position.ReadValue();
+        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_panelInnerRect, mousePos, null, out Vector2 localPoint))
+        {
+            float halfW = _panelInnerRect.rect.width * 0.5f;
+            float halfH = _panelInnerRect.rect.height * 0.5f;
+            float x = Mathf.Clamp(localPoint.x + halfW + 16f, 10f, _panelInnerRect.rect.width - 290f);
+            float y = Mathf.Clamp(halfH - localPoint.y + 12f, 10f, _panelInnerRect.rect.height - 126f);
+            _tooltipRect.anchoredPosition = new Vector2(x, -y);
+        }
     }
 
-    // ------------------------------------------------------------------ view refresh
+    // ------------------------------------------------------------------ Refresh Visual State
 
     public void Refresh()
     {
-        if (!_open || _inv == null) return;
+        if (_inv == null || _slotBorders == null) return;
 
         var combat = PlayerCombat.Local;
-        var capsule = PlayerCapsule.Local;
-        int gold = combat != null ? combat.NetworkGold : 0;
+        var capsule = combat != null ? combat.GetComponent<PlayerCapsule>() : null;
+
+        int lvl = combat != null && combat.IsSpawned ? combat.NetworkLevel : 1;
+        int exp = combat != null && combat.IsSpawned ? combat.NetworkExperience : 0;
+        int nextExp = combat != null && combat.IsSpawned ? combat.ExpToNextLevel : 100;
+        int gold = combat != null && combat.IsSpawned ? combat.NetworkGold : 0;
 
         if (_headerStatsText != null)
-        {
-            int nextExp = combat != null ? combat.ExpToNextLevel : 100;
-            _headerStatsText.text = $"Lv.{_inv.Level}  |  EXP {_inv.Experience}/{nextExp}  |  {gold:N0} G";
-        }
+            _headerStatsText.text = $"Lv.{lvl} (EXP {exp}/{nextExp})   |   Gold: {gold} G";
 
-        if (_activeTab == HubTab.Character)
-            RefreshCharacterColumn(combat, capsule, gold);
-        else
-            RefreshBlacksmithColumn(gold);
-
-        RefreshInventoryGrid();
-        RefreshSelectedInspector();
+        RefreshEquipmentAndTotals(combat, capsule);
+        RefreshBagGrid();
     }
 
-    private void RefreshCharacterColumn(PlayerCombat combat, PlayerCapsule capsule, int gold)
+    private void RefreshEquipmentAndTotals(PlayerCombat combat, PlayerCapsule capsule)
     {
-        // 4 Equipment Slots (Sword, Shield, Armor, Pants)
+        // 1. Update 4 Equipment Slot Widgets
         for (int i = 0; i < _equipWidgets.Length; i++)
         {
             var w = _equipWidgets[i];
             if (w == null) continue;
-            var eqRef = _inv.GetEquippedRef(w.slotType);
-            ItemData equipped = eqRef.ResolveItem();
-            if (!eqRef.IsEmpty && equipped != null)
+            var item = _inv.GetEquippedItem(w.slotType);
+            if (item == null)
             {
-                int enh = eqRef.enhancementLevel;
-                Color tc = ItemData.GetTierColor(equipped.tier);
-                w.border.color = tc;
-                w.icon.color = tc;
-                w.nameText.text = enh > 0 ? $"{equipped.displayName} +{enh}" : equipped.displayName;
-                w.nameText.color = tc;
-                w.statText.text = BuildItemStatSummary(equipped, enh, includeDesc: false).Replace("\n", " ");
-                w.unequipBtn.gameObject.SetActive(true);
+                w.border.color = new Color(0.28f, 0.31f, 0.40f, 1f);
+                w.icon.sprite = HudIcons.GetForEquipmentSlot(w.slotType);
+                w.icon.color = new Color(1f, 1f, 1f, 0.22f);
+                w.nameText.text = "Empty Slot";
+                w.nameText.color = new Color(0.52f, 0.56f, 0.64f);
+                w.statText.text = "Drag gear here";
+                w.unequipBtn.gameObject.SetActive(false);
             }
             else
             {
-                w.border.color = new Color(0.22f, 0.25f, 0.32f, 1f);
-                w.icon.color = new Color(0.32f, 0.36f, 0.44f, 0.65f);
-                w.nameText.text = "Empty Slot";
-                w.nameText.color = new Color(0.55f, 0.60f, 0.68f);
-                w.statText.text = "-";
-                w.unequipBtn.gameObject.SetActive(false);
+                Color tc = ItemData.GetTierColor(item.tier);
+                w.border.color = tc;
+                w.icon.sprite = HudIcons.GetForEquipmentSlot(w.slotType);
+                w.icon.color = item.worldColor;
+                w.nameText.text = $"[{ItemData.GetTierDisplayName(item.tier)}] {item.displayName}";
+                w.nameText.color = tc;
+                w.statText.text = BuildCompactGearStats(item);
+                w.unequipBtn.gameObject.SetActive(true);
             }
         }
 
-        // Derived Total Stats & Scaled Attribute Costs
-        if (combat != null)
+        // 2. Update Total Aggregated Stats Summary
+        if (_totalStatsText != null && combat != null)
         {
             float spd = capsule != null ? capsule.TotalMoveSpeed : 6f;
             _totalStatsText.text =
-                $"ATK: {combat.TotalAttackDamage}     |     DEF: {combat.TotalDefense}     |     CRIT: {combat.TotalCritChance * 100f:0}%\n" +
-                $"Max HP: {combat.MaxHealth}     |     Max STA: {combat.MaxStamina:0}     |     SPD: {spd:0.00}";
+                $"HP: {combat.NetworkHealth}/{combat.MaxHealth} (+{_inv.GearMaxHealthBonus} Gear)     " +
+                $"Stamina: {combat.CurrentStamina:0}/{combat.MaxStamina:0} (+{_inv.GearMaxStaminaBonus} Gear)\n" +
+                $"Attack: {combat.TotalAttackDamage} (+{_inv.GearDamageBonus} Gear)     " +
+                $"Defense: {combat.TotalDefense} (+{_inv.GearDefenseBonus} Gear)\n" +
+                $"Speed: {spd:0.1} m/s (+{_inv.GearMoveSpeedBonus:0.1} Gear)     " +
+                $"Crit Chance: {combat.TotalCritChance * 100f:0}%";
+        }
 
-            int pts = combat.NetworkUnspentStatPoints;
-            _statPointsText.text = $"Pts: {pts}  |  {gold:N0} G";
-            _statPointsText.color = pts > 0 ? new Color(1f, 0.85f, 0.22f) : new Color(0.65f, 0.70f, 0.78f);
+        // 3. Selected Slot Detail Inspector
+        var sel = _inv.GetSlot(_selected);
+        if (sel == null || sel.IsEmpty || sel.item == null)
+        {
+            _detailRarityBar.color = new Color(0.30f, 0.32f, 0.38f, 1f);
+            _detailTitleText.color = Color.white;
+            _detailTitleText.text = _selected >= 0 ? $"Slot #{_selected} (Empty)" : "Select an inventory slot";
+            _detailBodyText.text = "Click any bag slot to inspect its stats, or drag items between slots and onto the 4 Equipment slots above.";
+            _useBtn.interactable = false;
+            _equipBtn.interactable = false;
+            _dropBtn.interactable = false;
+            _equipBtnText.text = "Equip";
+        }
+        else
+        {
+            var item = sel.item;
+            Color tc = ItemData.GetTierColor(item.tier);
+            bool eq = _inv.IsSlotEquipped(_selected);
 
-            int[] statVals = { combat.StatPointsSTR, combat.StatPointsVIT, combat.StatPointsEND, combat.StatPointsAGI };
-            for (int i = 0; i < _statWidgets.Length; i++)
-            {
-                var sw = _statWidgets[i];
-                int curVal = statVals[i];
-                int ptCost = PlayerCombat.GetAttributeUpgradePointCost(curVal);
-                int goldCost = PlayerCombat.GetAttributeUpgradeGoldCost(curVal);
-                bool canAfford = pts >= ptCost && gold >= goldCost;
+            _detailRarityBar.color = tc;
+            _detailTitleText.color = tc;
+            _detailTitleText.text = $"[Slot #{_selected}] [{ItemData.GetTierDisplayName(item.tier)}] {item.displayName}";
+            _detailBodyText.text = BuildItemStatDescription(item, sel.quantity, _selected);
 
-                sw.valueText.text = curVal.ToString();
-                sw.costText.text = $"{ptCost}pt + {goldCost}g";
-                sw.costText.color = canAfford ? new Color(1f, 0.86f, 0.32f) : new Color(0.85f, 0.45f, 0.42f);
-                sw.plusBtn.interactable = canAfford;
-            }
+            _useBtn.interactable = item.IsUsable;
+            _equipBtn.interactable = item.IsEquippable;
+            _equipBtnText.text = eq ? "Unequip" : "Equip";
+            _dropBtn.interactable = item.droppable;
         }
     }
 
-    private void RefreshBlacksmithColumn(int playerGold)
+    private void RefreshBagGrid()
     {
-        // Prune stale fodder slots
-        for (int i = _fodderSlots.Count - 1; i >= 0; i--)
+        for (int i = 0; i < _inv.Capacity; i++)
         {
-            int idx = _fodderSlots[i];
-            var fs = _inv.GetSlot(idx);
-            if (idx == _enhanceTargetSlot || fs == null || fs.IsEmpty || _inv.IsSlotEquipped(idx))
-                _fodderSlots.RemoveAt(i);
-        }
-
-        // Update 4 Equipped Quick-Select Buttons
-        EquipmentSlotType[] eqOrder = { EquipmentSlotType.Sword, EquipmentSlotType.Shield, EquipmentSlotType.Armor, EquipmentSlotType.Pants };
-        string[] eqShort = { "Sword", "Shield", "Armor", "Pants" };
-        for (int i = 0; i < 4; i++)
-        {
-            var eqRef = _inv.GetEquippedRef(eqOrder[i]);
-            var item = eqRef.ResolveItem();
-            if (!eqRef.IsEmpty && item != null)
-            {
-                string enhStr = eqRef.enhancementLevel > 0 ? $" +{eqRef.enhancementLevel}" : "";
-                _bsEquippedTexts[i].text = $"{eqShort[i]}\n{item.displayName}{enhStr}";
-                _bsEquippedTexts[i].color = ItemData.GetTierColor(item.tier);
-                _bsEquippedBtns[i].interactable = true;
-            }
-            else
-            {
-                _bsEquippedTexts[i].text = $"{eqShort[i]}\n(Empty)";
-                _bsEquippedTexts[i].color = new Color(0.55f, 0.60f, 0.68f);
-                _bsEquippedBtns[i].interactable = false;
-            }
-        }
-
-        var targetSlot = _inv.GetSlot(_enhanceTargetSlot);
-        if (targetSlot == null || targetSlot.IsEmpty || targetSlot.item == null || !targetSlot.item.IsEquippable)
-        {
-            _enhanceTargetSlot = -1;
-            _fodderSlots.Clear();
-
-            _bsTargetBorder.color = new Color(0.26f, 0.30f, 0.38f, 1f);
-            _bsTargetIcon.gameObject.SetActive(false);
-            _bsTargetTitleText.text = "Select Equipment to Enhance";
-            _bsTargetTitleText.color = Color.white;
-            _bsTargetStatDiffText.text = "Click an Equipped button above or any gear in your Bag grid to prepare +1 to +10 forging.";
-            _bsClearTargetBtn.interactable = false;
-
-            _bsOddsText.text = "Success Chance: --";
-            _bsGoldCostText.text = $"Gold Required: --   (Balance: {playerGold:N0} G)";
-            _bsFodderReqText.text = "Material Fodder: --";
-
-            for (int i = 0; i < 3; i++)
-            {
-                _bsFodderSlotBorders[i].color = new Color(0.22f, 0.26f, 0.32f);
-                _bsFodderSlotTexts[i].text = "Empty";
-                _bsFodderSlotTexts[i].color = new Color(0.55f, 0.60f, 0.68f);
-                _bsFodderSlotBtns[i].interactable = false;
-            }
-
-            _bsAutoPickBtn.interactable = false;
-            _bsEnhanceBtn.interactable = false;
-            _bsEnhanceBtnBg.color = new Color(0.18f, 0.20f, 0.25f, 1f);
-            _bsEnhanceBtnText.text = "ENHANCE GEAR";
-            return;
-        }
-
-        var tItem = targetSlot.item;
-        int curLvl = targetSlot.enhancementLevel;
-        Color tc = ItemData.GetTierColor(tItem.tier);
-        _bsTargetBorder.color = tc;
-        _bsTargetIcon.gameObject.SetActive(true);
-        _bsTargetIcon.sprite = HudIcons.GetForItem(tItem);
-        _bsTargetIcon.color = tc;
-        _bsClearTargetBtn.interactable = true;
-
-        bool isMax = curLvl >= EnhancementSystem.MaxEnhancementLevel;
-        _bsTargetTitleText.color = tc;
-        _bsTargetTitleText.text = $"{tItem.displayName}  +{curLvl} {(isMax ? "(MAX)" : $"-> +{curLvl + 1}")}";
-
-        if (isMax)
-        {
-            _bsTargetStatDiffText.text = BuildItemStatSummary(tItem, curLvl, includeDesc: false) + "\nMaximum +10 Enhancement Reached!";
-            _bsOddsText.text = "Success Chance: MAX LEVEL";
-            _bsGoldCostText.text = $"Balance: {playerGold:N0} G";
-            _bsFodderReqText.text = "No further Fodder required.";
-            for (int i = 0; i < 3; i++)
-            {
-                _bsFodderSlotBorders[i].color = new Color(0.22f, 0.26f, 0.32f);
-                _bsFodderSlotTexts[i].text = "MAX";
-                _bsFodderSlotBtns[i].interactable = false;
-            }
-            _bsAutoPickBtn.interactable = false;
-            _bsEnhanceBtn.interactable = false;
-            _bsEnhanceBtnBg.color = new Color(0.25f, 0.22f, 0.14f, 1f);
-            _bsEnhanceBtnText.text = "MAX +10 REACHED";
-            return;
-        }
-
-        var spec = EnhancementSystem.GetNextSpec(tItem, curLvl);
-        _bsTargetStatDiffText.text = BuildEnhanceStatPreview(tItem, curLvl, spec.targetLevel, spec.statBonusPercent);
-
-        Color oddsCol = spec.successRate >= 0.70f ? new Color(0.38f, 0.96f, 0.62f)
-            : (spec.successRate >= 0.40f ? new Color(1f, 0.84f, 0.28f) : new Color(1f, 0.45f, 0.30f));
-        _bsOddsText.text = $"Success Chance: {Mathf.RoundToInt(spec.successRate * 100f)}%";
-        _bsOddsText.color = oddsCol;
-
-        bool hasGold = playerGold >= spec.goldCost;
-        _bsGoldCostText.text = $"Gold Cost: {spec.goldCost:N0} G   (You have: {playerGold:N0} G)";
-        _bsGoldCostText.color = hasGold ? new Color(1f, 0.86f, 0.32f) : new Color(1f, 0.42f, 0.35f);
-
-        _bsFodderReqText.text =
-            $"Fodder: {_fodderSlots.Count}/{spec.requiredFodderCount} Gear   (Allowed: {ItemData.GetTierDisplayName(spec.minFodderTier)} .. {ItemData.GetTierDisplayName(tItem.tier)})";
-        _bsFodderReqText.color = _fodderSlots.Count >= spec.requiredFodderCount ? new Color(0.45f, 0.95f, 0.68f) : new Color(0.86f, 0.88f, 0.92f);
-
-        for (int i = 0; i < 3; i++)
-        {
-            if (i >= spec.requiredFodderCount)
-            {
-                _bsFodderSlotBorders[i].color = new Color(0.16f, 0.18f, 0.22f);
-                _bsFodderSlotTexts[i].text = "Locked";
-                _bsFodderSlotTexts[i].color = new Color(0.42f, 0.45f, 0.52f);
-                _bsFodderSlotBtns[i].interactable = false;
-            }
-            else if (i < _fodderSlots.Count)
-            {
-                var fs = _inv.GetSlot(_fodderSlots[i]);
-                if (fs != null && !fs.IsEmpty && fs.item != null)
-                {
-                    Color fc = ItemData.GetTierColor(fs.item.tier);
-                    _bsFodderSlotBorders[i].color = fc;
-                    string fEnh = fs.enhancementLevel > 0 ? $" +{fs.enhancementLevel}" : "";
-                    _bsFodderSlotTexts[i].text = $"{fs.item.displayName}{fEnh}\n[Click Remove]";
-                    _bsFodderSlotTexts[i].color = fc;
-                    _bsFodderSlotBtns[i].interactable = true;
-                }
-            }
-            else
-            {
-                _bsFodderSlotBorders[i].color = new Color(0.38f, 0.32f, 0.18f);
-                _bsFodderSlotTexts[i].text = $"Fodder #{i + 1}\n(Pick from Bag)";
-                _bsFodderSlotTexts[i].color = new Color(0.75f, 0.78f, 0.85f);
-                _bsFodderSlotBtns[i].interactable = false;
-            }
-        }
-
-        bool ready = hasGold && _fodderSlots.Count >= spec.requiredFodderCount;
-        _bsAutoPickBtn.interactable = true;
-        _bsEnhanceBtn.interactable = ready;
-        _bsEnhanceBtnBg.color = ready ? new Color(0.18f, 0.50f, 0.24f, 1f) : new Color(0.22f, 0.24f, 0.30f, 1f);
-        _bsEnhanceBtnText.text = $"ENHANCE +{curLvl + 1}  ({Mathf.RoundToInt(spec.successRate * 100f)}%)";
-    }
-
-    private void RefreshInventoryGrid()
-    {
-        var slots = _inv.Slots;
-        bool bsMode = _activeTab == HubTab.Blacksmith;
-        InventorySlot targetSlot = bsMode ? _inv.GetSlot(_enhanceTargetSlot) : null;
-        EnhancementSystem.EnhancementSpec? bsSpec = null;
-        if (bsMode && targetSlot != null && !targetSlot.IsEmpty && targetSlot.item != null && targetSlot.enhancementLevel < EnhancementSystem.MaxEnhancementLevel)
-            bsSpec = EnhancementSystem.GetNextSpec(targetSlot.item, targetSlot.enhancementLevel);
-
-        for (int i = 0; i < _slotBgs.Length && i < slots.Count; i++)
-        {
-            var s = slots[i];
+            var s = _inv.GetSlot(i);
             bool selected = i == _selected;
 
-            if (s.IsEmpty)
+            if (s == null || s.IsEmpty || s.item == null)
             {
-                _slotBorders[i].color = selected ? new Color(0.75f, 0.78f, 0.85f) : new Color(0.20f, 0.23f, 0.30f);
-                _slotBgs[i].color = selected ? new Color(0.18f, 0.21f, 0.28f) : new Color(0.10f, 0.12f, 0.16f);
-                _slotIcons[i].gameObject.SetActive(false);
+                _slotBorders[i].color = selected
+                    ? new Color(0.95f, 0.78f, 0.22f, 1f)
+                    : new Color(0.22f, 0.25f, 0.32f, 1f);
+                _slotBgs[i].color = new Color(0.09f, 0.10f, 0.15f, 1f);
+                _slotIcons[i].color = Color.clear;
                 _slotLabels[i].text = "";
                 _slotQtyLabels[i].text = "";
                 continue;
             }
 
+            bool equipped = _inv.IsSlotEquipped(i);
             Color tierColor = ItemData.GetTierColor(s.item.tier);
-            bool isEq = _inv.IsSlotEquipped(i);
-            bool isTarget = bsMode && i == _enhanceTargetSlot;
-            bool isFodder = bsMode && _fodderSlots.Contains(i);
 
-            Color borderCol = selected ? Color.white : tierColor;
-            if (isTarget) borderCol = new Color(0.28f, 0.96f, 0.85f);
-            else if (isFodder) borderCol = new Color(1f, 0.56f, 0.18f);
-
-            _slotBorders[i].color = borderCol;
-            _slotBgs[i].color = selected
-                ? Color.Lerp(new Color(0.14f, 0.16f, 0.22f), tierColor, 0.32f)
-                : Color.Lerp(new Color(0.09f, 0.10f, 0.14f), tierColor, 0.14f);
-
-            // Slightly dim ineligible items when choosing fodder in Blacksmith tab
-            float alpha = 1f;
-            if (bsMode && bsSpec.HasValue && !isTarget && !isFodder)
-            {
-                bool ok = !isEq && EnhancementSystem.IsEligibleFodder(targetSlot.item, targetSlot.instanceId, s, bsSpec.Value.minFodderTier);
-                if (!ok) alpha = 0.45f;
-            }
-
-            _slotIcons[i].gameObject.SetActive(true);
-            _slotIcons[i].sprite = HudIcons.GetForItem(s.item);
-            _slotIcons[i].color = new Color(tierColor.r, tierColor.g, tierColor.b, alpha);
-
-            string enhSuffix = s.enhancementLevel > 0 ? $" +{s.enhancementLevel}" : "";
-            _slotLabels[i].text = s.item.displayName + enhSuffix;
-            _slotLabels[i].color = Color.Lerp(Color.white, tierColor, 0.45f) * new Color(1f, 1f, 1f, alpha);
-
-            if (isTarget)
-            {
-                _slotQtyLabels[i].text = "[TARGET]";
-                _slotQtyLabels[i].color = new Color(0.28f, 0.98f, 0.85f);
-            }
-            else if (isFodder)
-            {
-                _slotQtyLabels[i].text = "[FODDER]";
-                _slotQtyLabels[i].color = new Color(1f, 0.62f, 0.22f);
-            }
-            else if (isEq)
-            {
-                _slotQtyLabels[i].text = s.enhancementLevel > 0 ? $"[E]+{s.enhancementLevel}" : "[E]";
-                _slotQtyLabels[i].color = new Color(0.35f, 0.98f, 0.62f);
-            }
-            else if (s.enhancementLevel > 0)
-            {
-                _slotQtyLabels[i].text = $"+{s.enhancementLevel}";
-                _slotQtyLabels[i].color = new Color(0.45f, 0.92f, 1f);
-            }
+            if (selected)
+                _slotBorders[i].color = new Color(1f, 0.92f, 0.32f, 1f);
+            else if (equipped)
+                _slotBorders[i].color = new Color(0.28f, 0.96f, 0.52f, 1f);
             else
-            {
-                _slotQtyLabels[i].text = s.quantity > 1 ? $"x{s.quantity}" : "";
-                _slotQtyLabels[i].color = new Color(1f, 0.90f, 0.45f);
-            }
+                _slotBorders[i].color = tierColor;
+
+            _slotBgs[i].color = new Color(
+                Mathf.Lerp(0.09f, tierColor.r, 0.22f),
+                Mathf.Lerp(0.10f, tierColor.g, 0.22f),
+                Mathf.Lerp(0.14f, tierColor.b, 0.22f),
+                1f);
+
+            _slotIcons[i].sprite = HudIcons.GetForItem(s.item);
+            _slotIcons[i].color = s.item.worldColor;
+
+            _slotLabels[i].text = s.item.displayName;
+            _slotLabels[i].color = tierColor;
+
+            if (equipped)
+                _slotQtyLabels[i].text = "EQP";
+            else if (s.quantity > 1)
+                _slotQtyLabels[i].text = $"x{s.quantity}";
+            else
+                _slotQtyLabels[i].text = "";
         }
     }
 
-    private void RefreshSelectedInspector()
+    private static string BuildCompactGearStats(ItemData item)
     {
-        var slots = _inv.Slots;
-        InventorySlot sel = (_selected >= 0 && _selected < slots.Count) ? slots[_selected] : null;
-        bool bsMode = _activeTab == HubTab.Blacksmith;
-
-        Text useBtnLabel = _useBtn.GetComponentInChildren<Text>();
-        if (useBtnLabel != null)
-            useBtnLabel.text = bsMode ? "Auto-Pick" : "Use";
-
-        if (sel == null || sel.IsEmpty)
-        {
-            _detailRarityBar.color = new Color(0.35f, 0.38f, 0.45f, 1f);
-            _detailTitleText.text = "Select an item to inspect.";
-            _detailTitleText.color = Color.white;
-            _detailBodyText.text = bsMode
-                ? "Blacksmith Tip: Pick Target Gear, attach matching Fodder, and forge up to +10!"
-                : "Tip: Drag items to reorder slots or drop gear directly onto Equipment cards!";
-            _useBtn.interactable = bsMode && _enhanceTargetSlot >= 0;
-            _equipBtn.interactable = _dropBtn.interactable = false;
-            _equipBtnText.text = bsMode ? "Set Target" : "Equip";
-            return;
-        }
-
-        var item = sel.item;
-        int enh = sel.enhancementLevel;
-        Color selTierColor = ItemData.GetTierColor(item.tier);
-        _detailRarityBar.color = selTierColor;
-        _detailTitleText.color = selTierColor;
-        string enhSuffix = enh > 0 ? $" +{enh}" : "";
-        _detailTitleText.text = $"{item.displayName}{enhSuffix}   [{ItemData.GetTierDisplayName(item.tier)} {FormatItemCategory(item)}]";
-        _detailBodyText.text = $"Slot #{_selected + 1}  |  Qty: {sel.quantity}/{item.MaxStackSize}   " +
-                               BuildItemStatSummary(item, enh, includeDesc: true);
-
-        if (bsMode)
-        {
-            _useBtn.interactable = _enhanceTargetSlot >= 0;
-            _equipBtn.interactable = item.IsEquippable;
-            _equipBtnText.text = "Set Target";
-            _dropBtn.interactable = false;
-        }
-        else
-        {
-            _useBtn.interactable = item.IsUsable;
-            _equipBtn.interactable = item.IsEquippable;
-            _equipBtnText.text = _inv.IsSlotEquipped(_selected) ? "Unequip" : "Equip";
-            _dropBtn.interactable = item.droppable && !_inv.IsSlotEquipped(_selected);
-        }
+        if (item == null) return "";
+        var parts = new List<string>(4);
+        if (item.damageBonus > 0) parts.Add($"+{item.damageBonus} ATK");
+        if (item.maxHealthBonus > 0) parts.Add($"+{item.maxHealthBonus} HP");
+        if (item.maxStaminaBonus > 0) parts.Add($"+{item.maxStaminaBonus} STA");
+        if (item.defenseBonus > 0) parts.Add($"+{item.defenseBonus} DEF");
+        if (item.moveSpeedBonus > 0f) parts.Add($"+{item.moveSpeedBonus:0.0} SPD");
+        if (item.critChanceBonus > 0f) parts.Add($"+{item.critChanceBonus * 100f:0}% CRIT");
+        return parts.Count > 0 ? string.Join("  ", parts) : "Standard Gear";
     }
 
-    private static string FormatItemCategory(ItemData item)
+    private static string BuildItemStatDescription(ItemData item, int qty, int slotIdx)
     {
-        return item.GetEquipmentSlot() switch
-        {
-            EquipmentSlotType.Sword => "Sword",
-            EquipmentSlotType.Shield => "Shield",
-            EquipmentSlotType.Armor => "Armor",
-            EquipmentSlotType.Pants => "Pants",
-            _ => item.type.ToString()
-        };
-    }
-
-    private static string BuildItemStatSummary(ItemData item, int enhancementLevel, bool includeDesc)
-    {
+        if (item == null) return "";
         var sb = new System.Text.StringBuilder();
-        int dmg = item.GetEnhancedDamage(enhancementLevel);
-        int hp = item.GetEnhancedMaxHealth(enhancementLevel);
-        int sta = item.GetEnhancedMaxStamina(enhancementLevel);
-        int def = item.GetEnhancedDefense(enhancementLevel);
-        float spd = item.GetEnhancedMoveSpeed(enhancementLevel);
-        float crit = item.GetEnhancedCritChance(enhancementLevel);
+        var eqSlot = item.GetEquipmentSlot();
+        string slotTag = eqSlot != EquipmentSlotType.None ? $"Slot: {eqSlot}" : $"Type: {item.type}";
+        sb.AppendLine($"{slotTag}   •   Bag Slot #{slotIdx}   •   Qty: {qty}");
 
-        if (dmg != 0) sb.Append($"+{dmg} ATK  ");
-        if (hp != 0) sb.Append($"+{hp} Max HP  ");
-        if (sta != 0) sb.Append($"+{sta} Max STA  ");
-        if (def != 0) sb.Append($"+{def} DEF  ");
-        if (spd > 0f) sb.Append($"+{spd:0.0} SPD  ");
-        if (crit > 0f) sb.Append($"+{crit * 100f:0}% CRIT  ");
-        if (item.healAmount > 0) sb.Append($"Heals +{item.healAmount} HP  ");
-        if (item.staminaRestoreAmount > 0) sb.Append($"+{item.staminaRestoreAmount} STA  ");
-        if (item.attackBuffBonus > 0) sb.Append($"+{item.attackBuffBonus} ATK ({item.attackBuffDuration:0}s)  ");
-
-        if (includeDesc && !string.IsNullOrEmpty(item.description))
-        {
-            if (sb.Length > 0) sb.Append("\n");
+        var stats = BuildCompactGearStats(item);
+        if (!string.IsNullOrEmpty(stats) && stats != "Standard Gear")
+            sb.AppendLine($"Gear Bonuses: {stats}");
+        if (item.healAmount > 0)
+            sb.AppendLine($"Use Effect: Restores +{item.healAmount} HP");
+        if (item.staminaRestoreAmount > 0)
+            sb.AppendLine($"Use Effect: Restores +{item.staminaRestoreAmount} Stamina");
+        if (item.attackBuffBonus > 0)
+            sb.AppendLine($"Use Effect: +{item.attackBuffBonus} Attack for {item.attackBuffDuration:0}s");
+        if (!string.IsNullOrEmpty(item.description))
             sb.Append(item.description);
-        }
-        return sb.ToString().Trim();
-    }
-
-    private static string BuildEnhanceStatPreview(ItemData item, int curLvl, int nextLvl, float nextBonusPct)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.Append($"Upgrade Multiplier: +{Mathf.RoundToInt(nextBonusPct * 100f)}% Total Stats\n");
-
-        if (item.damageBonus > 0)
-            sb.Append($"ATK: {item.GetEnhancedDamage(curLvl)} -> {item.GetEnhancedDamage(nextLvl)}   ");
-        if (item.maxHealthBonus > 0)
-            sb.Append($"HP: {item.GetEnhancedMaxHealth(curLvl)} -> {item.GetEnhancedMaxHealth(nextLvl)}   ");
-        if (item.maxStaminaBonus > 0)
-            sb.Append($"STA: {item.GetEnhancedMaxStamina(curLvl)} -> {item.GetEnhancedMaxStamina(nextLvl)}   ");
-        if (item.defenseBonus > 0)
-            sb.Append($"DEF: {item.GetEnhancedDefense(curLvl)} -> {item.GetEnhancedDefense(nextLvl)}   ");
-        if (item.critChanceBonus > 0f)
-            sb.Append($"CRIT: {item.GetEnhancedCritChance(curLvl) * 100f:0.#}% -> {item.GetEnhancedCritChance(nextLvl) * 100f:0.#}%   ");
-        if (item.moveSpeedBonus > 0f)
-            sb.Append($"SPD: {item.GetEnhancedMoveSpeed(curLvl):0.0} -> {item.GetEnhancedMoveSpeed(nextLvl):0.0}");
-
-        return sb.ToString().Trim();
+        return sb.ToString().TrimEnd();
     }
 
     // ------------------------------------------------------------------ uGUI helpers

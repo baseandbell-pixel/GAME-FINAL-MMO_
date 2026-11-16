@@ -100,8 +100,12 @@ public class TestAutomationRunner : MonoBehaviour
             "No top-right portrait, duplicate bars, or EXP card spawned on HUD.");
 
         var invUi = FindAnyObjectByType<InventoryUI>();
-        AssertTest("1.4 Inventory UI & Equipment Preserved", invUi != null,
-            "InventoryUI window exists and is ready for [I/Tab] toggle.");
+        bool noEnhanceOrStatMenu = invUi != null &&
+            invUi.transform.Find("InventoryWindowFrame/InnerDarkBg/BlacksmithColumn") == null &&
+            invUi.transform.Find("InventoryWindowFrame/InnerDarkBg/TopNavigationTabs/TabBlacksmith") == null &&
+            invUi.transform.Find("InventoryWindowFrame/InnerDarkBg/TopNavigationTabs/TabWorldMap") == null;
+        AssertTest("1.4 Inventory UI & Equipment Preserved (No Enhancement/Stat-Point/Map Menus)", invUi != null && noEnhanceOrStatMenu,
+            "InventoryUI focused purely on 24-slot bag & 4 equipment slots without Blacksmith or Stat-Point menus.");
 
         var combatHud = FindAnyObjectByType<CombatHud>();
         AssertTest("1.5 Combat Feedback HUD Preserved", combatHud != null,
@@ -167,13 +171,13 @@ public class TestAutomationRunner : MonoBehaviour
         // Put potion in Slot 3
         inv.SetSlotDirectForTest(3, potion, 5);
         // Put sword in Slot 5
-        inv.SetSlotDirectForTest(5, swordItem, 1, 2); // +2 enhancement
+        inv.SetSlotDirectForTest(5, swordItem, 1, 0);
         // Put armor in Slot 8
         inv.SetSlotDirectForTest(8, chestItem, 1);
 
         AssertTest("5.1 Exact Slot Placement",
             inv.GetSlot(3).item == potion && inv.GetSlot(5).item == swordItem && inv.GetSlot(8).item == chestItem,
-            $"Slot 3={inv.GetSlot(3).item?.itemId}, Slot 5={inv.GetSlot(5).item?.itemId} (+{inv.GetSlot(5).enhancementLevel}), Slot 8={inv.GetSlot(8).item?.itemId}");
+            $"Slot 3={inv.GetSlot(3).item?.itemId}, Slot 5={inv.GetSlot(5).item?.itemId}, Slot 8={inv.GetSlot(8).item?.itemId}");
 
         // Test UseItem on Slot 3 (Strictly consumes Slot 3, never Slot 0)
         combat.NetworkHealth = 70;
@@ -184,12 +188,12 @@ public class TestAutomationRunner : MonoBehaviour
         // Test Drag & Drop Swap: Slot 5 -> Slot 12
         bool swapOk = inv.SwapOrMoveSlots(5, 12);
         AssertTest("5.3 Drag-and-Drop Slot Move (5 -> 12)", swapOk && inv.GetSlot(5).IsEmpty && inv.GetSlot(12).item == swordItem,
-            $"Slot 5 empty={inv.GetSlot(5).IsEmpty}, Slot 12 has {inv.GetSlot(12).item?.itemId} (+{inv.GetSlot(12).enhancementLevel})");
+            $"Slot 5 empty={inv.GetSlot(5).IsEmpty}, Slot 12 has {inv.GetSlot(12).item?.itemId}");
 
         // Test Drag Gear to Equipment Slot (Slot 12 -> Sword Slot)
         bool equipOk = inv.EquipFromDrag(12, EquipmentSlotType.Sword);
         AssertTest("5.4 Drag-to-Equip Onto Gear Slot", equipOk && inv.EquippedWeaponId == "iron_sword",
-            $"Equipped Weapon={inv.EquippedWeaponId}, Slot 12 is empty={inv.GetSlot(12).IsEmpty}, ATK Bonus=+{inv.GearDamageBonus}");
+            $"Equipped Weapon={inv.EquippedWeaponId}, ATK Bonus=+{inv.GearDamageBonus}");
 
         // ------------------------------------------------------------------
         // TEST 6: PLAYER SAVE SYSTEM (ATOMIC JSON) & COMFORT ZONE RESTORE
@@ -197,16 +201,12 @@ public class TestAutomationRunner : MonoBehaviour
         string testKey = "UnitTestPlayer_" + Guid.NewGuid().ToString("N").Substring(0, 8);
         PlayerSaveManager.OverridePlayerKeyForTesting = testKey;
 
-        // Give player Gold, EXP, and allocated stats
+        // Give player Gold and EXP
         combat.AddGold(350, "TestGold");
         combat.AddExperience(120);
-        combat.AllocateStatPoint(PlayerStatType.STR);
-        combat.AllocateStatPoint(PlayerStatType.VIT);
 
         int saveLevel = combat.NetworkLevel;
         int saveGold = combat.NetworkGold;
-        int saveStr = combat.StatPointsSTR;
-        int saveVit = combat.StatPointsVIT;
 
         // Perform atomic save
         bool saved = saveMgr.SaveNow("AutomatedUnitTestSave");
@@ -220,8 +220,8 @@ public class TestAutomationRunner : MonoBehaviour
         inv.ClearSlotsForTest();
 
         PlayerSaveData loaded = saveMgr.LoadFromDisk(testKey);
-        AssertTest("6.2 Save File Integrity & Deserialization", loaded != null && loaded.level == saveLevel && loaded.gold == saveGold,
-            $"Loaded Lv.{loaded?.level}, Gold={loaded?.gold}, Slots={loaded?.inventorySlots.Count}, Equipped={loaded?.equippedSlots.Count}");
+        AssertTest("6.2 Save File Integrity & Deserialization", loaded != null && loaded.level == saveLevel && loaded.gold == saveGold && loaded.playerId == testKey,
+            $"Loaded playerId={loaded?.playerId}, Lv.{loaded?.level}, Gold={loaded?.gold}, Slots={loaded?.inventorySlots.Count}, Equipped={loaded?.equippedSlots.Count}");
 
         // Restore player and simulate disconnect / returning player recovery
         saveMgr.InitializeOrRestorePlayer(combat, inv);
@@ -229,13 +229,12 @@ public class TestAutomationRunner : MonoBehaviour
 
         bool levelRestored = combat.NetworkLevel == saveLevel;
         bool goldRestored = combat.NetworkGold == saveGold;
-        bool statsRestored = combat.StatPointsSTR == saveStr && combat.StatPointsVIT == saveVit;
         bool weaponRestored = inv.EquippedWeaponId == "iron_sword";
         bool bagRestored = inv.GetSlot(3).item == potion && inv.GetSlot(3).quantity == 4;
 
         AssertTest("6.3 Complete Player State Restored",
-            levelRestored && goldRestored && statsRestored && weaponRestored && bagRestored,
-            $"Lv.{combat.NetworkLevel}, Gold={combat.NetworkGold}, STR={combat.StatPointsSTR}, VIT={combat.StatPointsVIT}, Gear={inv.EquippedWeaponId}");
+            levelRestored && goldRestored && weaponRestored && bagRestored,
+            $"Lv.{combat.NetworkLevel}, Gold={combat.NetworkGold}, Gear={inv.EquippedWeaponId}, BagSlot3Qty={inv.GetSlot(3).quantity}");
 
         // Verify returning player spawns strictly inside Comfort Zone
         SafeZone sz = SafeZone.Instance;

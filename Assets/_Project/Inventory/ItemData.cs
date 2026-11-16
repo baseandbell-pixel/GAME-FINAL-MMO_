@@ -32,7 +32,7 @@ public enum ItemTier
 
 /// <summary>
 /// Data-driven item definition supporting Consumables, Crafting Materials, and 4 Equippable Gear Slots
-/// (Sword, Shield, Armor, Pants) across 4 Rarity Tiers (Normal, Rare, Epic, Legendary) and +0..+10 Enhancement scaling.
+/// (Sword, Shield, Armor, Pants) across 4 Rarity Tiers (Normal, Rare, Epic, Legendary).
 /// </summary>
 [CreateAssetMenu(fileName = "NewItem", menuName = "Hunter/Item Data")]
 public class ItemData : ScriptableObject
@@ -85,12 +85,12 @@ public class ItemData : ScriptableObject
         };
     }
 
-    public int GetEnhancedDamage(int enhancementLevel) => EnhancementSystem.ScaleIntStat(damageBonus, enhancementLevel);
-    public int GetEnhancedMaxHealth(int enhancementLevel) => EnhancementSystem.ScaleIntStat(maxHealthBonus, enhancementLevel);
-    public int GetEnhancedMaxStamina(int enhancementLevel) => EnhancementSystem.ScaleIntStat(maxStaminaBonus, enhancementLevel);
-    public int GetEnhancedDefense(int enhancementLevel) => EnhancementSystem.ScaleIntStat(defenseBonus, enhancementLevel);
-    public float GetEnhancedMoveSpeed(int enhancementLevel) => EnhancementSystem.ScaleFloatStat(moveSpeedBonus, enhancementLevel);
-    public float GetEnhancedCritChance(int enhancementLevel) => Mathf.Clamp01(EnhancementSystem.ScaleFloatStat(critChanceBonus, enhancementLevel));
+    public int GetEnhancedDamage(int _ = 0) => damageBonus;
+    public int GetEnhancedMaxHealth(int _ = 0) => maxHealthBonus;
+    public int GetEnhancedMaxStamina(int _ = 0) => maxStaminaBonus;
+    public int GetEnhancedDefense(int _ = 0) => defenseBonus;
+    public float GetEnhancedMoveSpeed(int _ = 0) => moveSpeedBonus;
+    public float GetEnhancedCritChance(int _ = 0) => Mathf.Clamp01(critChanceBonus);
 
     public static string GetTierDisplayName(ItemTier tier)
     {

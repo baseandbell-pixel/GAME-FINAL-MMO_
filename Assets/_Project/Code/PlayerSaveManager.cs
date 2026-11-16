@@ -12,6 +12,7 @@ public class SavedInventorySlotData
     public string instanceId;
     public string itemId;
     public int quantity;
+    public int tier;
     public int enhancementLevel;
 }
 
@@ -19,8 +20,10 @@ public class SavedInventorySlotData
 public class SavedEquippedSlotData
 {
     public int slotType; // (int)EquipmentSlotType
+    public string slotName; // Weapon, Shield, Armor, Pants
     public string instanceId;
     public string itemId;
+    public int tier;
     public int enhancementLevel;
 }
 
@@ -28,6 +31,7 @@ public class SavedEquippedSlotData
 public class PlayerSaveData
 {
     public int schemaVersion = 1;
+    public string playerId;
     public string playerKey;
     public string playerName;
     public long lastSavedUtcTicks;
@@ -35,6 +39,7 @@ public class PlayerSaveData
 
     // Progression & Economy
     public int level = 1;
+    public int currentExp = 0;
     public int experience = 0;
     public int unspentStatPoints = 0;
     public int statSTR = 0;
@@ -245,6 +250,7 @@ public class PlayerSaveManager : MonoBehaviour
         var data = new PlayerSaveData
         {
             schemaVersion = 1,
+            playerId = key,
             playerKey = key,
             playerName = GoogleAPI.instance != null && !string.IsNullOrEmpty(GoogleAPI.instance.username)
                 ? GoogleAPI.instance.username
@@ -254,6 +260,7 @@ public class PlayerSaveManager : MonoBehaviour
         };
 
         combat.ExportSaveData(data);
+        data.currentExp = data.experience;
         inv.ExportSaveData(data);
 
         string json = JsonUtility.ToJson(data, prettyPrint: true);
@@ -336,6 +343,12 @@ public class PlayerSaveManager : MonoBehaviour
                 sw.Write(content);
                 sw.Flush();
                 fs.Flush(true);
+            }
+
+            if (!TryReadJson(tempPath, out _))
+            {
+                Debug.LogError($"[PlayerSaveManager] Temp file JSON verification failed for '{tempPath}'.");
+                return false;
             }
 
             if (File.Exists(targetPath))

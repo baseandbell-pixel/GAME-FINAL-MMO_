@@ -25,19 +25,9 @@ public class EquippedGearRef
     }
 }
 
-public struct EnhanceResult
-{
-    public bool attempted;
-    public bool succeeded;
-    public int previousLevel;
-    public int newLevel;
-    public int goldSpent;
-    public string message;
-}
-
 /// <summary>
 /// Per-player inventory &amp; 4-slot equipment manager with exact slotIndex operations,
-/// Drag-and-Drop reordering, Equipment Enhancement (+0 to +10), and PlayerSaveManager hooks.
+/// Drag-and-Drop reordering, and PlayerSaveManager hooks.
 /// </summary>
 [RequireComponent(typeof(PlayerCombat))]
 public class InventoryManager : MonoBehaviour
@@ -475,104 +465,6 @@ public class InventoryManager : MonoBehaviour
         return WorldItem.Spawn(_combat != null ? _combat.Runner : null, worldItemPrefab, position, item, quantity);
     }
 
-    // ------------------------------------------------------------------ Equipment Enhancement (+0 to +10)
-
-    /// <summary>
-    /// Enhances a target gear slot (+0 -> +10) by consuming Gold and explicitly chosen Fodder inventory slot indices.
-    /// </summary>
-    public EnhanceResult TryEnhanceItem(int targetInventorySlotIndex, List<int> fodderSlotIndices, float? forcedRoll01 = null)
-    {
-        var targetSlot = GetSlot(targetInventorySlotIndex);
-        if (targetSlot == null || targetSlot.IsEmpty || targetSlot.item == null || !targetSlot.item.IsEquippable)
-        {
-            return new EnhanceResult { attempted = false, message = "Select valid equipment to enhance." };
-        }
-        if (targetSlot.enhancementLevel >= EnhancementSystem.MaxEnhancementLevel)
-        {
-            return new EnhanceResult { attempted = false, message = $"Already at maximum +{EnhancementSystem.MaxEnhancementLevel}." };
-        }
-        if (_combat == null || !_combat.IsSpawned)
-        {
-            return new EnhanceResult { attempted = false, message = "Player not ready." };
-        }
-
-        targetSlot.EnsureInstanceId();
-        var spec = EnhancementSystem.GetNextSpec(targetSlot.item, targetSlot.enhancementLevel);
-
-        if (_combat.NetworkGold < spec.goldCost)
-        {
-            return new EnhanceResult { attempted = false, message = $"Need {spec.goldCost} Gold (have {_combat.NetworkGold})." };
-        }
-
-        // Validate distinct fodder slots
-        var uniqueFodder = new List<int>();
-        if (fodderSlotIndices != null)
-        {
-            for (int i = 0; i < fodderSlotIndices.Count; i++)
-            {
-                int idx = fodderSlotIndices[i];
-                if (idx == targetInventorySlotIndex || uniqueFodder.Contains(idx)) continue;
-                var fs = GetSlot(idx);
-                if (EnhancementSystem.IsEligibleFodder(targetSlot.item, targetSlot.instanceId, fs, spec.minFodderTier))
-                    uniqueFodder.Add(idx);
-            }
-        }
-
-        if (uniqueFodder.Count < spec.requiredFodderCount)
-        {
-            return new EnhanceResult
-            {
-                attempted = false,
-                message = $"Select {spec.requiredFodderCount} eligible [{ItemData.GetTierDisplayName(spec.minFodderTier)}+] fodder gear item(s)."
-            };
-        }
-
-        // Spend Gold & Consume Exact Fodder Slots
-        if (!_combat.TrySpendGold(spec.goldCost))
-        {
-            return new EnhanceResult { attempted = false, message = "Failed to spend Gold." };
-        }
-
-        for (int i = 0; i < spec.requiredFodderCount; i++)
-        {
-            ConsumeSlotAtExactIndex(uniqueFodder[i], 1);
-        }
-
-        // Re-locate target slot in case anything changed (index stays identical because slots are fixed array)
-        int prevLvl = targetSlot.enhancementLevel;
-        float roll = forcedRoll01.HasValue ? Mathf.Clamp01(forcedRoll01.Value) : UnityEngine.Random.value;
-        bool success = roll <= spec.successRate;
-
-        if (success)
-        {
-            targetSlot.enhancementLevel++;
-            EquipmentSlotType slotType = targetSlot.item.GetEquipmentSlot();
-            if (_equipped.TryGetValue(slotType, out var eq) && eq.instanceId == targetSlot.instanceId)
-            {
-                eq.enhancementLevel = targetSlot.enhancementLevel;
-            }
-            RecomputeBonus();
-        }
-
-        Changed?.Invoke();
-        PlayerSaveManager.RequestAutoSave(success ? "EnhanceSuccess" : "EnhanceFail");
-
-        string msg = success
-            ? $"SUCCESS! {targetSlot.item.displayName} enhanced +{prevLvl} -> +{targetSlot.enhancementLevel}!"
-            : $"FAILED! Fodder & {spec.goldCost} Gold consumed ({targetSlot.item.displayName} stays +{prevLvl}).";
-        Debug.Log($"[Enhancement] {msg} (rate={spec.successRate * 100f:0}%, roll={roll:0.00})");
-
-        return new EnhanceResult
-        {
-            attempted = true,
-            succeeded = success,
-            previousLevel = prevLvl,
-            newLevel = targetSlot.enhancementLevel,
-            goldSpent = spec.goldCost,
-            message = msg
-        };
-    }
-
     public int FindSlotIndexByInstanceId(string instanceId)
     {
         if (string.IsNullOrEmpty(instanceId)) return -1;
@@ -617,6 +509,7 @@ public class InventoryManager : MonoBehaviour
                 instanceId = s.instanceId,
                 itemId = s.item.itemId,
                 quantity = s.quantity,
+                tier = (int)s.item.tier,
                 enhancementLevel = s.enhancementLevel
             });
         }
@@ -625,11 +518,14 @@ public class InventoryManager : MonoBehaviour
         foreach (var kv in _equipped)
         {
             if (kv.Value.IsEmpty) continue;
+            var resolved = kv.Value.ResolveItem();
             data.equippedSlots.Add(new SavedEquippedSlotData
             {
                 slotType = (int)kv.Key,
+                slotName = kv.Key == EquipmentSlotType.Sword ? "Weapon" : kv.Key.ToString(),
                 instanceId = kv.Value.instanceId,
                 itemId = kv.Value.itemId,
+                tier = resolved != null ? (int)resolved.tier : 0,
                 enhancementLevel = kv.Value.enhancementLevel
             });
         }
