@@ -1,7 +1,14 @@
 fileFormatVersion: 2
 guid: b9de39987df5b5345a2bed5f059553f1
+AssetOrigin:
+  serializedVersion: 1
+  productId: 288783
+  packageName: RPG_Animations_Pack_FREE
+  packageVersion: 1.9
+  assetPath: Assets/DoubleL/FBX Unity/One Hand Up/Attack_B/1Hand_Up_Attack_B_1.fbx
+  uploadId: 936146
 ModelImporter:
-  serializedVersion: 22200
+  serializedVersion: 24501
   internalIDToNameTable: []
   externalObjects: {}
   materials:
@@ -9,6 +16,7 @@ ModelImporter:
     materialName: 0
     materialSearch: 1
     materialLocation: 1
+    searchTexturesGlobally: 1
   animations:
     legacyGenerateAnimations: 4
     bakeSimulation: 0
@@ -16,8 +24,6 @@ ModelImporter:
     optimizeGameObjects: 0
     removeConstantScaleCurves: 0
     motionNodeName: 
-    rigImportErrors: 
-    rigImportWarnings: 
     animationImportErrors: 
     animationImportWarnings: 
     animationRetargetingWarnings: 
@@ -36,8 +42,8 @@ ModelImporter:
       name: 1Hand_Up_Attack_B_1
       takeName: 1Hand_Up_Attack_B_1
       internalID: -735844520830625209
-      firstFrame: 0
-      lastFrame: 90
+      firstFrame: 11
+      lastFrame: 72
       wrapMode: 0
       orientationOffsetY: 0
       level: 0
@@ -87,6 +93,11 @@ ModelImporter:
     maxBonesPerVertex: 4
     minBoneWeight: 0.001
     optimizeBones: 1
+    generateMeshLods: 0
+    meshLodGenerationFlags: 0
+    maximumMeshLod: -1
+    importUVs: -1
+    importVertexColors: 1
     meshOptimizationFlags: -1
     indexFormat: 0
     secondaryUVAngleDistortion: 8
@@ -106,6 +117,7 @@ ModelImporter:
     legacyComputeAllNormalsFromSmoothingGroupsWhenMeshHasBlendShapes: 0
     blendShapeNormalImportMode: 1
     normalSmoothingSource: 0
+    calculateBlendshapeNormalsDeltaFromImportedNormals: 1
   referencedClips: []
   importAnimation: 1
   humanDescription:
@@ -601,8 +613,7 @@ ModelImporter:
     - name: Left_LowerArm
       parentName: Left_UpperArm
       position: {x: -2.8421706e-16, y: 0.28508067, z: 0}
-      rotation: {x: -0.00000010350328, y: 0.000000059034495, z: 0.000000004190944,
-        w: 1}
+      rotation: {x: -0.00000010350328, y: 0.000000059034495, z: 0.000000004190944, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Left_Hand
       parentName: Left_LowerArm
@@ -622,8 +633,7 @@ ModelImporter:
     - name: Left_PinkyDistal
       parentName: Left_PinkyIntermediate
       position: {x: -3.5527133e-17, y: 0.020224448, z: -7.1054265e-17}
-      rotation: {x: -0.0000005078378, y: -0.000000046617288, z: -0.000000059604613,
-        w: 1}
+      rotation: {x: -0.0000005078378, y: -0.000000046617288, z: -0.000000059604613, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Left_PinkyDistalEnd
       parentName: Left_PinkyDistal
@@ -643,8 +653,7 @@ ModelImporter:
     - name: Left_RingDistal
       parentName: Left_RingIntermediate
       position: {x: 1.7763566e-17, y: 0.027115494, z: -1.065814e-16}
-      rotation: {x: -0.00000013218654, y: -0.00000007938125, z: 0.00000014901163,
-        w: 1}
+      rotation: {x: -0.00000013218654, y: -0.00000007938125, z: 0.00000014901163, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Left_RingDistalEnd
       parentName: Left_RingDistal
@@ -659,14 +668,12 @@ ModelImporter:
     - name: Left_MiddleIntermediate
       parentName: Left_MiddleProximal
       position: {x: 2.7261607e-16, y: 0.051279362, z: 5.988264e-17}
-      rotation: {x: -0.0000003486978, y: 0.0000000029442397, z: -0.000000059604638,
-        w: 1}
+      rotation: {x: -0.0000003486978, y: 0.0000000029442397, z: -0.000000059604638, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Left_MiddleDistal
       parentName: Left_MiddleIntermediate
       position: {x: -7.199101e-17, y: 0.028284006, z: -4.93648e-17}
-      rotation: {x: -0.000000029553037, y: -0.000000068252824, z: 0.00000010430812,
-        w: 1}
+      rotation: {x: -0.000000029553037, y: -0.000000068252824, z: 0.00000010430812, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Left_MiddleDistalEnd
       parentName: Left_MiddleDistal
@@ -686,8 +693,7 @@ ModelImporter:
     - name: Left_IndexDistal
       parentName: Left_IndexIntermediate
       position: {x: -8.20111e-16, y: 0.02513925, z: -4.317065e-16}
-      rotation: {x: -0.00000026693957, y: -0.000000028706186, z: -0.00000005960464,
-        w: 1}
+      rotation: {x: -0.00000026693957, y: -0.000000028706186, z: -0.00000005960464, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Left_IndexDistalEnd
       parentName: Left_IndexDistal
@@ -782,8 +788,7 @@ ModelImporter:
     - name: Right_MiddleIntermediate
       parentName: Right_MiddleProximal
       position: {x: 0.000000014272595, y: -0.051275954, z: 0.0000009747695}
-      rotation: {x: -0.000010002656, y: -0.000000023653612, z: -0.00000008940671,
-        w: 1}
+      rotation: {x: -0.000010002656, y: -0.000000023653612, z: -0.00000008940671, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: Right_MiddleDistal
       parentName: Right_MiddleIntermediate
@@ -907,8 +912,7 @@ ModelImporter:
     hasTranslationDoF: 1
     hasExtraRoot: 0
     skeletonHasParents: 1
-  lastHumanDescriptionAvatarSource: {fileID: 9000000, guid: 3955de6a24970f840996fe77051507ee,
-    type: 3}
+  lastHumanDescriptionAvatarSource: {fileID: 9000000, guid: 3955de6a24970f840996fe77051507ee, type: 3}
   autoGenerateAvatarMappingIfUnspecified: 1
   animationType: 3
   humanoidOversampling: 1
@@ -920,10 +924,3 @@ ModelImporter:
   userData: 
   assetBundleName: 
   assetBundleVariant: 
-AssetOrigin:
-  serializedVersion: 1
-  productId: 288783
-  packageName: RPG_Animations_Pack_FREE
-  packageVersion: 1.9
-  assetPath: Assets/DoubleL/FBX Unity/One Hand Up/Attack_B/1Hand_Up_Attack_B_1.fbx
-  uploadId: 936146

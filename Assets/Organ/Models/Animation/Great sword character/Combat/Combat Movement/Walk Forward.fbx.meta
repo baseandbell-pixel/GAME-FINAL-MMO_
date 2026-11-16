@@ -44,14 +44,14 @@ ModelImporter:
       loop: 0
       hasAdditiveReferencePose: 0
       loopTime: 1
-      loopBlend: 0
-      loopBlendOrientation: 0
-      loopBlendPositionY: 0
-      loopBlendPositionXZ: 0
+      loopBlend: 1
+      loopBlendOrientation: 1
+      loopBlendPositionY: 1
+      loopBlendPositionXZ: 1
       keepOriginalOrientation: 0
-      keepOriginalPositionY: 1
+      keepOriginalPositionY: 0
       keepOriginalPositionXZ: 0
-      heightFromFeet: 0
+      heightFromFeet: 1
       mirror: 0
       bodyMask: 01000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000
       curves: []
@@ -533,13 +533,13 @@ ModelImporter:
         length: 0
         modified: 0
     skeleton:
-    - name: Maria J J Ong@Great Sword Walk(Clone)
+    - name: Walk Forward(Clone)
       parentName: 
       position: {x: 0, y: 0, z: 0}
       rotation: {x: 0, y: 0, z: 0, w: 1}
       scale: {x: 1, y: 1, z: 1}
     - name: mixamorig:Hips
-      parentName: Maria J J Ong@Great Sword Walk(Clone)
+      parentName: Walk Forward(Clone)
       position: {x: 0.00002137363, y: 1.0270796, z: -0.000014864206}
       rotation: {x: -0.15126598, y: -0.0022587422, z: 0.035538714, w: 0.9878515}
       scale: {x: 1, y: 1, z: 1}
