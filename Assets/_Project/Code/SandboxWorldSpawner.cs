@@ -50,7 +50,9 @@ public class SandboxWorldSpawner : MonoBehaviour
     [Header("Enemies & Camps (4 Camps, ~7-Block Spacing)")]
     [SerializeField] private EnemyNPC enemyPrefab;
     [Tooltip("Primary camp ID (Camp 1 uses scene enemyPoints if assigned; Camps 2..4 are generated at ~7-block spacing).")]
+#pragma warning disable CS0414
     [SerializeField] private int campId = 1;
+#pragma warning restore CS0414
     [SerializeField] private Transform[] enemyPoints;
     [Min(5f)] [SerializeField] private float campRespawnDelaySeconds = DefaultCampRespawnSeconds;
 
@@ -58,6 +60,10 @@ public class SandboxWorldSpawner : MonoBehaviour
     [SerializeField] private Vector3 bossArenaCenter = new Vector3(-26f, 0f, -16f);
     [Min(5f)] [SerializeField] private float bossArenaProximityRadius = 18f;
     [Min(5f)] [SerializeField] private float bossRespawnDelaySeconds = DefaultBossRespawnSeconds;
+
+    [Header("Comfort Safe Zone (Non-Combat & Reconnect Anchor)")]
+    [SerializeField] private Vector3 safeZoneCenter = new Vector3(-14f, 0f, 8f);
+    [Min(3f)] [SerializeField] private float safeZoneRadius = 7.5f;
 
     [Header("Loot & Camp Clear Reward")]
     [SerializeField] private WorldItem itemPrefab;
@@ -109,6 +115,8 @@ public class SandboxWorldSpawner : MonoBehaviour
     private void Awake()
     {
         Instance = this;
+        PlayerSaveManager.EnsureExists();
+        SafeZone.EnsureAt(safeZoneCenter, safeZoneRadius);
         InitializeCampDefinitions();
         if (createTestObstacles)
         {
@@ -209,6 +217,12 @@ public class SandboxWorldSpawner : MonoBehaviour
             return;
         }
 
+        // Wait until PlayerSaveManager has loaded/initialized the player's level before initial enemy scaling
+        if (PlayerSaveManager.Instance != null && !PlayerSaveManager.Instance.HasLoadedOrInitialized)
+        {
+            return;
+        }
+
         var runner = local.Runner;
         if (runner == null || !runner.IsRunning) return;
 
@@ -304,7 +318,8 @@ public class SandboxWorldSpawner : MonoBehaviour
                 {
                     camp.ActiveChest = LootChest.SpawnAt(camp.Center, camp.CampId, itemPrefab, isBossChest: false, replaceExisting: true);
                 }
-                Debug.Log($"[WorldSpawner] {camp.CampName} CLEARED! Reward Chest spawned. Respawning in {camp.GetFormattedRespawnTime()} ({campRespawnDelaySeconds:0}s).");
+                AwardCampClearGold(local, camp.CampName, isBoss: false);
+                Debug.Log($"[WorldSpawner] {camp.CampName} CLEARED! Reward Chest + Gold awarded. Respawning in {camp.GetFormattedRespawnTime()}.");
             }
             else if (camp.IsCleared)
             {
@@ -338,7 +353,8 @@ public class SandboxWorldSpawner : MonoBehaviour
                 Vector3 chestPos = bossArenaCenter + new Vector3(0f, 0f, 2.2f);
                 _activeBossChest = LootChest.SpawnAt(chestPos, BossCampId, itemPrefab, isBossChest: true, replaceExisting: true);
             }
-            Debug.Log($"[WorldSpawner] BOSS DEFEATED! Boss Reward Chest spawned. {GetBossRespawnCountdownText()} ({bossRespawnDelaySeconds:0}s).");
+            AwardCampClearGold(local, "Boss Sovereign Golem", isBoss: true);
+            Debug.Log($"[WorldSpawner] BOSS DEFEATED! Boss Reward Chest + Gold awarded. {GetBossRespawnCountdownText()} ({bossRespawnDelaySeconds:0}s).");
         }
         else if (_bossCleared)
         {
@@ -475,6 +491,7 @@ public class SandboxWorldSpawner : MonoBehaviour
         int spawned = 0;
         int assignedCampId = camp.CampId;
 
+        int scaleLvl = GetTargetDynamicScaleLevel();
         for (int i = 0; i < camp.SpawnPositions.Length; i++)
         {
             Vector3 pos = camp.SpawnPositions[i];
@@ -485,6 +502,8 @@ public class SandboxWorldSpawner : MonoBehaviour
                 {
                     enemy.CampId = assignedCampId;
                     enemy.IsBoss = false;
+                    enemy.ScaledLevel = scaleLvl;
+                    enemy.ApplyDynamicScaling(scaleLvl);
                 }
             });
 
@@ -508,6 +527,7 @@ public class SandboxWorldSpawner : MonoBehaviour
     {
         if (runner == null || !runner.IsRunning || enemyPrefab == null) return null;
 
+        int scaleLvl = GetTargetDynamicScaleLevel();
         Vector3 spawnPos = new Vector3(bossArenaCenter.x, 1.35f, bossArenaCenter.z);
         _activeBoss = runner.Spawn(enemyPrefab, spawnPos, Quaternion.identity, null, (r, o) =>
         {
@@ -516,6 +536,7 @@ public class SandboxWorldSpawner : MonoBehaviour
             {
                 boss.CampId = BossCampId;
                 boss.IsBoss = true;
+                boss.ScaledLevel = scaleLvl;
                 boss.ApplyBossConfiguration();
             }
         });
@@ -527,6 +548,29 @@ public class SandboxWorldSpawner : MonoBehaviour
             _bossRespawnRemaining = 0f;
         }
         return _activeBoss;
+    }
+
+    private static int GetTargetDynamicScaleLevel()
+    {
+        int highest = 1;
+        for (int i = 0; i < PlayerCombat.All.Count; i++)
+        {
+            var p = PlayerCombat.All[i];
+            if (p != null && p.IsSpawned && p.NetworkLevel > highest)
+                highest = p.NetworkLevel;
+        }
+        return Mathf.Max(1, highest);
+    }
+
+    private static void AwardCampClearGold(PlayerCombat player, string sourceName, bool isBoss)
+    {
+        if (player == null || !player.IsSpawned) return;
+        int lvl = Mathf.Max(1, player.NetworkLevel);
+        float scale = 1f + (lvl - 1) * 0.15f;
+        int minGold = isBoss ? Mathf.RoundToInt(250 * scale) : Mathf.RoundToInt(40 * scale);
+        int maxGold = isBoss ? Mathf.RoundToInt(450 * scale) : Mathf.RoundToInt(85 * scale);
+        int amount = UnityEngine.Random.Range(minGold, maxGold + 1);
+        player.AddGold(amount, sourceName);
     }
 
     private void CreateTestObstacles()

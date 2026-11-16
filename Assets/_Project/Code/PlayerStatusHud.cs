@@ -16,8 +16,13 @@ public class PlayerStatusHud : MonoBehaviour
 
     public bool IsBossBannerVisible => _bossBanner != null && _bossBanner.activeSelf;
     public string BossBannerText => _bossBannerText != null ? _bossBannerText.text : string.Empty;
+    public bool IsSafeZoneBannerVisible => _safeZoneBanner != null && _safeZoneBanner.activeSelf;
+    public string SafeZoneBannerText => _safeZoneBannerText != null ? _safeZoneBannerText.text : string.Empty;
     public string CombatReadinessText => _readinessText != null ? _readinessText.text : string.Empty;
     public string LevelBadgeText => _levelBadgeText != null ? _levelBadgeText.text : string.Empty;
+    public string GoldBadgeText => _goldText != null ? _goldText.text : string.Empty;
+    public bool IsToastVisible => _toastBanner != null && _toastBanner.activeSelf;
+    public string ToastText => _toastText != null ? _toastText.text : string.Empty;
 
     private PlayerCombat _combat;
     private PlayerCapsule _capsule;
@@ -37,7 +42,17 @@ public class PlayerStatusHud : MonoBehaviour
     private Text _staText;
     private Image _expFill;
     private Text _expText;
+    private Text _goldText;
     private Text _pointsNoticeText;
+
+    // Safe Zone Banner & Dynamic Toast (anchored cleanly under Top-Right HUD)
+    private GameObject _safeZoneBanner;
+    private Text _safeZoneBannerText;
+    private GameObject _toastBanner;
+    private RectTransform _toastRect;
+    private Image _toastBorder;
+    private Text _toastText;
+    private float _toastTimer;
 
     // Top-Center Boss Banner
     private GameObject _bossBanner;
@@ -83,14 +98,14 @@ public class PlayerStatusHud : MonoBehaviour
         scaler.matchWidthOrHeight = 0.5f;
 
         // ============================================================
-        // 1. TOP-RIGHT PLAYER STATUS HUD CARD (358 x 138)
+        // 1. TOP-RIGHT PLAYER STATUS HUD CARD (368 x 140)
         // ============================================================
         var outer = MakeImage(canvasGo.transform, "TopRightStatusCard", new Color(0.55f, 0.45f, 0.22f, 0.92f));
         outer.raycastTarget = false;
         _statusCard = outer.rectTransform;
         _statusCard.anchorMin = _statusCard.anchorMax = _statusCard.pivot = new Vector2(1f, 1f);
         _statusCard.anchoredPosition = new Vector2(-18f, -18f);
-        _statusCard.sizeDelta = new Vector2(364f, 136f);
+        _statusCard.sizeDelta = new Vector2(368f, 140f);
 
         var inner = MakeImage(_statusCard, "InnerPanel", new Color(0.05f, 0.06f, 0.09f, 0.94f));
         inner.raycastTarget = false;
@@ -114,34 +129,83 @@ public class PlayerStatusHud : MonoBehaviour
 
         // Header Row: Player Name + Combat Readiness Badge
         _playerNameText = MakeText(inner.transform, "PlayerName", "Player", 15, FontStyle.Bold, TextAnchor.MiddleLeft,
-            Color.white, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(96f, -10f), new Vector2(130f, 22f));
+            Color.white, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(96f, -10f), new Vector2(114f, 22f));
 
         var readyBg = MakeImage(inner.transform, "ReadinessPill", new Color(0.08f, 0.12f, 0.14f, 0.95f));
-        PlaceTopLeft(readyBg.rectTransform, 224f, 10f, 126f, 20f);
+        PlaceTopLeft(readyBg.rectTransform, 214f, 10f, 140f, 20f);
 
         _readinessDot = MakeImage(readyBg.transform, "Dot", new Color(0.20f, 0.90f, 0.45f, 1f));
         _readinessDot.sprite = HudIcons.GetSprite("circle");
         PlaceTopLeft(_readinessDot.rectTransform, 7f, 6f, 8f, 8f);
 
         _readinessText = MakeText(readyBg.transform, "ReadinessText", "COMBAT READY", 10, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(0.40f, 0.95f, 0.65f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(20f, 0f), new Vector2(104f, 20f));
+            new Color(0.40f, 0.95f, 0.65f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(20f, 0f), new Vector2(118f, 20f));
 
         // Bar 1: HP Bar
-        CreateBar(inner.transform, "HPBar", 96f, 38f, 254f, 22f, new Color(0.16f, 0.05f, 0.07f, 1f),
+        CreateBar(inner.transform, "HPBar", 96f, 38f, 258f, 22f, new Color(0.16f, 0.05f, 0.07f, 1f),
             new Color(0.22f, 0.85f, 0.36f, 1f), 12, out _hpFill, out _hpText);
 
         // Bar 2: Stamina Bar
-        CreateBar(inner.transform, "StaminaBar", 96f, 64f, 254f, 19f, new Color(0.06f, 0.12f, 0.16f, 1f),
+        CreateBar(inner.transform, "StaminaBar", 96f, 64f, 258f, 19f, new Color(0.06f, 0.12f, 0.16f, 1f),
             new Color(0.18f, 0.78f, 0.98f, 1f), 11, out _staFill, out _staText);
 
-        // Bar 3: EXP Bar (Full bottom width)
-        CreateBar(inner.transform, "ExpBar", 10f, 96f, 340f, 16f, new Color(0.10f, 0.08f, 0.16f, 1f),
+        // Bar 3: EXP Bar + Gold Counter Pill
+        CreateBar(inner.transform, "ExpBar", 10f, 94f, 236f, 17f, new Color(0.10f, 0.08f, 0.16f, 1f),
             new Color(0.62f, 0.36f, 0.96f, 1f), 10, out _expFill, out _expText);
+
+        var goldPill = MakeImage(inner.transform, "GoldPill", new Color(0.18f, 0.14f, 0.04f, 0.98f));
+        PlaceTopLeft(goldPill.rectTransform, 252f, 94f, 102f, 17f);
+        var coinDot = MakeImage(goldPill.transform, "CoinIcon", new Color(1f, 0.84f, 0.22f, 1f));
+        coinDot.sprite = HudIcons.GetSprite("circle");
+        PlaceTopLeft(coinDot.rectTransform, 6f, 3.5f, 10f, 10f);
+        _goldText = MakeText(goldPill.transform, "GoldText", "0 G", 11, FontStyle.Bold, TextAnchor.MiddleRight,
+            new Color(1f, 0.88f, 0.35f, 1f), Vector2.zero, Vector2.one, new Vector2(18f, 0f), new Vector2(-6f, 0f));
 
         // Bottom Micro-Hint / Unspent Points Row
         _pointsNoticeText = MakeText(inner.transform, "HudHint", "[I / Tab] Character & Gear   |   [M] World Map", 11, FontStyle.Normal,
             TextAnchor.MiddleLeft, new Color(0.72f, 0.76f, 0.84f, 0.95f),
-            new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -114f), new Vector2(340f, 18f));
+            new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -114f), new Vector2(344f, 18f));
+
+        // ============================================================
+        // 1B. SAFE ZONE STATUS INDICATOR BANNER
+        // ============================================================
+        var szOuter = MakeImage(canvasGo.transform, "SafeZoneBanner", new Color(0.18f, 0.90f, 0.58f, 0.95f));
+        _safeZoneBanner = szOuter.gameObject;
+        var szrt = szOuter.rectTransform;
+        szrt.anchorMin = szrt.anchorMax = szrt.pivot = new Vector2(1f, 1f);
+        szrt.anchoredPosition = new Vector2(-18f, -166f);
+        szrt.sizeDelta = new Vector2(368f, 30f);
+
+        var szInner = MakeImage(szrt, "Inner", new Color(0.04f, 0.12f, 0.09f, 0.95f));
+        FillParentWithPadding(szInner.rectTransform, 2f);
+
+        var szIcon = MakeImage(szInner.transform, "ShieldIcon", new Color(0.24f, 0.96f, 0.66f, 1f));
+        szIcon.sprite = HudIcons.GetSprite("shield");
+        PlaceTopLeft(szIcon.rectTransform, 10f, 4f, 18f, 18f);
+
+        _safeZoneBannerText = MakeText(szInner.transform, "SafeZoneText", "Safe Zone - Combat Disabled", 13, FontStyle.Bold,
+            TextAnchor.MiddleLeft, new Color(0.32f, 0.98f, 0.70f, 1f),
+            Vector2.zero, Vector2.one, new Vector2(34f, 0f), new Vector2(-10f, 0f));
+        _safeZoneBanner.SetActive(false);
+
+        // ============================================================
+        // 1C. GOLD / SYSTEM TOAST BANNER
+        // ============================================================
+        var toastOuter = MakeImage(canvasGo.transform, "HudToastBanner", new Color(1f, 0.84f, 0.25f, 0.95f));
+        _toastBorder = toastOuter;
+        _toastBanner = toastOuter.gameObject;
+        _toastRect = toastOuter.rectTransform;
+        _toastRect.anchorMin = _toastRect.anchorMax = _toastRect.pivot = new Vector2(1f, 1f);
+        _toastRect.anchoredPosition = new Vector2(-18f, -166f);
+        _toastRect.sizeDelta = new Vector2(368f, 32f);
+
+        var toastInner = MakeImage(_toastRect, "Inner", new Color(0.06f, 0.07f, 0.10f, 0.95f));
+        FillParentWithPadding(toastInner.rectTransform, 2f);
+
+        _toastText = MakeText(toastInner.transform, "ToastText", "", 13, FontStyle.Bold,
+            TextAnchor.MiddleCenter, new Color(1f, 0.90f, 0.35f, 1f),
+            Vector2.zero, Vector2.one, new Vector2(8f, 0f), new Vector2(-8f, 0f));
+        _toastBanner.SetActive(false);
 
         // ============================================================
         // 2. TOP-CENTER BOSS RESPAWN BANNER
@@ -168,13 +232,31 @@ public class PlayerStatusHud : MonoBehaviour
         _bossBanner.SetActive(false);
     }
 
+    public void ShowToast(string text, Color color, float duration = 2.8f)
+    {
+        if (_toastBanner == null || _toastText == null) return;
+        _toastText.text = text;
+        _toastText.color = color;
+        if (_toastBorder != null) _toastBorder.color = color;
+        _toastTimer = Mathf.Max(0.5f, duration);
+        _toastBanner.SetActive(true);
+    }
+
     private void Update()
     {
+        if (_toastTimer > 0f)
+        {
+            _toastTimer -= Time.unscaledDeltaTime;
+            if (_toastTimer <= 0f && _toastBanner != null)
+                _toastBanner.SetActive(false);
+        }
+
         if (_combat == null || !_combat.IsSpawned) return;
 
         // 1. Update Top-Right Status Card
         int lvl = Mathf.Max(1, _combat.NetworkLevel);
         if (_levelBadgeText != null) _levelBadgeText.text = $"Lv.{lvl}";
+        if (_goldText != null) _goldText.text = $"{_combat.NetworkGold:N0} G";
 
         if (_playerNameText != null && _capsule != null)
         {
@@ -187,8 +269,21 @@ public class PlayerStatusHud : MonoBehaviour
             _avatarSilhouette.color = AvatarPalette.Get(_capsule.AvatarIndex);
         }
 
-        // Combat Readiness Status
+        // Safe Zone & Combat Readiness Status
+        bool inSafeZone = (_combat.IsInSafeZone || SafeZone.IsPlayerInAnySafeZone(_combat)) && !_combat.IsDead;
         bool inCombat = _combat.IsInCombat;
+
+        if (_safeZoneBanner != null)
+        {
+            if (_safeZoneBanner.activeSelf != inSafeZone)
+                _safeZoneBanner.SetActive(inSafeZone);
+        }
+
+        if (_toastRect != null)
+        {
+            _toastRect.anchoredPosition = new Vector2(-18f, inSafeZone ? -204f : -166f);
+        }
+
         if (_readinessDot != null && _readinessText != null)
         {
             if (_combat.IsDead)
@@ -196,6 +291,13 @@ public class PlayerStatusHud : MonoBehaviour
                 _readinessDot.color = new Color(0.55f, 0.55f, 0.6f, 1f);
                 _readinessText.color = new Color(0.75f, 0.75f, 0.8f, 1f);
                 _readinessText.text = "DEFEATED";
+            }
+            else if (inSafeZone)
+            {
+                float pulse = 0.75f + Mathf.Sin(Time.unscaledTime * 3.5f) * 0.25f;
+                _readinessDot.color = new Color(0.18f, 0.95f, 0.65f, pulse);
+                _readinessText.color = new Color(0.32f, 0.98f, 0.72f, 1f);
+                _readinessText.text = "SAFE ZONE";
             }
             else if (inCombat)
             {
@@ -249,6 +351,11 @@ public class PlayerStatusHud : MonoBehaviour
             {
                 _pointsNoticeText.text = $"★ {_combat.NetworkUnspentStatPoints} Stat Point(s) Available!  Press [I] to Upgrade";
                 _pointsNoticeText.color = new Color(1f, 0.84f, 0.22f, 1f);
+            }
+            else if (inSafeZone)
+            {
+                _pointsNoticeText.text = "Sanctuary Active • HP/STA safe & Combat Locked";
+                _pointsNoticeText.color = new Color(0.32f, 0.96f, 0.68f, 1f);
             }
             else if (_combat.IsBlocking)
             {

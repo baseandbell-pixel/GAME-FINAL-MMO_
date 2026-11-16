@@ -13,7 +13,8 @@ public enum MarkerKind
     Boss,
     EnemyCamp,
     LootChest,
-    Waypoint
+    Waypoint,
+    SafeZone
 }
 
 public struct MapMarker
@@ -316,6 +317,16 @@ public class MapManager : MonoBehaviour
                 position = p.transform.position,
                 kind = p == PlayerCombat.Local ? MarkerKind.LocalPlayer : MarkerKind.RemotePlayer,
                 label = p == PlayerCombat.Local ? "You" : "Player"
+            });
+        }
+
+        if (SafeZone.Instance != null)
+        {
+            into.Add(new MapMarker
+            {
+                position = SafeZone.Instance.Center,
+                kind = MarkerKind.SafeZone,
+                label = "Safe Zone"
             });
         }
 

@@ -95,12 +95,17 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         navRt.anchoredPosition = Vector2.zero;
         navRt.sizeDelta = new Vector2(0f, HeaderHeight);
 
-        MakeTabButton(_topNavBar.transform, "TabWorldMap", "[ World Map ]", 12f, 180f, true, () => { });
-        MakeTabButton(_topNavBar.transform, "TabCharacter", "[ Character & Upgrade ]", 200f, 220f, false, () =>
+        MakeTabButton(_topNavBar.transform, "TabWorldMap", "[ World Map ]", 10f, 132f, true, () => { });
+        MakeTabButton(_topNavBar.transform, "TabCharacter", "[ Character & Upgrade ]", 148f, 178f, false, () =>
         {
             if (_map != null) _map.SwitchToCharacterTab();
         });
-        MakeTabButton(_topNavBar.transform, "CloseMapBtn", "Close [M / Esc]", 496f, 132f, false, () =>
+        MakeTabButton(_topNavBar.transform, "TabBlacksmith", "[ Blacksmith (+Gear) ]", 332f, 164f, false, () =>
+        {
+            if (_map != null) _map.SwitchToCharacterTab();
+            InventoryUI.Instance?.OpenToEnhancementTab();
+        });
+        MakeTabButton(_topNavBar.transform, "CloseMapBtn", "Close [M / Esc]", 502f, 126f, false, () =>
         {
             if (_map != null) _map.SetWorldMapOpen(false);
         });
@@ -165,8 +170,8 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         _clearPinBtn = clearGo.GetComponent<Button>();
 
         _legendText = MakeText(_footerBar.transform, "Legend",
-            "White: You  |  Orange: Camps  |  Crown: Boss  |  Gold: Chests  |  Mint: Pin",
-            12, FontStyle.Normal, TextAnchor.MiddleLeft, new Color(0.82f, 0.85f, 0.90f, 1f),
+            "White: You  |  Emerald: Safe Zone  |  Orange: Camps  |  Crown: Boss  |  Gold: Chests  |  Mint: Pin",
+            11, FontStyle.Normal, TextAnchor.MiddleLeft, new Color(0.82f, 0.85f, 0.90f, 1f),
             new Vector2(0f, 0f), new Vector2(14f, 16f), new Vector2(612f, 22f));
 
         ApplyMode(false);
@@ -395,6 +400,14 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
                 irt.sizeDelta = worldMode ? new Vector2(18f, 18f) : new Vector2(13f, 13f);
                 w.label.color = new Color(1f, 0.90f, 0.35f);
                 lrt.anchoredPosition = new Vector2(0f, 28f);
+                break;
+
+            case MarkerKind.SafeZone:
+                w.icon.sprite = HudIcons.GetSprite("shield");
+                w.icon.color = new Color(0.18f, 0.96f, 0.65f, 1f);
+                irt.sizeDelta = worldMode ? new Vector2(22f, 22f) : new Vector2(15f, 15f);
+                w.label.color = new Color(0.32f, 0.98f, 0.72f, 1f);
+                lrt.anchoredPosition = new Vector2(0f, 30f);
                 break;
 
             case MarkerKind.Waypoint:

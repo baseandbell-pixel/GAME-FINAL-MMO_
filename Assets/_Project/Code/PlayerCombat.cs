@@ -82,7 +82,7 @@ public class PlayerCombat : NetworkBehaviour
 
     [Header("Validation (applied by the victim's State Authority)")]
     [Tooltip("Upper bound for any single damage application.")]
-    [Min(1)] [SerializeField] private int maxDamagePerHit = 250;
+    [Min(1)] [SerializeField] private int maxDamagePerHit = 400;
     [Tooltip("Attacker and victim must be at most this far apart (generous: remote proxies lag).")]
     [Min(0.5f)] [SerializeField] private float maxHitDistance = 5f;
 
@@ -136,6 +136,13 @@ public class PlayerCombat : NetworkBehaviour
 
     [Networked, OnChangedRender(nameof(OnProgressionNetChanged))]
     public int StatPointsAGI { get; set; } = 0;
+
+    // ---- Networked Economy & Safe Zone ----
+    [Networked, OnChangedRender(nameof(OnProgressionNetChanged))]
+    public int NetworkGold { get; set; } = 0;
+
+    [Networked]
+    public NetworkBool IsInSafeZone { get; set; }
 
     // ---- Networked Equipped Gear Aggregated Bonuses ----
     [Networked, OnChangedRender(nameof(OnProgressionNetChanged))]
@@ -193,7 +200,7 @@ public class PlayerCombat : NetworkBehaviour
 
     public float CurrentStamina => _isSpawned ? NetworkStamina : maxStamina;
     public bool CanSprint => !IsDead && CurrentStamina > 0.5f && !_sprintExhaustedCooldown;
-    public bool CanAttack => !IsDead && CurrentStamina > 0f;
+    public bool CanAttack => !IsDead && !IsInSafeZone && !SafeZone.IsPointInAnySafeZone(transform.position) && CurrentStamina > 0f;
     public bool CanDodge => !IsDead && CurrentStamina > 0f;
     public bool IsDead => _isSpawned && NetworkHealth <= 0;
     public bool IsHitWindowOpen { get; private set; }
@@ -485,6 +492,9 @@ public class PlayerCombat : NetworkBehaviour
 
     public override void Despawned(NetworkRunner runner, bool hasState)
     {
+        if (IsLocallyControlled && PlayerSaveManager.Instance != null)
+            PlayerSaveManager.Instance.SaveNow("OnNetworkDespawn");
+
         _isSpawned = false;
         All.Remove(this);
         if (Local == this) Local = null;
@@ -496,7 +506,87 @@ public class PlayerCombat : NetworkBehaviour
         _lastHitSequenceByAttacker.Clear();
     }
 
-    // ------------------------------------------------------------------ EXP, Leveling, Stat Allocation & Equipment Sync
+    // ------------------------------------------------------------------ EXP, Gold, Leveling, Scaled Stat Allocation & Persistence
+
+    public int GetStatPointValue(PlayerStatType statType)
+    {
+        if (!_isSpawned) return 0;
+        return statType switch
+        {
+            PlayerStatType.STR => StatPointsSTR,
+            PlayerStatType.VIT => StatPointsVIT,
+            PlayerStatType.END => StatPointsEND,
+            PlayerStatType.AGI => StatPointsAGI,
+            _ => 0
+        };
+    }
+
+    public static int GetAttributeUpgradePointCost(int currentStatValue)
+    {
+        return currentStatValue >= 10 ? 2 : 1;
+    }
+
+    public static int GetAttributeUpgradeGoldCost(int currentStatValue)
+    {
+        if (currentStatValue < 5) return 0;
+        if (currentStatValue < 10) return 50;
+        if (currentStatValue < 15) return 150;
+        return 300 + (currentStatValue - 15) * 60;
+    }
+
+    public void AddGold(int amount, string source = "Reward")
+    {
+        if (!_isSpawned || amount <= 0) return;
+        if (Object.HasStateAuthority)
+        {
+            NetworkGold += amount;
+            ProgressionChanged?.Invoke();
+            if (IsLocallyControlled) CombatHud.NotifyGoldGained(amount, source);
+            PlayerSaveManager.RequestAutoSave($"AddGold_{source}");
+            Debug.Log($"[PlayerCombat] +{amount} Gold from {source} (total={NetworkGold}).");
+        }
+        else if (IsLocallyControlled)
+        {
+            RPC_AddGold(amount, source);
+        }
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_AddGold(int amount, string source)
+    {
+        if (!Object.HasStateAuthority || amount <= 0) return;
+        AddGold(amount, source);
+    }
+
+    public bool TrySpendGold(int amount)
+    {
+        if (!_isSpawned || amount < 0) return false;
+        if (amount == 0) return true;
+        if (NetworkGold < amount) return false;
+
+        if (Object.HasStateAuthority)
+        {
+            NetworkGold = Mathf.Max(0, NetworkGold - amount);
+            ProgressionChanged?.Invoke();
+            PlayerSaveManager.RequestAutoSave("SpendGold");
+            return true;
+        }
+        if (IsLocallyControlled)
+        {
+            RPC_SpendGold(amount);
+            return true;
+        }
+        return false;
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_SpendGold(int amount)
+    {
+        if (!Object.HasStateAuthority || amount <= 0 || NetworkGold < amount) return;
+        NetworkGold = Mathf.Max(0, NetworkGold - amount);
+        ProgressionChanged?.Invoke();
+        PlayerSaveManager.RequestAutoSave("SpendGold");
+    }
 
     /// <summary>Awards EXP and automatically processes Level-Ups (+3 Stat Points per level).</summary>
     public void AddExperience(int amount)
@@ -538,18 +628,23 @@ public class PlayerCombat : NetworkBehaviour
         {
             NetworkLevel = lvl;
             NetworkUnspentStatPoints += pointsGained;
-            // Full heal & stamina refill on level-up
             NetworkHealth = MaxHealth;
             NetworkStamina = MaxStamina;
             Debug.Log($"[PlayerCombat] LEVEL UP! {name} reached Level {NetworkLevel} (+{pointsGained} Stat Points, total unspent={NetworkUnspentStatPoints}).");
         }
         ProgressionChanged?.Invoke();
+        PlayerSaveManager.RequestAutoSave(leveledUp ? "LevelUp" : "AddExperience");
     }
 
-    /// <summary>Allocates 1 unspent Stat Point into STR, VIT, END, or AGI.</summary>
+    /// <summary>Allocates Stat Points + scaled Gold cost into STR, VIT, END, or AGI.</summary>
     public bool AllocateStatPoint(PlayerStatType statType)
     {
-        if (!_isSpawned || NetworkUnspentStatPoints <= 0) return false;
+        if (!_isSpawned) return false;
+        int curVal = GetStatPointValue(statType);
+        int ptCost = GetAttributeUpgradePointCost(curVal);
+        int goldCost = GetAttributeUpgradeGoldCost(curVal);
+        if (NetworkUnspentStatPoints < ptCost || NetworkGold < goldCost) return false;
+
         if (Object.HasStateAuthority)
         {
             return ApplyAllocateStatAuthority(statType);
@@ -571,28 +666,27 @@ public class PlayerCombat : NetworkBehaviour
 
     private bool ApplyAllocateStatAuthority(PlayerStatType statType)
     {
-        if (NetworkUnspentStatPoints <= 0) return false;
+        int curVal = GetStatPointValue(statType);
+        int ptCost = GetAttributeUpgradePointCost(curVal);
+        int goldCost = GetAttributeUpgradeGoldCost(curVal);
+
+        if (NetworkUnspentStatPoints < ptCost || NetworkGold < goldCost) return false;
 
         int prevMaxHp = MaxHealth;
         float prevMaxSta = MaxStamina;
 
-        NetworkUnspentStatPoints--;
+        NetworkUnspentStatPoints -= ptCost;
+        NetworkGold -= goldCost;
+
         switch (statType)
         {
-            case PlayerStatType.STR:
-                StatPointsSTR++;
-                break;
-            case PlayerStatType.VIT:
-                StatPointsVIT++;
-                break;
-            case PlayerStatType.END:
-                StatPointsEND++;
-                break;
-            case PlayerStatType.AGI:
-                StatPointsAGI++;
-                break;
+            case PlayerStatType.STR: StatPointsSTR++; break;
+            case PlayerStatType.VIT: StatPointsVIT++; break;
+            case PlayerStatType.END: StatPointsEND++; break;
+            case PlayerStatType.AGI: StatPointsAGI++; break;
             default:
-                NetworkUnspentStatPoints++;
+                NetworkUnspentStatPoints += ptCost;
+                NetworkGold += goldCost;
                 return false;
         }
 
@@ -602,9 +696,50 @@ public class PlayerCombat : NetworkBehaviour
         float staDelta = MaxStamina - prevMaxSta;
         if (staDelta > 0f && !IsDead) NetworkStamina = Mathf.Min(MaxStamina, NetworkStamina + staDelta);
 
-        Debug.Log($"[PlayerCombat] Allocated +1 {statType} (STR={StatPointsSTR}, VIT={StatPointsVIT}, END={StatPointsEND}, AGI={StatPointsAGI}, Unspent={NetworkUnspentStatPoints}). Total ATK={TotalAttackDamage}, MaxHP={MaxHealth}, MaxSTA={MaxStamina:0}.");
+        Debug.Log($"[PlayerCombat] Allocated +1 {statType} (cost {ptCost}pt + {goldCost}g). STR={StatPointsSTR}, VIT={StatPointsVIT}, END={StatPointsEND}, AGI={StatPointsAGI}.");
         ProgressionChanged?.Invoke();
+        PlayerSaveManager.RequestAutoSave($"Allocate_{statType}");
         return true;
+    }
+
+    public void ExportSaveData(PlayerSaveData data)
+    {
+        if (data == null || !_isSpawned) return;
+        data.level = Mathf.Max(1, NetworkLevel);
+        data.experience = Mathf.Max(0, NetworkExperience);
+        data.unspentStatPoints = Mathf.Max(0, NetworkUnspentStatPoints);
+        data.statSTR = StatPointsSTR;
+        data.statVIT = StatPointsVIT;
+        data.statEND = StatPointsEND;
+        data.statAGI = StatPointsAGI;
+        data.gold = Mathf.Max(0, NetworkGold);
+        data.currentHealth = NetworkHealth;
+        data.currentStamina = NetworkStamina;
+    }
+
+    public void ApplySaveData(PlayerSaveData data)
+    {
+        if (data == null || !_isSpawned) return;
+        if (!Object.HasStateAuthority) return;
+
+        NetworkLevel = Mathf.Max(1, data.level);
+        NetworkExperience = Mathf.Max(0, data.experience);
+        NetworkUnspentStatPoints = Mathf.Max(0, data.unspentStatPoints);
+        StatPointsSTR = Mathf.Max(0, data.statSTR);
+        StatPointsVIT = Mathf.Max(0, data.statVIT);
+        StatPointsEND = Mathf.Max(0, data.statEND);
+        StatPointsAGI = Mathf.Max(0, data.statAGI);
+        NetworkGold = Mathf.Max(0, data.gold);
+        ProgressionChanged?.Invoke();
+    }
+
+    public void ApplySaveHealthAndStamina(int savedHp, float savedStamina)
+    {
+        if (!_isSpawned || !Object.HasStateAuthority) return;
+        NetworkHealth = savedHp > 0 ? Mathf.Clamp(savedHp, 1, MaxHealth) : MaxHealth;
+        NetworkStamina = savedStamina > 0f ? Mathf.Clamp(savedStamina, 1f, MaxStamina) : MaxStamina;
+        HealthChanged?.Invoke(NetworkHealth, MaxHealth);
+        StaminaChanged?.Invoke(NetworkStamina, MaxStamina);
     }
 
     /// <summary>Syncs total equipped gear bonuses (Sword + Shield + Armor + Pants) over Photon Fusion.</summary>
@@ -671,6 +806,7 @@ public class PlayerCombat : NetworkBehaviour
     public override void FixedUpdateNetwork()
     {
         if (!_isSpawned || !Object.HasStateAuthority) return;
+        IsInSafeZone = SafeZone.IsPointInAnySafeZone(transform.position);
         TickStaminaRegen(Runner.DeltaTime);
     }
 
@@ -859,6 +995,11 @@ public class PlayerCombat : NetworkBehaviour
     public bool TryRequestAttack()
     {
         if (!_isSpawned || !IsLocallyControlled || IsDead) return false;
+        if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position))
+        {
+            Debug.Log("[PlayerCombat] Attack prevented: Inside Comfort Zone (Safe Haven).");
+            return false;
+        }
         if (CurrentStamina <= 0f)
         {
             Debug.Log("[PlayerCombat] Attack prevented: Stamina depleted.");
@@ -932,6 +1073,7 @@ public class PlayerCombat : NetworkBehaviour
     {
         if (!Object.HasStateAuthority) return;
         if (IsDead) return;
+        if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)) return;
         if (NetworkStamina <= 0f) return;
 
         float now = Time.time;
@@ -1158,6 +1300,7 @@ public class PlayerCombat : NetworkBehaviour
     private void TryHitNpc(EnemyNPC npc, Collider other)
     {
         if (!IsHitWindowOpen || weaponHitbox == null) return;
+        if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)) return;
         if (!npc.IsSpawned || !npc.IsAlive || npc.BodyCollider == null || other != npc.BodyCollider) return;
 
         Transform w = weaponHitbox.transform;
@@ -1197,9 +1340,14 @@ public class PlayerCombat : NetworkBehaviour
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    public void RPC_ReceiveNpcDamage(NetworkId npcId)
+    public void RPC_ReceiveNpcDamage(NetworkId npcId, int patternDamageOverride = 0)
     {
         if (!Object.HasStateAuthority || IsDead) return;
+        if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position))
+        {
+            Debug.Log("[PlayerCombat] NPC damage blocked: player is inside Comfort Zone.");
+            return;
+        }
 
         if (Runner == null || !Runner.TryFindObject(npcId, out NetworkObject npcObject) || npcObject == null)
         {
@@ -1214,7 +1362,7 @@ public class PlayerCombat : NetworkBehaviour
             return;
         }
 
-        float limit = npc.AttackRange + NpcDamageRangeSlack;
+        float limit = npc.IsBoss ? 22f : npc.AttackRange + NpcDamageRangeSlack;
         if ((npc.transform.position - transform.position).sqrMagnitude > limit * limit)
         {
             Debug.LogWarning($"[PlayerCombat] NPC damage rejected: {npc.name} out of range.");
@@ -1222,15 +1370,17 @@ public class PlayerCombat : NetworkBehaviour
         }
 
         float now = Time.time;
-        if (_lastNpcAttackTime.TryGetValue(npcId, out float last) && now - last < npc.AttackCooldown * 0.5f)
+        if (_lastNpcAttackTime.TryGetValue(npcId, out float last) && now - last < npc.AttackCooldown * 0.4f)
         {
-            Debug.LogWarning($"[PlayerCombat] NPC damage rejected: {npc.name} attacking faster than its cooldown.");
             return;
         }
         _lastNpcAttackTime[npcId] = now;
         _lastCombatActivityTime = now;
 
-        int incoming = npc.CurrentAttackDamage;
+        int maxAllowed = npc.IsBoss ? npc.ScaledAttackDamage * 2 : npc.ScaledAttackDamage + 4;
+        int incoming = patternDamageOverride > 0
+            ? Mathf.Clamp(patternDamageOverride, 1, maxAllowed)
+            : npc.CurrentAttackDamage;
         Debug.Log($"[PlayerCombat] {npc.name} hits {name} for {incoming}.");
         RPC_TakeDamage(incoming);
     }
@@ -1250,6 +1400,7 @@ public class PlayerCombat : NetworkBehaviour
     {
         if (!Object.HasStateAuthority) return;
         if (IsDead || IsDodging) return;
+        if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)) return;
 
         _lastCombatActivityTime = Time.time;
         damage = Mathf.Clamp(damage, 0, maxDamagePerHit);
@@ -1296,7 +1447,8 @@ public class PlayerCombat : NetworkBehaviour
 
     private void TeleportToSpawn()
     {
-        TeleportTo(_spawnPosition);
+        Vector3 dest = SafeZone.Instance != null ? SafeZone.Instance.ReconnectSpawnPosition : _spawnPosition;
+        TeleportTo(dest);
     }
 
     public void TeleportTo(Vector3 targetPosition)
@@ -1407,6 +1559,34 @@ public sealed class FloatingDamagePopup : MonoBehaviour
         return popup;
     }
 
+    public static FloatingDamagePopup SpawnWarning(Vector3 worldPos, string text, Color color)
+    {
+        var go = new GameObject("FloatingWarningPopup");
+        go.transform.position = worldPos;
+        var popup = go.AddComponent<FloatingDamagePopup>();
+        popup.InitText(text, color, fontSize: 4.5f, isCrit: true);
+        return popup;
+    }
+
+    private void InitText(string text, Color color, float fontSize, bool isCrit)
+    {
+        DamageAmount = 0;
+        IsCritical = isCrit;
+        ComboStep = 1;
+        _startPos = transform.position;
+        _spawnTime = Time.unscaledTime;
+
+        _tmp = gameObject.AddComponent<TextMeshPro>();
+        _tmp.alignment = TextAlignmentOptions.Center;
+        _tmp.textWrappingMode = TextWrappingModes.NoWrap;
+        _tmp.fontStyle = FontStyles.Bold;
+        _tmp.text = text;
+        _tmp.fontSize = fontSize;
+        _tmp.color = color;
+
+        if (!ActivePopups.Contains(this)) ActivePopups.Add(this);
+    }
+
     private void Init(int amount, bool isCrit, int comboStep)
     {
         DamageAmount = amount;
@@ -1482,9 +1662,9 @@ public sealed class CombatHud : MonoBehaviour
     private struct Popup
     {
         public Transform target;
-        public int amount;
-        public bool isCrit;
+        public string label;
         public Color color;
+        public bool isCrit;
         public float startedAt;
     }
 
@@ -1505,6 +1685,15 @@ public sealed class CombatHud : MonoBehaviour
         PlayerStatusHud.EnsureFor(combat);
     }
 
+    public static void NotifyGoldGained(int amount, string source)
+    {
+        if (_localHud == null || amount <= 0) return;
+        var local = PlayerCombat.Local;
+        if (local != null)
+            _localHud.AddTextPopup(local.transform, $"+{amount} GOLD", new Color(1f, 0.86f, 0.18f), isCrit: true);
+        PlayerStatusHud.Instance?.ShowToast($"+{amount} Gold ({source})", new Color(1f, 0.86f, 0.22f));
+    }
+
     public static void NotifyEnemyDamaged(EnemyNPC enemy, int amount, PlayerRef attacker, bool isCrit = false, int comboStep = 1)
     {
         if (_localHud == null || enemy == null || amount <= 0) return;
@@ -1513,7 +1702,7 @@ public sealed class CombatHud : MonoBehaviour
             ? (comboStep >= 3 ? new Color(1f, 0.42f, 0.10f) : new Color(1f, 0.82f, 0.12f))
             : new Color(1f, 0.94f, 0.72f);
 
-        _localHud.AddPopup(enemy.LockPoint, amount, c, isCrit);
+        _localHud.AddTextPopup(enemy.LockPoint, isCrit ? $"CRIT! -{amount}" : $"-{amount}", c, isCrit);
 
         var local = PlayerCombat.Local;
         if (local != null && local.Runner != null && local.Runner.LocalPlayer == attacker)
@@ -1560,15 +1749,15 @@ public sealed class CombatHud : MonoBehaviour
         if (_lastHealth >= 0 && current < _lastHealth)
         {
             int damage = _lastHealth - current;
-            AddPopup(transform, damage, new Color(1f, 0.25f, 0.25f), isCrit: false);
+            AddTextPopup(transform, $"-{damage}", new Color(1f, 0.25f, 0.25f), isCrit: false);
             Debug.Log($"[CombatHud] Local player received {damage} damage ({current}/{max}).");
         }
         _lastHealth = current;
     }
 
-    private void AddPopup(Transform target, int amount, Color color, bool isCrit)
+    private void AddTextPopup(Transform target, string label, Color color, bool isCrit)
     {
-        _popups.Add(new Popup { target = target, amount = amount, isCrit = isCrit, color = color, startedAt = Time.unscaledTime });
+        _popups.Add(new Popup { target = target, label = label, isCrit = isCrit, color = color, startedAt = Time.unscaledTime });
     }
 
     public static bool IsCrosshairVisible =>
@@ -1669,8 +1858,7 @@ public sealed class CombatHud : MonoBehaviour
                 fontSize = popup.isCrit ? 26 : 21,
                 fontStyle = FontStyle.Bold
             };
-            string text = popup.isCrit ? $"CRIT! -{popup.amount}" : $"-{popup.amount}";
-            GUI.Label(new Rect(screen.x - 85f, Screen.height - screen.y - 20f, 170f, 36f), text, style);
+            GUI.Label(new Rect(screen.x - 95f, Screen.height - screen.y - 20f, 190f, 36f), popup.label, style);
         }
         GUI.color = old;
     }

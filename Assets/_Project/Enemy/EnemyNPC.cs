@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using Fusion;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -15,6 +16,14 @@ public enum NpcState : byte
     Dead
 }
 
+public enum BossAttackPattern : byte
+{
+    None = 0,
+    HeavyCleave = 1,
+    ShockwaveSpinAoE = 2,
+    DarkVolleyAndCharge = 3
+}
+
 [Serializable]
 public class LootEntry
 {
@@ -25,25 +34,30 @@ public class LootEntry
 }
 
 /// <summary>
-/// Hostile NPC &amp; Solo Arena Boss for Photon Fusion SHARED MODE.
-/// Supports both standard camp enemies (4 per camp, 90s camp respawn) and the Arena Boss
-/// (higher HP, Heavy Slam every 3rd attack, 300 EXP reward, and 240s respawn cooldown).
+/// Hostile NPC &amp; Multi-Pattern Solo Arena Boss for Photon Fusion SHARED MODE.
+/// Features:
+///   - Dynamic Level &amp; Stat Scaling relative to Player Level (Enemies &amp; Boss).
+///   - Safe / Comfort Zone combat immunity &amp; boundary leash.
+///   - Obstacle avoidance &amp; penetration resolution.
+///   - Challenging Level 1 Boss baseline + 3 distinct telegraphed Boss Attack Patterns:
+///       1) Heavy Cleave (1.5x single-target punish)
+///       2) 360° Ground Shockwave AoE (6.2m telegraphed ring)
+///       3) Dark Energy Volley + Charge Lunge (anti-kite 3-projectile fan)
 /// </summary>
 [RequireComponent(typeof(Collider))]
 public class EnemyNPC : NetworkBehaviour, ILockTarget
 {
     public static readonly List<EnemyNPC> All = new List<EnemyNPC>();
 
-    // ---- stats (rebalanced for 4-enemy camp encounters & Boss overrides) ----
-    [Header("Combat stats")]
+    [Header("Base Combat Stats (Level 1 Baseline)")]
     public int MaxHealth = 120;
     public int AttackDamage = 6;
+    public int Defense = 0;
     public float AttackCooldown = 2.2f;
     public float AttackRange = 2.4f;
 
     [Header("AI")]
     [Min(1f)] [SerializeField] private float aggroRadius = 6.8f;
-    [Tooltip("If the chased player gets this far from the NPC's home, it gives up and returns.")]
     [Min(2f)] [SerializeField] private float leashRadius = 22f;
     [SerializeField] private float patrolRadius = 3.5f;
     [SerializeField] private Vector2 idleWaitRange = new Vector2(1.5f, 4f);
@@ -59,9 +73,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     [SerializeField] private float allySeparationRadius = 1.35f;
 
     [Header("Damage validation (authority side)")]
-    [SerializeField] private int maxDamagePerHit = 250;
+    [SerializeField] private int maxDamagePerHit = 500;
     [SerializeField] private float maxHitDistance = 6.5f;
-    [SerializeField] private float minSecondsBetweenHitsPerPlayer = 0.18f;
+    [SerializeField] private float minSecondsBetweenHitsPerPlayer = 0.16f;
 
     [Header("Rewards")]
     [SerializeField] private int experienceReward = 50;
@@ -83,11 +97,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     [Networked] public NetworkId TargetId { get; set; }
     [Networked] public Vector3 HomePosition { get; set; }
-    /// <summary>Spawner-assigned group identifier. NPCs with the same id assist each other.</summary>
     [Networked] public int CampId { get; set; }
-    /// <summary>True when this NPC is the dedicated Arena Boss.</summary>
     [Networked, OnChangedRender(nameof(OnBossFlagChanged))]
     public NetworkBool IsBoss { get; set; }
+    [Networked] public int ScaledLevel { get; set; } = 1;
 
     // ---- public API ----
     public bool IsSpawned { get; private set; }
@@ -96,15 +109,20 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public float AggroRadius => aggroRadius;
     public float ChaseSpeed => chaseSpeed;
     public float PatrolSpeed => patrolSpeed;
+    public int ScaledMaxHealth => MaxHealth;
+    public int ScaledAttackDamage => AttackDamage;
+    public int ScaledDefense => Defense;
     public int ExperienceReward => experienceReward;
-    public int CurrentAttackDamage => IsBoss && (_bossAttackCounter % 3 == 0)
-        ? Mathf.RoundToInt(AttackDamage * 1.5f)
-        : AttackDamage;
+    public int CurrentAttackDamage => AttackDamage;
 
-    // ILockTarget
+    public BossAttackPattern LastBossPattern { get; private set; }
+    public int BossAttackExecutions { get; private set; }
+    public int DistinctBossPatternsUsed => _usedPatterns.Count;
+    public bool IsTelegraphing => _isTelegraphing;
+
     public Transform LockPoint => _lockPoint != null ? _lockPoint : transform;
     public bool IsLockable => IsAlive;
-    public string LockName => IsBoss ? $"[BOSS] Sovereign Golem" : name;
+    public string LockName => IsBoss ? $"[Lv.{ScaledLevel} BOSS] Sovereign Golem" : $"[Lv.{ScaledLevel}] {name}";
 
     // ---- private ----
     private Transform _lockPoint;
@@ -123,9 +141,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private Vector3 _patrolPoint;
     private bool _flashing;
     private bool _bossConfigured;
-    private int _bossAttackCounter;
+    private bool _scalingApplied;
+    private bool _isTelegraphing;
+    private int _bossPatternCycle;
     private int _avoidSign;
     private float _avoidSignUntil;
+    private Coroutine _bossAttackRoutine;
+    private readonly HashSet<BossAttackPattern> _usedPatterns = new HashSet<BossAttackPattern>();
     private static readonly Collider[] s_overlapBuffer = new Collider[24];
     private static readonly RaycastHit[] s_castBuffer = new RaycastHit[16];
     private readonly Dictionary<PlayerRef, float> _lastDamageTime = new Dictionary<PlayerRef, float>();
@@ -150,22 +172,34 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         IsSpawned = true;
         if (!All.Contains(this)) All.Add(this);
 
-        if (IsBoss) ApplyBossConfiguration();
-
         if (Object.HasStateAuthority)
         {
+            if (ScaledLevel < 1) ScaledLevel = DetermineTargetScaleLevel();
+            ApplyDynamicScaling(ScaledLevel);
             CurrentHealth = MaxHealth;
             HomePosition = transform.position;
             State = NpcState.Idle;
             TargetId = default;
-            Debug.Log($"[EnemyNPC] {name} (Boss={IsBoss}, Camp={CampId}) spawned with authority. HP={CurrentHealth}/{MaxHealth}, dmg={AttackDamage}, EXP={experienceReward}, home={HomePosition}.");
+            Debug.Log($"[EnemyNPC] {name} Lv.{ScaledLevel} (Boss={IsBoss}, Camp={CampId}) spawned. HP={CurrentHealth}/{MaxHealth}, ATK={AttackDamage}, DEF={Defense}, EXP={experienceReward}.");
         }
         else
         {
-            Debug.Log($"[EnemyNPC] {name} spawned as proxy (authority = {Object.StateAuthority}).");
+            ApplyDynamicScaling(Mathf.Max(1, ScaledLevel));
         }
 
         RefreshVisuals();
+    }
+
+    private static int DetermineTargetScaleLevel()
+    {
+        int highest = 1;
+        for (int i = 0; i < PlayerCombat.All.Count; i++)
+        {
+            var p = PlayerCombat.All[i];
+            if (p != null && p.IsSpawned && p.NetworkLevel > highest)
+                highest = p.NetworkLevel;
+        }
+        return Mathf.Max(1, highest);
     }
 
     private void OnBossFlagChanged()
@@ -177,29 +211,60 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
     }
 
+    public void ApplyDynamicScaling(int targetLevel)
+    {
+        targetLevel = Mathf.Max(1, targetLevel);
+        if (_scalingApplied && ScaledLevel == targetLevel) return;
+        _scalingApplied = true;
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
+            ScaledLevel = targetLevel;
+
+        if (IsBoss)
+        {
+            ApplyBossVisualAndCore();
+            MaxHealth = 750 + (targetLevel - 1) * 220;
+            AttackDamage = 24 + (targetLevel - 1) * 5;
+            Defense = 2 + (targetLevel - 1) * 3;
+            experienceReward = 300 + (targetLevel - 1) * 80;
+            maxDamagePerHit = 1200;
+        }
+        else
+        {
+            MaxHealth = 120 + (targetLevel - 1) * 45;
+            AttackDamage = 6 + (targetLevel - 1) * 2;
+            Defense = (targetLevel - 1) * 2;
+            experienceReward = 50 + (targetLevel - 1) * 18;
+            maxDamagePerHit = 600;
+        }
+
+        if (IsSpawned && State != NpcState.Dead && CurrentHealth > 0)
+            CurrentHealth = MaxHealth;
+    }
+
     public void ApplyBossConfiguration()
+    {
+        ApplyBossVisualAndCore();
+        ApplyDynamicScaling(Mathf.Max(1, ScaledLevel));
+    }
+
+    private void ApplyBossVisualAndCore()
     {
         if (_bossConfigured) return;
         _bossConfigured = true;
 
         gameObject.name = "Boss_SovereignGolem";
-        MaxHealth = 600;
-        AttackDamage = 14;
-        AttackCooldown = 1.9f;
+        AttackCooldown = 1.75f;
         AttackRange = 3.2f;
-        aggroRadius = 11.0f;
-        leashRadius = 20.0f;
-        patrolRadius = 4.0f;
-        chaseSpeed = 3.1f;
-        returnSpeed = 4.2f;
-        experienceReward = 300;
-        maxDamagePerHit = 300;
+        aggroRadius = 11.5f;
+        leashRadius = 21.0f;
+        patrolRadius = 3.5f;
+        chaseSpeed = 3.4f;
+        returnSpeed = 4.5f;
         maxHitDistance = 7.5f;
 
-        transform.localScale = new Vector3(2.15f, 2.25f, 2.15f);
+        transform.localScale = new Vector3(2.2f, 2.3f, 2.2f);
         if (_lockPoint != null) _lockPoint.localPosition = new Vector3(0f, 0.85f, 0f);
 
-        // Build distinct Boss Crown & Shoulder Pauldron primitives on the capsule placeholder
         if (_bossCrownRoot == null)
         {
             _bossCrownRoot = new GameObject("BossVisualCrown");
@@ -243,6 +308,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         IsSpawned = false;
         All.Remove(this);
         StopAllCoroutines();
+        _bossAttackRoutine = null;
+        _isTelegraphing = false;
         Debug.Log($"[EnemyNPC] {name} despawned.");
     }
 
@@ -279,9 +346,17 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (_stateTimer <= 0f && patrolRadius > 0.5f)
         {
             Vector2 c = UnityEngine.Random.insideUnitCircle * patrolRadius;
-            _patrolPoint = HomePosition + new Vector3(c.x, 0f, c.y);
-            _hasPatrolPoint = true;
-            ChangeState(NpcState.Patrol, "wandering");
+            Vector3 candidate = HomePosition + new Vector3(c.x, 0f, c.y);
+            if (!SafeZone.IsPointInAnySafeZone(candidate, 0.8f))
+            {
+                _patrolPoint = candidate;
+                _hasPatrolPoint = true;
+                ChangeState(NpcState.Patrol, "wandering");
+            }
+            else
+            {
+                _stateTimer = 1.5f;
+            }
         }
     }
 
@@ -303,10 +378,19 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         PlayerCombat target = ResolveTarget();
         if (target == null || target.IsDead) { BeginReturn(target == null ? "target lost" : "target died"); return; }
+        if (SafeZone.IsPlayerInAnySafeZone(target)) { BeginReturn("target entered Comfort Safe Zone"); return; }
 
         if (PlanarDistance(transform.position, HomePosition) > leashRadius) { BeginReturn("leash radius exceeded"); return; }
 
         float dist = PlanarDistance(transform.position, target.transform.position);
+
+        // Boss ranged / charge anti-kite check while chasing beyond melee range!
+        if (IsBoss && !_isTelegraphing && Time.time >= _nextAttackTime && dist > AttackRange * 1.1f && dist <= 13.5f)
+        {
+            StartBossPatternAttack(target, BossAttackPattern.DarkVolleyAndCharge);
+            return;
+        }
+
         if (dist <= AttackRange && HasClearMeleeLine(target.transform.position))
         {
             ChangeState(NpcState.Attacking, $"in range ({dist:0.0}m)");
@@ -319,8 +403,21 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         PlayerCombat target = ResolveTarget();
         if (target == null || target.IsDead) { BeginReturn(target == null ? "target lost" : "target died"); return; }
+        if (SafeZone.IsPlayerInAnySafeZone(target)) { BeginReturn("target entered Comfort Safe Zone"); return; }
+
+        if (_isTelegraphing)
+        {
+            FaceTowards(target.transform.position, dt);
+            return;
+        }
 
         float dist = PlanarDistance(transform.position, target.transform.position);
+        if (IsBoss && Time.time >= _nextAttackTime && dist > AttackRange * 1.3f && dist <= 13.5f)
+        {
+            StartBossPatternAttack(target, BossAttackPattern.DarkVolleyAndCharge);
+            return;
+        }
+
         if (dist > AttackRange * 1.25f || !HasClearMeleeLine(target.transform.position))
         {
             ChangeState(NpcState.Chasing, "target moved out of range or behind obstacle");
@@ -331,12 +428,118 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
         if (Time.time >= _nextAttackTime)
         {
-            _nextAttackTime = Time.time + AttackCooldown;
-            _bossAttackCounter++;
-            bool heavySlam = IsBoss && (_bossAttackCounter % 3 == 0);
-            Debug.Log($"[EnemyNPC] {name} attacks {target.name} (dmg {CurrentAttackDamage}{(heavySlam ? " HEAVY SLAM!" : "")}, cooldown {AttackCooldown}s).");
-            RPC_PlayAttackFx(heavySlam);
-            target.RPC_ReceiveNpcDamage(Object.Id);
+            if (IsBoss)
+            {
+                BossAttackPattern pattern = ChooseNextBossPattern(dist);
+                StartBossPatternAttack(target, pattern);
+            }
+            else
+            {
+                _nextAttackTime = Time.time + AttackCooldown;
+                Debug.Log($"[EnemyNPC] {name} attacks {target.name} (dmg {AttackDamage}).");
+                RPC_PlayAttackFx();
+                target.RPC_ReceiveNpcDamage(Object.Id, AttackDamage);
+            }
+        }
+    }
+
+    private BossAttackPattern ChooseNextBossPattern(float distToTarget)
+    {
+        _bossPatternCycle++;
+        if (distToTarget > AttackRange * 1.1f)
+            return BossAttackPattern.DarkVolleyAndCharge;
+
+        return (_bossPatternCycle % 3) switch
+        {
+            1 => BossAttackPattern.HeavyCleave,
+            2 => BossAttackPattern.ShockwaveSpinAoE,
+            _ => BossAttackPattern.DarkVolleyAndCharge
+        };
+    }
+
+    /// <summary>Executes one of the Boss's 3 multi-attack patterns with telegraph cues.</summary>
+    public void TriggerBossPatternForTest(BossAttackPattern pattern, PlayerCombat target)
+    {
+        if (!IsSpawned || !Object.HasStateAuthority || !IsBoss || target == null) return;
+        StartBossPatternAttack(target, pattern);
+    }
+
+    private void StartBossPatternAttack(PlayerCombat target, BossAttackPattern pattern)
+    {
+        if (_bossAttackRoutine != null) StopCoroutine(_bossAttackRoutine);
+        _nextAttackTime = Time.time + AttackCooldown + 0.65f;
+        _bossAttackRoutine = StartCoroutine(BossPatternRoutine(target, pattern));
+    }
+
+    private IEnumerator BossPatternRoutine(PlayerCombat target, BossAttackPattern pattern)
+    {
+        _isTelegraphing = true;
+        LastBossPattern = pattern;
+        _usedPatterns.Add(pattern);
+        BossAttackExecutions++;
+
+        Vector3 aimDir = target != null ? (target.transform.position - transform.position) : transform.forward;
+        aimDir.y = 0f;
+        if (aimDir.sqrMagnitude < 0.001f) aimDir = transform.forward;
+        aimDir.Normalize();
+
+        float windup = pattern == BossAttackPattern.ShockwaveSpinAoE ? 0.62f : 0.48f;
+        RPC_BossTelegraph((byte)pattern, transform.position, aimDir, windup);
+
+        yield return new WaitForSeconds(windup);
+
+        _isTelegraphing = false;
+        _bossAttackRoutine = null;
+
+        if (!IsAlive || target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target))
+            yield break;
+
+        if (pattern == BossAttackPattern.HeavyCleave)
+        {
+            float d = PlanarDistance(transform.position, target.transform.position);
+            if (d <= AttackRange + 1.4f && !SafeZone.IsPlayerInAnySafeZone(target))
+            {
+                int cleaveDmg = Mathf.RoundToInt(AttackDamage * 1.5f);
+                Debug.Log($"[BOSS AI] Pattern 1 HEAVY CLEAVE hits {target.name} for {cleaveDmg} DMG!");
+                target.RPC_ReceiveNpcDamage(Object.Id, cleaveDmg);
+            }
+        }
+        else if (pattern == BossAttackPattern.ShockwaveSpinAoE)
+        {
+            const float aoeRadius = 6.2f;
+            int aoeDmg = Mathf.RoundToInt(AttackDamage * 1.25f);
+            RPC_PlayBossShockwaveRelease(transform.position, aoeRadius);
+
+            for (int i = 0; i < PlayerCombat.All.Count; i++)
+            {
+                var p = PlayerCombat.All[i];
+                if (p == null || !p.IsSpawned || p.IsDead || SafeZone.IsPlayerInAnySafeZone(p)) continue;
+                if (PlanarDistance(transform.position, p.transform.position) <= aoeRadius)
+                {
+                    Debug.Log($"[BOSS AI] Pattern 2 360° SHOCKWAVE AoE hits {p.name} for {aoeDmg} DMG!");
+                    p.RPC_ReceiveNpcDamage(Object.Id, aoeDmg);
+                }
+            }
+        }
+        else if (pattern == BossAttackPattern.DarkVolleyAndCharge)
+        {
+            Vector3 currentAim = target.transform.position - transform.position;
+            currentAim.y = 0f;
+            if (currentAim.sqrMagnitude < 0.001f) currentAim = aimDir;
+            currentAim.Normalize();
+
+            // Lunge forward safely (never entering Comfort Zone)
+            Vector3 lungeTarget = transform.position + currentAim * 2.8f;
+            if (!SafeZone.IsPointInAnySafeZone(lungeTarget, 0.8f))
+            {
+                ResolveObstaclePenetration(ref lungeTarget);
+                lungeTarget.y = transform.position.y;
+                transform.position = lungeTarget;
+            }
+
+            int projDmg = Mathf.RoundToInt(AttackDamage * 0.95f);
+            RPC_SpawnBossVolley(transform.position + Vector3.up * 1.3f, currentAim, projDmg);
+            Debug.Log($"[BOSS AI] Pattern 3 DARK ENERGY VOLLEY + CHARGE fired 3 projectiles ({projDmg} DMG each)!");
         }
     }
 
@@ -368,12 +571,14 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         {
             var p = PlayerCombat.All[i];
             if (p == null || !p.IsSpawned || p.IsDead) continue;
+            if (SafeZone.IsPlayerInAnySafeZone(p)) continue;
+
             float d = PlanarDistance(transform.position, p.transform.position);
             if (d <= bestDist) { bestDist = d; best = p; }
         }
         if (best == null) return false;
 
-        Debug.Log($"[EnemyNPC] {name} aggro: {best.name} entered the zone at {bestDist:0.0}m (radius {aggroRadius}).");
+        Debug.Log($"[EnemyNPC] {name} aggro: {best.name} entered zone at {bestDist:0.0}m.");
         SetTarget(best);
         ChangeState(NpcState.Chasing, "player entered aggro zone");
         BroadcastCampAggro(best);
@@ -382,17 +587,14 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void BroadcastCampAggro(PlayerCombat target)
     {
-        if (target == null || !target.IsSpawned || CampId <= 0 || IsBoss) return;
+        if (target == null || !target.IsSpawned || CampId <= 0 || IsBoss || SafeZone.IsPlayerInAnySafeZone(target)) return;
 
-        int alerted = 0;
         for (int i = 0; i < All.Count; i++)
         {
             EnemyNPC ally = All[i];
             if (ally == null || !ally.IsSpawned || !ally.IsAlive || ally == this || ally.CampId != CampId) continue;
             ally.RPC_JoinCampAggro(target.Object.Id);
-            alerted++;
         }
-        Debug.Log($"[EnemyNPC] {name} alerted {alerted} ally/allies in camp {CampId} against {target.name}.");
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -402,7 +604,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (State == NpcState.Returning || State == NpcState.Dead) return;
 
         PlayerCombat target = FindPlayerByNetworkId(targetId);
-        if (target == null || target.IsDead) return;
+        if (target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target)) return;
 
         SetTarget(target);
         if (State == NpcState.Idle || State == NpcState.Patrol)
@@ -412,6 +614,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private void BeginReturn(string reason)
     {
         TargetId = default;
+        if (_bossAttackRoutine != null) { StopCoroutine(_bossAttackRoutine); _bossAttackRoutine = null; }
+        _isTelegraphing = false;
         ChangeState(NpcState.Returning, reason);
     }
 
@@ -449,7 +653,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         State = next;
     }
 
-    // ------------------------------------------------------------------ obstacle-aware steering & collision
+    // ------------------------------------------------------------------ obstacle & SafeZone steering
 
     private float MoveTowards(Vector3 destination, float speed, float dt)
     {
@@ -474,11 +678,28 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         Vector3 nextPos = pos + finalDir * step;
 
         ResolveObstaclePenetration(ref nextPos);
+        EnforceSafeZoneExclusion(ref nextPos);
         nextPos.y = pos.y;
 
         transform.position = nextPos;
         FaceDirection(finalDir, dt);
         return PlanarDistance(nextPos, destination);
+    }
+
+    private static void EnforceSafeZoneExclusion(ref Vector3 candidatePos)
+    {
+        var zone = SafeZone.Instance;
+        if (zone == null) return;
+        Vector3 diff = candidatePos - zone.Center;
+        diff.y = 0f;
+        float minDist = zone.Radius + 0.6f;
+        float d = diff.magnitude;
+        if (d < minDist)
+        {
+            Vector3 pushDir = d > 0.001f ? diff / d : Vector3.forward;
+            candidatePos.x = zone.Center.x + pushDir.x * minDist;
+            candidatePos.z = zone.Center.z + pushDir.z * minDist;
+        }
     }
 
     private Vector3 ComputeObstacleAvoidanceDir(Vector3 pos, Vector3 desiredDir, float checkDist)
@@ -669,12 +890,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (!IsAlive) return;
 
         PlayerCombat attacker = FindPlayerBySource(info.Source);
-        if (attacker == null)
-        {
-            Debug.LogWarning($"[EnemyNPC] {name}: damage from {info.Source} rejected (no player object for that peer).");
-            return;
-        }
-        if (attacker.IsDead) return;
+        if (attacker == null || attacker.IsDead) return;
+        if (SafeZone.IsPlayerInAnySafeZone(attacker)) return;
 
         float dist = PlanarDistance(transform.position, attacker.transform.position);
         float limit = IsBoss ? maxHitDistance + 1.5f : maxHitDistance;
@@ -686,16 +903,16 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
         float now = Time.time;
         if (_lastDamageTime.TryGetValue(info.Source, out float last) && now - last < minSecondsBetweenHitsPerPlayer)
-        {
             return;
-        }
         _lastDamageTime[info.Source] = now;
 
-        int applied = Mathf.Clamp(damage, 1, maxDamagePerHit);
+        // Apply Enemy/Boss Scaled Defense mitigation (minimum 1 damage)
+        int raw = Mathf.Clamp(damage, 1, maxDamagePerHit);
+        int applied = Defense > 0 ? Mathf.Max(1, raw - Defense) : raw;
 
         int before = CurrentHealth;
         CurrentHealth = Mathf.Max(0, before - applied);
-        Debug.Log($"[EnemyNPC] {name} takes {applied}{(isCrit ? " (CRIT!)" : "")} from {attacker.name} ({info.Source}): {before} -> {CurrentHealth}/{MaxHealth}.");
+        Debug.Log($"[EnemyNPC] {name} (Lv.{ScaledLevel}, DEF={Defense}) takes {applied}{(isCrit ? " (CRIT!)" : "")} from {attacker.name}: {before} -> {CurrentHealth}/{MaxHealth}.");
 
         RPC_HitFeedback(applied, isCrit, comboStep, info.Source);
 
@@ -706,10 +923,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
 
         if (State == NpcState.Returning) return;
-        if (!TargetId.IsValid)
-        {
-            SetTarget(attacker);
-        }
+        if (!TargetId.IsValid) SetTarget(attacker);
         if (State == NpcState.Idle || State == NpcState.Patrol)
         {
             ChangeState(NpcState.Chasing, "attacked");
@@ -730,6 +944,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private void Die(PlayerRef killer)
     {
         TargetId = default;
+        if (_bossAttackRoutine != null) { StopCoroutine(_bossAttackRoutine); _bossAttackRoutine = null; }
+        _isTelegraphing = false;
         _deathTime = Time.time;
         ChangeState(NpcState.Dead, $"killed by {killer}");
         SpawnLoot();
@@ -753,7 +969,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
     }
 
-    // ------------------------------------------------------------------ feedback (all peers)
+    // ------------------------------------------------------------------ feedback & Boss Pattern VFX (all peers)
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_HitFeedback(int damage, NetworkBool isCrit, int comboStep, PlayerRef attacker)
@@ -767,38 +983,105 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_PlayAttackFx(NetworkBool isHeavySlam = default)
+    public void RPC_PlayAttackFx()
     {
         if (animator != null) animator.SetTrigger(AttackTrigger);
-        if (isHeavySlam && gameObject.activeInHierarchy)
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BossTelegraph(byte patternByte, Vector3 centerPos, Vector3 dir, float duration)
+    {
+        if (!gameObject.activeInHierarchy) return;
+        if (animator != null) animator.SetTrigger(AttackTrigger);
+        StartCoroutine(TelegraphVisualRoutine((BossAttackPattern)patternByte, centerPos, dir, duration));
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_PlayBossShockwaveRelease(Vector3 centerPos, float maxRadius)
+    {
+        if (!gameObject.activeInHierarchy) return;
+        StartCoroutine(BossShockwaveReleaseRoutine(centerPos, maxRadius));
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_SpawnBossVolley(Vector3 origin, Vector3 aimDir, int damagePerOrb)
+    {
+        float[] spreadAngles = { -20f, 0f, 20f };
+        for (int i = 0; i < spreadAngles.Length; i++)
         {
-            StartCoroutine(BossSlamShockwaveRoutine());
+            Vector3 shotDir = Quaternion.Euler(0f, spreadAngles[i], 0f) * aimDir;
+            BossDarkProjectile.Spawn(this, origin, shotDir, damagePerOrb);
         }
     }
 
-    private IEnumerator BossSlamShockwaveRoutine()
+    private IEnumerator TelegraphVisualRoutine(BossAttackPattern pattern, Vector3 centerPos, Vector3 dir, float duration)
+    {
+        // Glowing arena telegraph marker on ground + floating warning text
+        string warnText = pattern switch
+        {
+            BossAttackPattern.HeavyCleave => "! HEAVY CLEAVE !",
+            BossAttackPattern.ShockwaveSpinAoE => "! 360° SHOCKWAVE !",
+            _ => "! DARK VOLLEY !"
+        };
+        FloatingDamagePopup.SpawnWarning(transform.position + Vector3.up * 3.1f, warnText, new Color(1f, 0.32f, 0.15f, 1f));
+
+        var disc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        disc.name = "BossTelegraphRing";
+        var col = disc.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+
+        float diameter = pattern == BossAttackPattern.ShockwaveSpinAoE ? 12.4f : 5.2f;
+        Vector3 targetPos = pattern == BossAttackPattern.HeavyCleave
+            ? centerPos + dir * 2.1f
+            : centerPos;
+        targetPos.y = 0.06f;
+        disc.transform.position = targetPos;
+        disc.transform.localScale = new Vector3(0.5f, 0.02f, 0.5f);
+
+        var r = disc.GetComponent<Renderer>();
+        if (r != null)
+        {
+            var mpb = new MaterialPropertyBlock();
+            r.GetPropertyBlock(mpb);
+            mpb.SetColor(BaseColorId, new Color(1f, 0.16f, 0.08f, 0.65f));
+            mpb.SetColor(ColorId, new Color(1f, 0.16f, 0.08f, 0.65f));
+            r.SetPropertyBlock(mpb);
+        }
+
+        float t = 0f;
+        while (t < duration && disc != null)
+        {
+            t += Time.deltaTime;
+            float s = Mathf.Lerp(1.0f, diameter, Mathf.Clamp01(t / Mathf.Max(0.05f, duration)));
+            disc.transform.localScale = new Vector3(s, 0.02f, s);
+            yield return null;
+        }
+        if (disc != null) Destroy(disc);
+    }
+
+    private IEnumerator BossShockwaveReleaseRoutine(Vector3 centerPos, float maxRadius)
     {
         var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        ring.name = "BossShockwave";
+        ring.name = "BossShockwaveBurst";
         var col = ring.GetComponent<Collider>();
         if (col != null) Destroy(col);
-        ring.transform.position = new Vector3(transform.position.x, 0.08f, transform.position.z);
+        ring.transform.position = new Vector3(centerPos.x, 0.10f, centerPos.z);
         var r = ring.GetComponent<Renderer>();
         if (r != null)
         {
             var mpb = new MaterialPropertyBlock();
             r.GetPropertyBlock(mpb);
-            mpb.SetColor(BaseColorId, new Color(1f, 0.35f, 0.1f, 0.8f));
-            mpb.SetColor(ColorId, new Color(1f, 0.35f, 0.1f, 0.8f));
+            mpb.SetColor(BaseColorId, new Color(1f, 0.48f, 0.10f, 0.85f));
+            mpb.SetColor(ColorId, new Color(1f, 0.48f, 0.10f, 0.85f));
             r.SetPropertyBlock(mpb);
         }
 
         float elapsed = 0f;
-        while (elapsed < 0.35f)
+        while (elapsed < 0.30f && ring != null)
         {
             elapsed += Time.deltaTime;
-            float s = Mathf.Lerp(1.0f, 6.5f, elapsed / 0.35f);
-            if (ring != null) ring.transform.localScale = new Vector3(s, 0.03f, s);
+            float s = Mathf.Lerp(1.5f, maxRadius * 2f, elapsed / 0.30f);
+            ring.transform.localScale = new Vector3(s, 0.04f, s);
             yield return null;
         }
         if (ring != null) Destroy(ring);
@@ -807,7 +1090,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_Died(PlayerRef killer, int exp)
     {
-        Debug.Log($"[EnemyNPC] {name} died (killer {killer}, exp={exp}).");
+        Debug.Log($"[EnemyNPC] {name} (Lv.{ScaledLevel}) died (killer {killer}, exp={exp}).");
         if (animator != null) animator.SetTrigger(DieTrigger);
         onDeath?.Invoke();
 
@@ -888,7 +1171,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (sp.z <= 0f || sp.z > 45f) return;
 
         float y = Screen.height - sp.y;
-        float w = IsBoss ? 120f : 70f;
+        float w = IsBoss ? 130f : 74f;
         float frac = MaxHealth > 0 ? Mathf.Clamp01(CurrentHealth / (float)MaxHealth) : 0f;
 
         var prev = GUI.color;
@@ -897,7 +1180,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         GUI.color = IsBoss ? Color.Lerp(new Color(0.8f, 0.1f, 0.2f), new Color(1f, 0.75f, 0.15f), frac) : Color.Lerp(Color.red, Color.green, frac);
         GUI.DrawTexture(new Rect(sp.x - w * 0.5f, y, w * frac, IsBoss ? 9f : 6f), Texture2D.whiteTexture);
         GUI.color = prev;
-        string label = IsBoss ? $"[BOSS] Sovereign Golem ({CurrentHealth}/{MaxHealth})" : $"{name}  {State}";
+        string label = IsBoss ? $"[Lv.{ScaledLevel} BOSS] {CurrentHealth}/{MaxHealth}" : $"Lv.{ScaledLevel} {State}";
         GUI.Label(new Rect(sp.x - 95f, y - 20f, 190f, 20f), label);
     }
 
@@ -907,5 +1190,76 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         Gizmos.DrawWireSphere(transform.position, aggroRadius);
         Gizmos.color = new Color(1f, 0.8f, 0f, 0.6f);
         Gizmos.DrawWireSphere(transform.position, AttackRange);
+    }
+}
+
+/// <summary>
+/// Ranged Dark Energy Orb launched during the Boss's Pattern 3 Dark Volley attack.
+/// Moves across the arena, respects Safe Zones and dodges, and lets players block or evade!
+/// </summary>
+public sealed class BossDarkProjectile : MonoBehaviour
+{
+    private EnemyNPC _owner;
+    private Vector3 _dir;
+    private int _damage;
+    private float _spawnTime;
+    private const float Speed = 11.5f;
+    private const float Lifetime = 2.0f;
+    private const float HitRadius = 0.95f;
+
+    public static void Spawn(EnemyNPC owner, Vector3 origin, Vector3 direction, int damage)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        go.name = "BossDarkOrb";
+        var col = go.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        go.transform.position = origin;
+        go.transform.localScale = Vector3.one * 0.55f;
+
+        var r = go.GetComponent<Renderer>();
+        if (r != null)
+        {
+            var mpb = new MaterialPropertyBlock();
+            r.GetPropertyBlock(mpb);
+            mpb.SetColor(Shader.PropertyToID("_BaseColor"), new Color(0.85f, 0.12f, 0.95f, 1f));
+            mpb.SetColor(Shader.PropertyToID("_Color"), new Color(0.85f, 0.12f, 0.95f, 1f));
+            r.SetPropertyBlock(mpb);
+        }
+
+        var proj = go.AddComponent<BossDarkProjectile>();
+        proj._owner = owner;
+        direction.y = 0f;
+        proj._dir = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector3.forward;
+        proj._damage = Mathf.Max(1, damage);
+        proj._spawnTime = Time.time;
+    }
+
+    private void Update()
+    {
+        if (Time.time - _spawnTime >= Lifetime)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        transform.position += _dir * (Speed * Time.deltaTime);
+
+        if (SafeZone.IsPointInAnySafeZone(transform.position))
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        var local = PlayerCombat.Local;
+        if (local != null && local.IsSpawned && !local.IsDead && !SafeZone.IsPlayerInAnySafeZone(local))
+        {
+            Vector3 pPos = local.transform.position + Vector3.up * 1.0f;
+            if (Vector3.Distance(transform.position, pPos) <= HitRadius)
+            {
+                if (_owner != null && _owner.IsSpawned)
+                    local.RPC_ReceiveNpcDamage(_owner.Object.Id, _damage);
+                Destroy(gameObject);
+            }
+        }
     }
 }
