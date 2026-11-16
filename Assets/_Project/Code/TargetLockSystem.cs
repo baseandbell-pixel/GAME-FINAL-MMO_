@@ -185,7 +185,7 @@ public class TargetLockSystem : MonoBehaviour
 
     private PlayerFollowCamera GetCamera()
     {
-        if (_camera == null) _camera = FindFirstObjectByType<PlayerFollowCamera>();
+        if (_camera == null) _camera = FindAnyObjectByType<PlayerFollowCamera>();
         return _camera;
     }
 

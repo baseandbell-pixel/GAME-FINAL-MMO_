@@ -1,16 +1,17 @@
 using System;
+using System.Collections.Generic;
 using Fusion;
 using UnityEngine;
 
 /// <summary>
-/// Dev-only: populates a sandbox with enemies and loot. Runs on the Shared Mode MASTER CLIENT only, once, after the
-/// local player has spawned (which proves the runner/simulation is ready), and only if the world is still empty -
-/// so two clients joining the same session never double-spawn.
-/// The master becomes State Authority of what it spawns; if it leaves, Fusion hands the objects to another client.
+/// Dev-only: populates a sandbox with enemies and loot, and spawns a physical Tiered Reward Treasure Chest
+/// at the camp center once all enemies in the camp are defeated.
+/// Runs population on the Shared Mode MASTER CLIENT only, once, after the local player has spawned.
 /// </summary>
 public class SandboxWorldSpawner : MonoBehaviour
 {
     private const int ExpectedCampSize = 4;
+
     [Serializable]
     public class ItemSpawn
     {
@@ -25,9 +26,11 @@ public class SandboxWorldSpawner : MonoBehaviour
     [SerializeField] private int campId = 1;
     [SerializeField] private Transform[] enemyPoints;
 
-    [Header("Loot")]
+    [Header("Loot & Camp Clear Reward")]
     [SerializeField] private WorldItem itemPrefab;
     [SerializeField] private ItemSpawn[] items;
+    [Tooltip("When true, defeating all enemies in this camp spawns a physical Treasure Chest at the camp center.")]
+    [SerializeField] private bool spawnRewardChestOnCampClear = true;
 
     [Tooltip("Seconds to wait after the local player appears. Keep at zero for immediate solo sandbox population.")]
     [SerializeField] private float settleSeconds = 0f;
@@ -35,7 +38,14 @@ public class SandboxWorldSpawner : MonoBehaviour
     [Header("Sandbox collision test geometry")]
     [SerializeField] private bool createTestObstacles = true;
 
+    public LootChest SpawnedRewardChest => _spawnedChest;
+    public bool IsCampCleared => _chestSpawned;
+
+    private readonly List<EnemyNPC> _trackedCampEnemies = new List<EnemyNPC>(ExpectedCampSize);
+    private LootChest _spawnedChest;
     private bool _done;
+    private bool _campEverActive;
+    private bool _chestSpawned;
     private float _nextAttempt;
     private float _masterReadyAt = -1f;
 
@@ -46,12 +56,14 @@ public class SandboxWorldSpawner : MonoBehaviour
 
     private void Update()
     {
-        if (_done) return;
+        if (_done)
+        {
+            MonitorCampClear();
+            return;
+        }
+
         if (Time.unscaledTime < _nextAttempt) return;
 
-        // Fusion reports IsRunning before its scene registration completes in a direct sandbox
-        // launch. The locally spawned PlayerCombat is the reliable ready barrier; delay remains
-        // zero, so this does NOT wait for other players or a full lobby.
         var local = PlayerCombat.Local;
         if (local == null || !local.IsSpawned)
         {
@@ -64,7 +76,11 @@ public class SandboxWorldSpawner : MonoBehaviour
 
         if (!runner.IsSharedModeMasterClient)
         {
-            // Do not mark done: a master handoff must allow this peer to take responsibility.
+            // Non-master clients still observe camp clear once NPCs replicate
+            if (EnemyNPC.All.Count > 0)
+            {
+                _done = true;
+            }
             return;
         }
 
@@ -90,11 +106,69 @@ public class SandboxWorldSpawner : MonoBehaviour
         }
     }
 
+    private void MonitorCampClear()
+    {
+        if (!spawnRewardChestOnCampClear || _chestSpawned) return;
+
+        int livingInCamp = 0;
+        for (int i = 0; i < EnemyNPC.All.Count; i++)
+        {
+            EnemyNPC npc = EnemyNPC.All[i];
+            if (npc == null || !npc.IsSpawned) continue;
+            if (npc.CampId != campId && npc.CampId != 0) continue;
+
+            if (!_trackedCampEnemies.Contains(npc))
+                _trackedCampEnemies.Add(npc);
+
+            if (npc.IsAlive)
+            {
+                _campEverActive = true;
+                livingInCamp++;
+            }
+        }
+
+        if (!_campEverActive && _trackedCampEnemies.Count > 0)
+        {
+            _campEverActive = true;
+        }
+
+        if (_campEverActive && livingInCamp == 0)
+        {
+            _chestSpawned = true;
+            Vector3 center = GetCampCenter();
+            _spawnedChest = LootChest.SpawnAt(center, campId, itemPrefab);
+            Debug.Log($"[WorldSpawner] Camp {campId} CLEARED! Spawned Reward Treasure Chest at {center}.");
+        }
+    }
+
+    public Vector3 GetCampCenter()
+    {
+        if (enemyPoints != null && enemyPoints.Length > 0)
+        {
+            Vector3 sum = Vector3.zero;
+            int valid = 0;
+            for (int i = 0; i < enemyPoints.Length; i++)
+            {
+                if (enemyPoints[i] == null) continue;
+                sum += enemyPoints[i].position;
+                valid++;
+            }
+            if (valid > 0)
+            {
+                Vector3 avg = sum / valid;
+                avg.y = 0f;
+                return avg;
+            }
+        }
+        return new Vector3(20f, 0f, 8f);
+    }
+
     private bool Populate(NetworkRunner runner)
     {
         Debug.Log("[WorldSpawner] This client is the master - spawning enemies and loot.");
 
         int enemies = 0;
+        _trackedCampEnemies.Clear();
         if (enemyPrefab == null) Debug.LogWarning("[WorldSpawner] No enemyPrefab assigned.");
         else if (enemyPoints == null || enemyPoints.Length != ExpectedCampSize)
         {
@@ -116,10 +190,16 @@ public class SandboxWorldSpawner : MonoBehaviour
                     var enemy = o.GetComponent<EnemyNPC>();
                     if (enemy != null) enemy.CampId = campId;
                 });
-                if (npc != null) enemies++;
+                if (npc != null)
+                {
+                    enemies++;
+                    _trackedCampEnemies.Add(npc);
+                }
                 else Debug.LogWarning($"[WorldSpawner] Enemy spawn failed at {p.name}.");
             }
         }
+
+        if (enemies > 0) _campEverActive = true;
 
         int loot = 0;
         if (itemPrefab == null) Debug.LogWarning("[WorldSpawner] No itemPrefab assigned.");

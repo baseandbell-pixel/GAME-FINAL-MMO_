@@ -218,22 +218,22 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8be901e34b870ae4d91a9c33567568c0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::EnemyNPC
-  MaxHealth: 200
-  AttackDamage: 15
-  AttackCooldown: 2
-  AttackRange: 2.5
+  MaxHealth: 120
+  AttackDamage: 6
+  AttackCooldown: 2.2
+  AttackRange: 2.4
   aggroRadius: 10
   leashRadius: 25
   patrolRadius: 5
   idleWaitRange: {x: 1.5, y: 4}
-  patrolSpeed: 1.8
-  chaseSpeed: 4.5
-  returnSpeed: 6
+  patrolSpeed: 1.4
+  chaseSpeed: 2.8
+  returnSpeed: 3.8
   turnSpeed: 10
   despawnDelayAfterDeath: 4
-  maxDamagePerHit: 100
+  maxDamagePerHit: 120
   maxHitDistance: 6
-  minSecondsBetweenHitsPerPlayer: 0.2
+  minSecondsBetweenHitsPerPlayer: 0.18
   experienceReward: 50
   lootPrefab: {fileID: 6507998983499857821, guid: 1f3dda27c4c498b4fb91d3d916ec6506, type: 3}
   lootTable:
@@ -257,7 +257,7 @@ MonoBehaviour:
   onDeath:
     m_PersistentCalls:
       m_Calls: []
-  _CurrentHealth: 200
+  _CurrentHealth: 120
   _State: 0
   _TargetId:
     Raw: 0

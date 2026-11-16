@@ -8,6 +8,9 @@ public class PlayerCapsule : NetworkBehaviour
 {
     public Renderer bodyRenderer;
     public TMP_Text nameLabel;
+    [Header("Character visual")]
+    [Tooltip("Optional rigged model child (e.g. CharacterVisual). When set, the legacy capsule renderer stays hidden and the model is shown instead.")]
+    [SerializeField] private Transform characterVisual;
     [Header("Optional animation")]
     [SerializeField] private Animator animator;
     [SerializeField] private string moveXParameter = "MoveX";
@@ -19,10 +22,10 @@ public class PlayerCapsule : NetworkBehaviour
     public float acceleration = 40f;
     public float rotationSpeed = 12f;
 
-
     public bool detachNameLabel = true;
     public bool rotateTowardsMovement = true;
-
+    [Tooltip("When true and an action camera (MovementReference) is active, the character faces the camera yaw while moving so WASD drives full 8-directional strafing/locomotion.")]
+    public bool strafeInActionCamera = true;
 
     /// <summary>Which of the 4 avatars this player picked - drives the capsule colour.</summary>
     [Networked] public int AvatarIndex { get; set; }
@@ -43,12 +46,29 @@ public class PlayerCapsule : NetworkBehaviour
     /// <summary>Optional. When set (target lock), the capsule faces this point instead of its movement direction, so movement becomes strafing.</summary>
     public Transform FacingTarget { get; set; }
 
-    Rigidbody rb;
-    CapsuleCollider collider;
+    /// <summary>Scales walk/run speed (e.g. PlayerCombat slows the player while blocking). 1 = normal.</summary>
+    public float SpeedMultiplier { get; set; } = 1f;
 
+    /// <summary>The rigged model child, or null when the player is still a plain capsule.</summary>
+    public Transform CharacterVisual => characterVisual;
+
+    /// <summary>True while a dodge dash overrides normal movement.</summary>
+    public bool IsDashing => Time.time < _dashUntil;
+
+    /// <summary>Current networked stamina (mirrored from PlayerCombat).</summary>
+    public float CurrentStamina => _combat != null ? _combat.NetworkStamina : 100f;
+    public float MaxStamina => _combat != null ? _combat.MaxStamina : 100f;
+
+    Rigidbody rb;
+    PlayerCombat _combat;
+    PlayerAnimationDriver _animationDriver;
+    Vector3 _dashVelocity;
+    float _dashUntil;
+    CapsuleCollider collider;
 
     Vector2 moveInput;
     bool sprintHeld;
+    float _overrideMoveUntil;
 
     bool isOwner;
     MaterialPropertyBlock _mpb;
@@ -61,9 +81,15 @@ public class PlayerCapsule : NetworkBehaviour
     {
         rb = GetComponent<Rigidbody>();
         collider = GetComponent<CapsuleCollider>();
+        _combat = GetComponent<PlayerCombat>();
 
-        if (bodyRenderer == null) bodyRenderer = GetComponentInChildren<Renderer>();
-        if (animator == null) animator = GetComponentInChildren<Animator>();
+        // Legacy fallback only: with a character model the first child renderer could be the model or a sword.
+        if (bodyRenderer == null && characterVisual == null) bodyRenderer = GetComponentInChildren<Renderer>();
+        if (animator == null) animator = characterVisual != null ? characterVisual.GetComponentInChildren<Animator>() : GetComponentInChildren<Animator>();
+        _animationDriver = GetComponent<PlayerAnimationDriver>();
+
+        // With a model, the primitive capsule mesh is only a collider placeholder.
+        if (characterVisual != null && bodyRenderer != null) bodyRenderer.enabled = false;
 
         // A capsule that tips over is not what we want; rotation is done by script.
         rb.freezeRotation = true;
@@ -79,8 +105,6 @@ public class PlayerCapsule : NetworkBehaviour
         {
             Local = this;
 
-            // The profile travelled from the lobby inside GoogleAPI (DontDestroyOnLoad),
-            // so the values we publish here are the same ones the lobby card showed.
             int avatar = 0;
             string nick = "Player";
             if (GoogleAPI.instance != null)
@@ -113,10 +137,7 @@ public class PlayerCapsule : NetworkBehaviour
         DestroyDetachedLabel();
     }
 
-
     // ---------------------------------------------------------------- input
-    // These are the messages PlayerInput sends when its Behavior is "Send Messages".
-    // The action names come from InputSystem_Actions (Player map): Move, Jump, Sprint.
 
     public void OnMove(InputValue value)
     {
@@ -128,15 +149,21 @@ public class PlayerCapsule : NetworkBehaviour
         sprintHeld = value.isPressed;
     }
 
+    /// <summary>Sets movement and sprint input directly (used by Input messages or automated tests).</summary>
+    public void SetMoveInput(Vector2 move, bool sprint = false, float holdSeconds = 0.25f)
+    {
+        moveInput = Vector2.ClampMagnitude(move, 1f);
+        sprintHeld = sprint;
+        _overrideMoveUntil = holdSeconds > 0f ? Time.time + holdSeconds : 0f;
+    }
+
     /// <summary>True only for the copy this peer may drive. In Shared Mode this is the locally spawned object.</summary>
     public bool IsLocallyControlled => Object != null && (Object.HasInputAuthority || (Runner != null && Runner.GameMode == GameMode.Shared && Object.HasStateAuthority));
 
     private void Update()
     {
-        if (!isOwner || !Application.isFocused || GameplayInput.IsBlocked) return;
+        if (!isOwner || !Application.isFocused || GameplayInput.IsBlocked || Time.time < _overrideMoveUntil) return;
 
-        // PlayerInput messages remain supported, but direct Input System polling makes movement
-        // deterministic even when a spawned prefab's PlayerInput device pairing is not assigned.
         var keyboard = Keyboard.current;
         if (keyboard != null)
         {
@@ -152,61 +179,111 @@ public class PlayerCapsule : NetworkBehaviour
             moveInput = gamepad.leftStick.ReadValue();
     }
 
-
     // ------------------------------------------------------------- movement
 
     void FixedUpdate()
     {
         if (!isOwner) return;
 
-        var wanted = MovementLocked ? Vector3.zero : new Vector3(moveInput.x, 0f, moveInput.y);
-        if (MovementReference != null) wanted = Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f) * wanted;
-        if (wanted.sqrMagnitude > 1f) wanted.Normalize();
+        if (IsDashing)
+        {
+            Vector3 v = rb.linearVelocity;
+            rb.linearVelocity = new Vector3(_dashVelocity.x, v.y, _dashVelocity.z);
+            return;
+        }
 
-        float speed = moveSpeed * (sprintHeld ? 4f : 1f);
+        var wanted = MovementLocked ? Vector3.zero : DesiredMoveWorld();
+        bool isMoving = wanted.sqrMagnitude > 0.001f;
+
+        // Stamina gate for sprinting: sprinting requires available stamina and drains it over time.
+        bool canSprint = _combat == null || (_combat.CanSprint && !_combat.IsBlocking);
+        bool effectiveSprint = sprintHeld && isMoving && canSprint;
+        if (effectiveSprint && _combat != null)
+        {
+            effectiveSprint = _combat.ConsumeSprintStamina(Time.fixedDeltaTime);
+        }
+
+        float speed = moveSpeed * (effectiveSprint ? 4f : 1f) * Mathf.Max(0f, SpeedMultiplier);
         Vector3 wantedVelocity = wanted * speed;
         Vector3 velocity = rb.linearVelocity;
         Vector3 horizontal = new Vector3(velocity.x, 0f, velocity.z);
         horizontal = Vector3.MoveTowards(horizontal, wantedVelocity, acceleration * Time.fixedDeltaTime);
         rb.linearVelocity = new Vector3(horizontal.x, velocity.y, horizontal.z);
 
+        Quaternion targetRotation = rb.rotation;
         if (FacingTarget != null && !MovementLocked)
         {
             Vector3 toTarget = FacingTarget.position - rb.position;
             toTarget.y = 0f;
             if (toTarget.sqrMagnitude > 0.0001f)
-                rb.MoveRotation(Quaternion.Slerp(rb.rotation, Quaternion.LookRotation(toTarget, Vector3.up), rotationSpeed * Time.fixedDeltaTime));
+            {
+                targetRotation = Quaternion.LookRotation(toTarget, Vector3.up);
+                rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
+            }
+        }
+        else if (MovementReference != null && strafeInActionCamera && wanted.sqrMagnitude > 0.0001f)
+        {
+            targetRotation = Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f);
+            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
         }
         else if (rotateTowardsMovement && wanted.sqrMagnitude > 0.0001f)
         {
-            var look = Quaternion.LookRotation(wanted, Vector3.up);
-            rb.MoveRotation(Quaternion.Slerp(rb.rotation, look, rotationSpeed * Time.fixedDeltaTime));
+            targetRotation = Quaternion.LookRotation(wanted, Vector3.up);
+            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
         }
 
         // State Authority writes the replicated values; in Shared Mode this is always the peer
         // that owns this avatar. Proxies consume them in Render for synchronized locomotion.
         if (Object.HasStateAuthority)
         {
-            Vector3 local = Quaternion.Inverse(transform.rotation) * wanted;
-            NetworkMove = new Vector2(local.x, local.z);
-            NetworkSprinting = sprintHeld;
+            Vector3 refSpace = (MovementReference != null && strafeInActionCamera && FacingTarget == null)
+                ? Quaternion.Inverse(Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f)) * wanted
+                : Quaternion.Inverse(transform.rotation) * wanted;
+            NetworkMove = new Vector2(refSpace.x, refSpace.z);
+            NetworkSprinting = effectiveSprint;
         }
+    }
+
+    /// <summary>Owner only: the current WASD/stick direction in world space (camera-relative when a MovementReference is set), magnitude 0..1.</summary>
+    public Vector3 DesiredMoveWorld()
+    {
+        var wanted = new Vector3(moveInput.x, 0f, moveInput.y);
+        if (MovementReference != null) wanted = Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f) * wanted;
+        if (wanted.sqrMagnitude > 1f) wanted.Normalize();
+        return wanted;
+    }
+
+    /// <summary>Owner only: overrides horizontal velocity for <paramref name="duration"/> seconds (dodge roll).</summary>
+    public void StartDash(Vector3 worldDirection, float distance, float duration)
+    {
+        if (!isOwner || duration <= 0f) return;
+        worldDirection.y = 0f;
+        if (worldDirection.sqrMagnitude < 0.0001f) worldDirection = transform.forward;
+        _dashVelocity = worldDirection.normalized * (distance / duration);
+        _dashUntil = Time.time + duration;
+    }
+
+    /// <summary>Death hide/show. A rigged character stays visible (it plays its death animation); the legacy capsule is hidden.</summary>
+    public void SetBodyVisible(bool visible)
+    {
+        if (characterVisual != null) return;
+        if (bodyRenderer != null) bodyRenderer.enabled = visible;
     }
 
     public override void Render()
     {
         ApplyLook(force: false);
-        ApplyAnimator(NetworkMove, NetworkSprinting);
+        if (_animationDriver == null) ApplyAnimator(NetworkMove, NetworkSprinting);
     }
 
     private void ApplyAnimator(Vector2 move, bool sprint)
     {
         if (animator == null || animator.runtimeAnimatorController == null) return;
-        // Supports a 2D Freeform Directional blend tree: MoveX/MoveY cover all 8 directions.
         animator.SetFloat(moveXParameter, move.x, 0.08f, Time.deltaTime);
         animator.SetFloat(moveYParameter, move.y, 0.08f, Time.deltaTime);
         animator.SetBool(sprintParameter, sprint);
     }
+
     void SetUpNameLabel()
     {
         if (nameLabel == null) return;

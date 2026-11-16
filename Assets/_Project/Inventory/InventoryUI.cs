@@ -84,7 +84,7 @@ public class InventoryUI : MonoBehaviour
             int captured = i;
             btn.onClick.AddListener(() => Select(captured));
 
-            var label = MakeLabel(img.transform, "Label", "", 14, TextAnchor.MiddleCenter, 2f, 2f, SlotSize - 4f, SlotSize - 4f);
+            var label = MakeLabel(img.transform, "Label", "", 13, TextAnchor.MiddleCenter, 2f, 2f, SlotSize - 4f, SlotSize - 4f);
             _slotButtons[i] = btn;
             _slotImages[i] = img;
             _slotLabels[i] = label;
@@ -93,13 +93,13 @@ public class InventoryUI : MonoBehaviour
         // detail column
         var detailBg = MakeImage(_panel.transform, "DetailBg", new Color(0.1f, 0.11f, 0.15f, 1f));
         Place(detailBg.rectTransform, 530f, 60f, 240f, 380f);
-        _detail = MakeLabel(detailBg.transform, "Detail", "Select an item.", 16, TextAnchor.UpperLeft, 10f, 10f, 220f, 360f);
+        _detail = MakeLabel(detailBg.transform, "Detail", "Select an item.", 15, TextAnchor.UpperLeft, 10f, 10f, 220f, 360f);
 
         _useBtn = MakeButton(_panel.transform, "Use", 530f, 452f, 76f, 36f, () => { _inv.UseItem(_selected); });
         _equipBtn = MakeButton(_panel.transform, "Equip", 612f, 452f, 76f, 36f, () => { _inv.EquipItem(_selected); });
         _dropBtn = MakeButton(_panel.transform, "Drop", 694f, 452f, 76f, 36f, () => { _inv.DropItem(_selected); });
 
-        MakeLabel(_panel.transform, "Hint", "Click a slot to inspect it.   E = pick up   Middle Mouse / Q = lock on   M = map", 14, TextAnchor.LowerLeft, 20f, 500f, 700f, 28f);
+        MakeLabel(_panel.transform, "Hint", "Click a slot to inspect it.   E = interact / pick up   Middle Mouse / Q = lock on   M = map", 14, TextAnchor.LowerLeft, 20f, 500f, 700f, 28f);
 
         _panel.SetActive(false);
         _inv.Changed += Refresh;
@@ -108,7 +108,7 @@ public class InventoryUI : MonoBehaviour
 
     private static void EnsureEventSystem()
     {
-        if (EventSystem.current != null || FindFirstObjectByType<EventSystem>() != null) return;
+        if (EventSystem.current != null || FindAnyObjectByType<EventSystem>() != null) return;
 
         var es = new GameObject("EventSystem");
         es.AddComponent<EventSystem>();
@@ -180,7 +180,7 @@ public class InventoryUI : MonoBehaviour
             string qty = s.quantity > 1 ? "\nx" + s.quantity : "";
             _slotLabels[i].text = equipped + s.item.displayName + qty;
 
-            Color c = TypeColor(s.item.type);
+            Color c = Color.Lerp(TypeColor(s.item.type), ItemData.GetTierColor(s.item.tier), 0.38f);
             _slotImages[i].color = selected ? Color.Lerp(c, Color.white, 0.35f) : c;
         }
 
@@ -195,9 +195,11 @@ public class InventoryUI : MonoBehaviour
         }
 
         var item = sel.item;
-        _detail.text = item.displayName + "\n<" + item.type + ">\n\n" + item.description + "\n\n" +
+        _detail.text = item.displayName + "\n[" + item.tier + " " + item.type + "]\n\n" + item.description + "\n\n" +
                        "Qty: " + sel.quantity + "/" + item.MaxStackSize +
-                       (item.healAmount > 0 ? "\nHeals " + item.healAmount : "") +
+                       (item.healAmount > 0 ? "\nHeals +" + item.healAmount + " HP" : "") +
+                       (item.staminaRestoreAmount > 0 ? "\nRestores +" + item.staminaRestoreAmount + " Stamina" : "") +
+                       (item.attackBuffBonus > 0 ? "\nAtk Buff +" + item.attackBuffBonus + " (" + item.attackBuffDuration + "s)" : "") +
                        (item.damageBonus != 0 ? "\nDamage +" + item.damageBonus : "");
         _useBtn.interactable = item.IsUsable;
         _equipBtn.interactable = item.IsEquippable;

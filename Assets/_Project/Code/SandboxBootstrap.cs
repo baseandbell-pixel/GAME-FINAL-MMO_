@@ -44,7 +44,7 @@ public class SandboxBootstrap : MonoBehaviour
         // Standalone path only: hold the spawner back until the session is fully ready.
         if (!HasRunningRunner())
         {
-            _controller = FindFirstObjectByType<GameSceneController>();
+            _controller = FindAnyObjectByType<GameSceneController>();
             if (_controller != null) _controller.enabled = false;
         }
     }
@@ -137,7 +137,7 @@ public class SandboxBootstrap : MonoBehaviour
 
     private void ReleaseController()
     {
-        if (_controller == null) _controller = FindFirstObjectByType<GameSceneController>();
+        if (_controller == null) _controller = FindAnyObjectByType<GameSceneController>();
         if (_controller != null) _controller.enabled = true;
     }
 

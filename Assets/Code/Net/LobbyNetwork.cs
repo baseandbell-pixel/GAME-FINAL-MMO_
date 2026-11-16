@@ -159,8 +159,16 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
             return;
         }
 
+        string targetScene = gameSceneName.Trim();
+        // Support common spelling variations between Dev_Kulpat and Dev_Kulphat
+        if (targetScene.Equals("Dev_Kulphat", StringComparison.OrdinalIgnoreCase))
+        {
+            Debug.Log($"[LobbyNetwork] Resolving scene alias '{targetScene}' -> 'Dev_Kulpat'");
+            targetScene = "Dev_Kulpat";
+        }
+
         SetState(State.Starting, "Loading the map...");
-        Runner.LoadScene(gameSceneName, LoadSceneMode.Single);
+        Runner.LoadScene(targetScene, LoadSceneMode.Single);
     }
 
     void SpawnLocalPlayer()

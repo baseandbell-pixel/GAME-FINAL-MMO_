@@ -29,6 +29,7 @@ public class InventoryManager : MonoBehaviour
     public int Experience { get; private set; }
     public string EquippedWeaponId { get; private set; }
     public string EquippedEquipmentId { get; private set; }
+    public WorldItem WorldItemPrefab => worldItemPrefab;
 
     /// <summary>Raised whenever slots, equipment or experience change.</summary>
     public event Action Changed;
@@ -111,7 +112,7 @@ public class InventoryManager : MonoBehaviour
 
         int added = quantity - remaining;
         if (added > 0)
-            Debug.Log($"[Inventory] +{added}x {item.displayName}" + (remaining > 0 ? $" ({remaining} did not fit)" : ""));
+            Debug.Log($"[Inventory] +{added}x {item.displayName} [{item.tier}]" + (remaining > 0 ? $" ({remaining} did not fit)" : ""));
         else
             Debug.LogWarning($"[Inventory] Inventory full: could not add {item.displayName}.");
 
@@ -171,15 +172,36 @@ public class InventoryManager : MonoBehaviour
             return false;
         }
 
+        bool appliedAny = false;
+
         if (item.healAmount > 0)
         {
-            if (_combat.NetworkHealth >= _combat.MaxHealth)
+            if (_combat.NetworkHealth < _combat.MaxHealth)
+            {
+                _combat.HealSelf(item.healAmount);
+                appliedAny = true;
+            }
+            else if (item.staminaRestoreAmount <= 0 && item.attackBuffBonus <= 0)
             {
                 Debug.LogWarning("[Inventory] Health is already full - potion not consumed.");
                 return false;
             }
-            _combat.HealSelf(item.healAmount);
         }
+
+        if (item.staminaRestoreAmount > 0)
+        {
+            _combat.RestoreStamina(item.staminaRestoreAmount);
+            appliedAny = true;
+        }
+
+        if (item.attackBuffBonus > 0)
+        {
+            float duration = item.attackBuffDuration > 0f ? item.attackBuffDuration : 30f;
+            _combat.ApplyAttackBuff(item.attackBuffBonus, duration);
+            appliedAny = true;
+        }
+
+        if (!appliedAny) return false;
 
         Debug.Log($"[Inventory] Used {item.displayName}.");
         RemoveItem(item, 1);

@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using Fusion;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -26,30 +27,20 @@ public class LootEntry
 
 /// <summary>
 /// Hostile NPC for Photon Fusion SHARED MODE.
-///
-/// AUTHORITY: whoever spawned the NPC is its State Authority (SA) and is the ONLY peer that runs the AI
-/// (FixedUpdateNetwork) and writes its networked state. If that peer leaves, Fusion hands the object to
-/// another client and that client simply continues: everything the AI needs lives in [Networked] data
-/// (health, state, target, home position). Authority is deliberately NOT moved when a player aggroes the
-/// NPC (that would ping-pong ownership); instead every other peer talks to the SA through RPCs.
-///
-/// DAMAGE IN : RPC_TakeDamage   (any peer -> SA), validated against the attacker's identity, range and rate.
-/// DAMAGE OUT: PlayerCombat.RPC_ReceiveNpcDamage (SA -> victim's SA), validated by the victim.
-///
-/// MOVEMENT: straight-line steering on a flat plane (no NavMesh). Fine for sandbox arenas; swap Move()
-/// for a NavMeshAgent if you bake a NavMesh.
+/// Includes rebalanced combat stats, obstacle-avoidance steering + depenetration (preventing walking through walls/pillars),
+/// and world-space floating damage / combo critical hit popups.
 /// </summary>
 [RequireComponent(typeof(Collider))]
 public class EnemyNPC : NetworkBehaviour, ILockTarget
 {
     public static readonly List<EnemyNPC> All = new List<EnemyNPC>();
 
-    // ---- stats (spec) ----
+    // ---- stats (rebalanced for 4-enemy camp encounters) ----
     [Header("Combat stats")]
-    public int MaxHealth = 200;
-    public int AttackDamage = 15;
-    public float AttackCooldown = 2.0f;
-    public float AttackRange = 2.5f;
+    public int MaxHealth = 120;
+    public int AttackDamage = 6;
+    public float AttackCooldown = 2.2f;
+    public float AttackRange = 2.4f;
 
     [Header("AI")]
     [Min(1f)] [SerializeField] private float aggroRadius = 10f;
@@ -57,16 +48,21 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     [Min(2f)] [SerializeField] private float leashRadius = 25f;
     [SerializeField] private float patrolRadius = 5f;
     [SerializeField] private Vector2 idleWaitRange = new Vector2(1.5f, 4f);
-    [SerializeField] private float patrolSpeed = 1.8f;
-    [SerializeField] private float chaseSpeed = 4.5f;
-    [SerializeField] private float returnSpeed = 6f;
+    [SerializeField] private float patrolSpeed = 1.4f;
+    [SerializeField] private float chaseSpeed = 2.8f;
+    [SerializeField] private float returnSpeed = 3.8f;
     [SerializeField] private float turnSpeed = 10f;
     [Min(0f)] [SerializeField] private float despawnDelayAfterDeath = 4f;
 
+    [Header("Obstacle navigation")]
+    [SerializeField] private float obstacleCheckDistance = 2.4f;
+    [SerializeField] private float obstacleProbeRadius = 0.55f;
+    [SerializeField] private float allySeparationRadius = 1.35f;
+
     [Header("Damage validation (authority side)")]
-    [SerializeField] private int maxDamagePerHit = 100;
+    [SerializeField] private int maxDamagePerHit = 120;
     [SerializeField] private float maxHitDistance = 6f;
-    [SerializeField] private float minSecondsBetweenHitsPerPlayer = 0.2f;
+    [SerializeField] private float minSecondsBetweenHitsPerPlayer = 0.18f;
 
     [Header("Rewards")]
     [SerializeField] private int experienceReward = 50;
@@ -81,7 +77,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     // ---- networked state ----
     [Networked, OnChangedRender(nameof(OnHealthChanged))]
-    public int CurrentHealth { get; set; } = 200;
+    public int CurrentHealth { get; set; } = 120;
 
     [Networked, OnChangedRender(nameof(OnStateChanged))]
     public NpcState State { get; set; }
@@ -93,9 +89,11 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     // ---- public API ----
     public bool IsSpawned { get; private set; }
-    public bool IsAlive => IsSpawned && State != NpcState.Dead && CurrentHealth > 0;
+    public bool IsAlive => IsSpawned && Object != null && Object.IsValid && State != NpcState.Dead && CurrentHealth > 0;
     public Collider BodyCollider { get; private set; }
     public float AggroRadius => aggroRadius;
+    public float ChaseSpeed => chaseSpeed;
+    public float PatrolSpeed => patrolSpeed;
 
     // ILockTarget
     public Transform LockPoint => _lockPoint != null ? _lockPoint : transform;
@@ -116,6 +114,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private bool _hasPatrolPoint;
     private Vector3 _patrolPoint;
     private bool _flashing;
+    private int _avoidSign;
+    private float _avoidSignUntil;
+    private static readonly Collider[] s_overlapBuffer = new Collider[24];
+    private static readonly RaycastHit[] s_castBuffer = new RaycastHit[16];
     private readonly Dictionary<PlayerRef, float> _lastDamageTime = new Dictionary<PlayerRef, float>();
 
     // ------------------------------------------------------------------ lifecycle
@@ -144,7 +146,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             HomePosition = transform.position;
             State = NpcState.Idle;
             TargetId = default;
-            Debug.Log($"[EnemyNPC] {name} spawned with authority. HP={CurrentHealth}/{MaxHealth}, home={HomePosition}.");
+            Debug.Log($"[EnemyNPC] {name} spawned with authority. HP={CurrentHealth}/{MaxHealth}, dmg={AttackDamage}, chaseSpeed={chaseSpeed}, home={HomePosition}.");
         }
         else
         {
@@ -176,7 +178,14 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             case NpcState.Chasing: TickChasing(dt); break;
             case NpcState.Attacking: TickAttacking(dt); break;
             case NpcState.Returning: TickReturning(dt); break;
-            case NpcState.Dead: TickDead(); break;
+            case NpcState.Dead: TickDead(); return;
+        }
+
+        if (IsSpawned && Object != null && Object.IsValid && State != NpcState.Dead)
+        {
+            Vector3 pos = transform.position;
+            if (ResolveObstaclePenetration(ref pos))
+                transform.position = pos;
         }
     }
 
@@ -200,7 +209,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
         if (!_hasPatrolPoint) { ChangeState(NpcState.Idle, "no patrol point"); return; }
 
-        if (MoveTowards(_patrolPoint, patrolSpeed, dt) <= 0.3f)
+        if (MoveTowards(_patrolPoint, patrolSpeed, dt) <= 0.35f)
         {
             _hasPatrolPoint = false;
             _stateTimer = UnityEngine.Random.Range(idleWaitRange.x, idleWaitRange.y);
@@ -216,7 +225,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (PlanarDistance(transform.position, HomePosition) > leashRadius) { BeginReturn("leash radius exceeded"); return; }
 
         float dist = PlanarDistance(transform.position, target.transform.position);
-        if (dist <= AttackRange)
+        if (dist <= AttackRange && HasClearMeleeLine(target.transform.position))
         {
             ChangeState(NpcState.Attacking, $"in range ({dist:0.0}m)");
             return;
@@ -230,7 +239,11 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (target == null || target.IsDead) { BeginReturn(target == null ? "target lost" : "target died"); return; }
 
         float dist = PlanarDistance(transform.position, target.transform.position);
-        if (dist > AttackRange * 1.25f) { ChangeState(NpcState.Chasing, "target moved out of range"); return; }
+        if (dist > AttackRange * 1.25f || !HasClearMeleeLine(target.transform.position))
+        {
+            ChangeState(NpcState.Chasing, "target moved out of range or behind obstacle");
+            return;
+        }
 
         FaceTowards(target.transform.position, dt);
 
@@ -245,7 +258,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void TickReturning(float dt)
     {
-        if (MoveTowards(HomePosition, returnSpeed, dt) <= 0.3f)
+        if (MoveTowards(HomePosition, returnSpeed, dt) <= 0.35f)
         {
             CurrentHealth = MaxHealth;
             TargetId = default;
@@ -283,11 +296,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         return true;
     }
 
-    /// <summary>
-    /// Alerts every member of this spawned camp. Each member receives an RPC addressed to
-    /// its own State Authority, so the behaviour remains correct after Shared Mode authority
-    /// hand-off instead of assuming all NPCs are owned by the original master client.
-    /// </summary>
     private void BroadcastCampAggro(PlayerCombat target)
     {
         if (target == null || !target.IsSpawned || CampId <= 0) return;
@@ -303,7 +311,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         Debug.Log($"[EnemyNPC] {name} alerted {alerted} ally/allies in camp {CampId} against {target.name}.");
     }
 
-    /// <summary>Routes a camp alert to this NPC's State Authority.</summary>
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_JoinCampAggro(NetworkId targetId)
     {
@@ -363,9 +370,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         State = next;
     }
 
-    // ------------------------------------------------------------------ steering
+    // ------------------------------------------------------------------ obstacle-aware steering & collision
 
-    /// <summary>Moves on the XZ plane; returns the remaining planar distance.</summary>
+    /// <summary>Moves on the XZ plane while steering around static obstacles and resolving collisions.</summary>
     private float MoveTowards(Vector3 destination, float speed, float dt)
     {
         Vector3 pos = transform.position;
@@ -374,11 +381,180 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         float dist = delta.magnitude;
         if (dist < 0.0001f) return 0f;
 
-        Vector3 dir = delta / dist;
+        Vector3 desiredDir = delta / dist;
+        Vector3 steeredDir = ComputeObstacleAvoidanceDir(pos, desiredDir, Mathf.Min(dist, obstacleCheckDistance));
+
+        // Soft separation from fellow camp enemies so they fan out instead of stacking
+        Vector3 separation = ComputeAllySeparation(pos);
+        Vector3 finalDir = steeredDir + separation * 0.55f;
+        finalDir.y = 0f;
+        if (finalDir.sqrMagnitude > 0.0001f)
+            finalDir.Normalize();
+        else
+            finalDir = steeredDir;
+
         float step = Mathf.Min(speed * dt, dist);
-        transform.position = pos + dir * step;
-        FaceDirection(dir, dt);
-        return dist - step;
+        Vector3 nextPos = pos + finalDir * step;
+
+        // Hard collision resolution against obstacles so enemies never clip or walk through walls/pillars
+        ResolveObstaclePenetration(ref nextPos);
+        nextPos.y = pos.y;
+
+        transform.position = nextPos;
+        FaceDirection(finalDir, dt);
+        return PlanarDistance(nextPos, destination);
+    }
+
+    private Vector3 ComputeObstacleAvoidanceDir(Vector3 pos, Vector3 desiredDir, float checkDist)
+    {
+        if (!ProbeObstacle(pos, desiredDir, checkDist, out RaycastHit directHit))
+        {
+            return desiredDir;
+        }
+
+        // Choose a consistent flank side around the obstacle
+        if (Time.time > _avoidSignUntil || _avoidSign == 0)
+        {
+            Vector3 tangentRight = new Vector3(desiredDir.z, 0f, -desiredDir.x);
+            float dot = Vector3.Dot(directHit.normal, tangentRight);
+            _avoidSign = dot >= 0f ? 1 : -1;
+            _avoidSignUntil = Time.time + 1.15f;
+        }
+
+        float[] angles = { 30f, 50f, 70f, 90f, 115f, 140f };
+        int[] signs = { _avoidSign, -_avoidSign };
+
+        Vector3 bestDir = Vector3.ProjectOnPlane(desiredDir, directHit.normal);
+        bestDir.y = 0f;
+        float bestClearDist = -1f;
+
+        for (int s = 0; s < signs.Length; s++)
+        {
+            int sign = signs[s];
+            for (int a = 0; a < angles.Length; a++)
+            {
+                Vector3 candidate = Quaternion.Euler(0f, angles[a] * sign, 0f) * desiredDir;
+                candidate.y = 0f;
+                candidate.Normalize();
+
+                if (!ProbeObstacle(pos, candidate, checkDist, out RaycastHit hit))
+                {
+                    _avoidSign = sign;
+                    _avoidSignUntil = Time.time + 0.9f;
+                    return candidate;
+                }
+
+                if (hit.distance > bestClearDist)
+                {
+                    bestClearDist = hit.distance;
+                    bestDir = candidate;
+                }
+            }
+        }
+
+        if (bestDir.sqrMagnitude > 0.0001f)
+            return bestDir.normalized;
+
+        return desiredDir;
+    }
+
+    private bool ProbeObstacle(Vector3 pos, Vector3 dir, float distance, out RaycastHit closestObstacleHit)
+    {
+        closestObstacleHit = default;
+        Vector3 origin = new Vector3(pos.x, 0.9f, pos.z);
+        int count = Physics.SphereCastNonAlloc(origin, obstacleProbeRadius, dir, s_castBuffer, distance, ~0, QueryTriggerInteraction.Ignore);
+
+        float bestDist = float.MaxValue;
+        bool found = false;
+        for (int i = 0; i < count; i++)
+        {
+            RaycastHit h = s_castBuffer[i];
+            if (!IsSolidObstacle(h.collider)) continue;
+            if (h.distance < bestDist)
+            {
+                bestDist = h.distance;
+                closestObstacleHit = h;
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    private bool HasClearMeleeLine(Vector3 targetPos)
+    {
+        Vector3 origin = new Vector3(transform.position.x, 1.0f, transform.position.z);
+        Vector3 end = new Vector3(targetPos.x, 1.0f, targetPos.z);
+        Vector3 delta = end - origin;
+        float dist = delta.magnitude;
+        if (dist < 0.05f) return true;
+
+        int count = Physics.RaycastNonAlloc(origin, delta / dist, s_castBuffer, dist, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+        {
+            if (IsSolidObstacle(s_castBuffer[i].collider))
+                return false;
+        }
+        return true;
+    }
+
+    private Vector3 ComputeAllySeparation(Vector3 pos)
+    {
+        Vector3 push = Vector3.zero;
+        for (int i = 0; i < All.Count; i++)
+        {
+            EnemyNPC other = All[i];
+            if (other == null || other == this || !other.IsAlive) continue;
+            Vector3 diff = pos - other.transform.position;
+            diff.y = 0f;
+            float d = diff.magnitude;
+            if (d > 0.001f && d < allySeparationRadius)
+            {
+                push += (diff / d) * ((allySeparationRadius - d) / allySeparationRadius);
+            }
+        }
+        return push;
+    }
+
+    private bool ResolveObstaclePenetration(ref Vector3 candidatePos)
+    {
+        if (BodyCollider == null) return false;
+
+        Vector3 checkCenter = new Vector3(candidatePos.x, 1.0f, candidatePos.z);
+        int count = Physics.OverlapSphereNonAlloc(checkCenter, 1.2f, s_overlapBuffer, ~0, QueryTriggerInteraction.Ignore);
+        bool pushed = false;
+
+        for (int i = 0; i < count; i++)
+        {
+            Collider col = s_overlapBuffer[i];
+            if (!IsSolidObstacle(col)) continue;
+
+            if (Physics.ComputePenetration(
+                BodyCollider, candidatePos, transform.rotation,
+                col, col.transform.position, col.transform.rotation,
+                out Vector3 penDir, out float penDist))
+            {
+                penDir.y = 0f;
+                if (penDir.sqrMagnitude > 0.0001f)
+                {
+                    penDir.Normalize();
+                    candidatePos += penDir * (penDist + 0.02f);
+                    pushed = true;
+                }
+            }
+        }
+        return pushed;
+    }
+
+    private bool IsSolidObstacle(Collider col)
+    {
+        if (col == null || col.isTrigger || col == BodyCollider) return false;
+        if (col.GetComponentInParent<EnemyNPC>() != null) return false;
+        if (col.GetComponentInParent<PlayerCombat>() != null) return false;
+
+        // Ignore flat floor/ground colliders whose top surface is at or below ankle height
+        Bounds b = col.bounds;
+        if (b.max.y <= 0.25f) return false;
+        return true;
     }
 
     private void FaceTowards(Vector3 worldPoint, float dt)
@@ -401,9 +577,21 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     // ------------------------------------------------------------------ damage in
 
-    /// <summary>Any peer -> State Authority. The attacker identity comes from Fusion (RpcInfo), never from a parameter.</summary>
+    /// <summary>Backward-compatible damage RPC (non-crit).</summary>
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_TakeDamage(int damage, RpcInfo info = default)
+    {
+        ApplyIncomingDamage(damage, isCrit: false, comboStep: 1, info);
+    }
+
+    /// <summary>Damage RPC carrying Combo &amp; Critical Hit flag for synced floating combat text.</summary>
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_TakeDamageWithCrit(int damage, NetworkBool isCrit, int comboStep, RpcInfo info = default)
+    {
+        ApplyIncomingDamage(damage, isCrit, comboStep, info);
+    }
+
+    private void ApplyIncomingDamage(int damage, bool isCrit, int comboStep, RpcInfo info)
     {
         if (!IsSpawned || !Object.HasStateAuthority) return;
         if (!IsAlive) return;
@@ -436,9 +624,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
         int before = CurrentHealth;
         CurrentHealth = Mathf.Max(0, before - applied);
-        Debug.Log($"[EnemyNPC] {name} takes {applied} from {attacker.name} ({info.Source}): {before} -> {CurrentHealth}/{MaxHealth}.");
+        Debug.Log($"[EnemyNPC] {name} takes {applied}{(isCrit ? " (CRIT!)" : "")} from {attacker.name} ({info.Source}): {before} -> {CurrentHealth}/{MaxHealth}.");
 
-        RPC_HitFeedback(applied, info.Source);
+        RPC_HitFeedback(applied, isCrit, comboStep, info.Source);
 
         if (CurrentHealth <= 0)
         {
@@ -446,7 +634,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             return;
         }
 
-        // Hostility: retaliate against whoever hit us (unless we are in the middle of resetting).
         if (State == NpcState.Returning)
         {
             Debug.Log($"[EnemyNPC] {name} is returning home and ignores the hit.");
@@ -457,7 +644,11 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             SetTarget(attacker);
             Debug.Log($"[EnemyNPC] {name} aggro: attacked by {attacker.name}.");
         }
-        if (State == NpcState.Idle || State == NpcState.Patrol) ChangeState(NpcState.Chasing, "attacked");
+        if (State == NpcState.Idle || State == NpcState.Patrol)
+        {
+            ChangeState(NpcState.Chasing, "attacked");
+            BroadcastCampAggro(attacker);
+        }
     }
 
     private PlayerCombat FindPlayerBySource(PlayerRef source)
@@ -505,12 +696,17 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     // ------------------------------------------------------------------ feedback (all peers)
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_HitFeedback(int damage, PlayerRef attacker)
+    public void RPC_HitFeedback(int damage, NetworkBool isCrit, int comboStep, PlayerRef attacker)
     {
         if (animator != null) animator.SetTrigger(HitTrigger);
         onHit?.Invoke();
         if (!_flashing && gameObject.activeInHierarchy) StartCoroutine(FlashRoutine());
-        CombatHud.NotifyEnemyDamaged(this, damage, attacker);
+
+        // Spawn 3D World-Space Floating Damage / CRIT! Number on every peer
+        FloatingDamagePopup.Spawn(LockPoint != null ? LockPoint.position : transform.position + Vector3.up * 1.4f, damage, isCrit, comboStep);
+
+        // Notify local HUD
+        CombatHud.NotifyEnemyDamaged(this, damage, attacker, isCrit, comboStep);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
@@ -526,7 +722,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (animator != null) animator.SetTrigger(DieTrigger);
         onDeath?.Invoke();
 
-        // Only the killer's peer receives the experience.
         if (Runner != null && Runner.LocalPlayer == killer)
         {
             if (InventoryManager.Local != null) InventoryManager.Local.AddExperience(exp);

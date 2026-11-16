@@ -2,73 +2,78 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using Fusion;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 
 /// <summary>
-/// Networked melee combat for the player capsule (Photon Fusion 2, SHARED MODE).
-///
-/// ── Authority model ────────────────────────────────────────────────────────────────
-/// Shared Mode has no dedicated server: every client is State Authority (SA) of the
-/// objects it spawned, and Input Authority (IA) of that same object is the same peer.
-/// Therefore the only party that can be trusted to change a player's health is that
-/// player's own SA. This component is VICTIM-AUTHORITATIVE:
-///
-///   1. Owner client polls the mouse (IA only) -> cooldown + buffer -> RPC_RequestAttack (IA -> SA)
-///   2. SA validates (alive, cooldown) -> RPC_BroadcastAttack (SA -> All): animation, VFX,
-///      and the timed opening of the weapon trigger on EVERY peer.
-///   3. On the victim's peer the attacker's (proxy) weapon trigger overlaps the victim's
-///      body. OnTriggerEnter only acts when THIS object has State Authority, i.e. a peer
-///      only ever resolves hits against its own player.
-///   4. The victim derives the damage from its OWN copy of the attacker's config (a client
-///      can never send an arbitrary number) and applies it through RPC_TakeDamage (SA -> SA).
-///   5. [Networked] NetworkHealth replicates to everybody; OnChangedRender drives UI/death.
-///
-/// SECURITY NOTE: with no trusted server, a modified client can still decline to take
-/// damage. The checks here stop accidental desyncs, spam and trivially forged input; they
-/// are not a substitute for Host/Server mode or a Photon plugin if cheating matters.
-/// ──────────────────────────────────────────────────────────────────────────────────
+/// Networked melee combat, stamina, block VFX, and combo critical hit system for the player
+/// (Photon Fusion 2, SHARED MODE).
 /// </summary>
 [DisallowMultipleComponent]
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerCombat : NetworkBehaviour
 {
     private const int DefaultMaxHealth = 100;
+    private const float DefaultMaxStamina = 100f;
 
     // ------------------------------------------------------------------ inspector
 
     [Header("References")]
-    [Tooltip("Trigger collider on a CHILD object, enabled only during the active attack window.")]
+    [Tooltip("Trigger collider on the weapon blade (Sword_Hand/WeaponHitbox), enabled only during the active attack window.")]
     [SerializeField] private Collider weaponHitbox;
     [Tooltip("Optional. Receives the attack trigger on every peer.")]
     [SerializeField] private Animator animator;
     [SerializeField] private string attackTriggerName = "Attack";
     [Tooltip("Optional. Played on every peer when an attack starts.")]
     [SerializeField] private ParticleSystem attackVfx;
-    [Tooltip("Optional. Renderer shown only while the hit window is open (dev feedback).")]
+    [Tooltip("Deprecated debug renderer. Always kept hidden during Play Mode so the swing hitbox is invisible.")]
     [SerializeField] private Renderer hitboxDebugVisual;
 
-    [Header("Attack")]
+    [Header("Attack & Combo Criticals")]
     [Min(0.05f)] [SerializeField] private float attackCooldown = 0.6f;
     [Tooltip("A click made this early during the cooldown is remembered and fired when it ends.")]
     [Min(0f)] [SerializeField] private float inputBufferSeconds = 0.2f;
     [Tooltip("The authority accepts requests this much earlier than the cooldown (jitter tolerance).")]
     [Min(0f)] [SerializeField] private float cooldownTolerance = 0.1f;
     [Min(1)] [SerializeField] private int attackDamage = 20;
+    [Tooltip("Time window after a swing to chain into the next combo step (1 -> 2 -> 3).")]
+    [Min(0.2f)] [SerializeField] private float comboResetSeconds = 1.45f;
+    [Tooltip("Damage multiplier applied on chained combo step 2 (Critical Hit).")]
+    [Min(1f)] [SerializeField] private float comboStep2CritMultiplier = 1.5f;
+    [Tooltip("Damage multiplier applied on chained combo finisher step 3 (Critical Hit).")]
+    [Min(1f)] [SerializeField] private float comboStep3CritMultiplier = 2.0f;
+
+    [Header("Block & Dodge")]
+    [Range(0.1f, 1f)] [SerializeField] private float blockMoveSpeedMultiplier = 0.45f;
+    [Range(0f, 0.95f)] [SerializeField] private float blockDamageReduction = 0.7f;
+    [Min(0.1f)] [SerializeField] private float dodgeCooldown = 0.75f;
+    [Min(0.1f)] [SerializeField] private float dodgeDuration = 0.45f;
+    [Min(0.5f)] [SerializeField] private float dodgeDistance = 4.2f;
+
+    [Header("Stamina")]
+    [Min(10f)] [SerializeField] private float maxStamina = DefaultMaxStamina;
+    [Min(1f)] [SerializeField] private float sprintStaminaPerSecond = 15f;
+    [Min(1f)] [SerializeField] private float attackStaminaCost = 15f;
+    [Min(1f)] [SerializeField] private float dodgeStaminaCost = 25f;
+    [Min(1f)] [SerializeField] private float blockHitStaminaCost = 18f;
+    [Min(1f)] [SerializeField] private float staminaRegenRate = 22f;
+    [Min(0f)] [SerializeField] private float staminaRegenDelay = 1.1f;
 
     [Header("Hit window")]
     [Tooltip("ON: Animation Events call AnimEvent_OpenHitWindow / AnimEvent_CloseHitWindow. OFF: timed coroutine.")]
     [SerializeField] private bool useAnimationEvents;
-    [Min(0f)] [SerializeField] private float hitWindowDelay = 0.1f;
-    [Min(0.01f)] [SerializeField] private float hitWindowDuration = 0.25f;
+    [Min(0f)] [SerializeField] private float hitWindowDelay = 0.08f;
+    [Min(0.01f)] [SerializeField] private float hitWindowDuration = 0.30f;
     [Tooltip("Hard cap: the window is force-closed after this long, even if an animation event never arrives.")]
     [Min(0.05f)] [SerializeField] private float hitWindowSafetyTimeout = 1f;
 
     [Header("Validation (applied by the victim's State Authority)")]
     [Tooltip("Upper bound for any single damage application.")]
-    [Min(1)] [SerializeField] private int maxDamagePerHit = 50;
+    [Min(1)] [SerializeField] private int maxDamagePerHit = 120;
     [Tooltip("Attacker and victim must be at most this far apart (generous: remote proxies lag).")]
     [Min(0.5f)] [SerializeField] private float maxHitDistance = 5f;
 
@@ -89,17 +94,41 @@ public class PlayerCombat : NetworkBehaviour
     [Networked, OnChangedRender(nameof(OnHealthChanged))]
     public int NetworkHealth { get; set; } = DefaultMaxHealth;
 
+    /// <summary>Replicated player stamina (0..MaxStamina).</summary>
+    [Networked, OnChangedRender(nameof(OnStaminaChanged))]
+    public float NetworkStamina { get; set; } = DefaultMaxStamina;
+
+    /// <summary>Replicated blocking stance (Right Mouse Button or E / LeftAlt).</summary>
+    [Networked, OnChangedRender(nameof(OnBlockingChanged))]
+    public NetworkBool IsBlocking { get; set; }
+
+    /// <summary>Replicated current combo step (1..3).</summary>
+    [Networked]
+    public int ComboStep { get; set; } = 1;
+
     // ------------------------------------------------------------------ public API
 
     public int MaxHealth => maxHealth;
+    public float MaxStamina => maxStamina;
+    public float CurrentStamina => _isSpawned ? NetworkStamina : maxStamina;
+    public bool CanSprint => !IsDead && CurrentStamina > 0.5f && !_sprintExhaustedCooldown;
+    public bool CanAttack => !IsDead && CurrentStamina > 0f;
+    public bool CanDodge => !IsDead && CurrentStamina > 0f;
     public bool IsDead => _isSpawned && NetworkHealth <= 0;
     public bool IsHitWindowOpen { get; private set; }
+    public bool IsDodging => Time.time < _dodgeInvulnerableUntil;
+    public Collider WeaponHitbox => weaponHitbox;
+    public GameObject BlockVfxObject => _blockVfxRoot;
+    public bool IsBlockVfxActive => _blockVfxRoot != null && _blockVfxRoot.activeSelf;
 
     /// <summary>Sequence number of the swing this peer last saw start (identifies a swing for de-duplication).</summary>
     public int CurrentSequence { get; private set; }
 
     /// <summary>(current, max) - raised on every peer when health changes.</summary>
     public event Action<int, int> HealthChanged;
+
+    /// <summary>(current, max) - raised on every peer when stamina changes.</summary>
+    public event Action<float, float> StaminaChanged;
 
     /// <summary>true = died, false = revived. Raised on every peer.</summary>
     public event Action<bool> DeathStateChanged;
@@ -115,9 +144,14 @@ public class PlayerCombat : NetworkBehaviour
     /// <summary>Extra damage from equipped gear. Applied to NPC hits only (PvP reads the shared prefab config).</summary>
     public int WeaponDamageBonus { get; set; }
 
+    /// <summary>Temporary attack buff from consumables (e.g. Reinforced GreatSword Oil).</summary>
+    public int ActiveBuffDamageBonus => Time.time < _attackBuffUntil ? _attackBuffBonus : 0;
+    public float ActiveBuffRemainingSeconds => Mathf.Max(0f, _attackBuffUntil - Time.time);
+
     // ------------------------------------------------------------------ private state
 
     private PlayerCapsule _capsule;
+    private PlayerAnimationDriver _animationDriver;
     private Rigidbody _rb;
     private Collider _bodyCollider;
     private NetworkTransform _networkTransform;
@@ -125,16 +159,32 @@ public class PlayerCombat : NetworkBehaviour
 
     private bool _isSpawned;
     private bool _lastDeadState;
+    private int _lastHealthValue = DefaultMaxHealth;
     private Vector3 _spawnPosition;
 
     // Local (input side)
     private float _nextLocalAttackTime;
     private float _bufferedUntil = -1f;
+    private float _nextLocalDodgeTime;
+    private float _overrideBlockUntil;
+    private bool _localBlockingSent;
 
     // Authority side
     private float _nextAuthorityAttackTime;
+    private float _lastAuthorityAttackTime = -100f;
+    private int _authorityComboStep;
     private int _sequenceCounter;
+    private float _dodgeInvulnerableUntil;
+    private float _nextStaminaRegenTime;
+    private bool _sprintExhaustedCooldown;
+    private int _attackBuffBonus;
+    private float _attackBuffUntil;
     private Coroutine _respawnRoutine;
+
+    // Block VFX
+    private GameObject _blockVfxRoot;
+    private Transform _blockDome;
+    private Transform _blockRing;
 
     // Shared: running hit window
     private Coroutine _hitWindowRoutine;
@@ -147,29 +197,182 @@ public class PlayerCombat : NetworkBehaviour
     private void Awake()
     {
         _capsule = GetComponent<PlayerCapsule>();
+        _animationDriver = GetComponent<PlayerAnimationDriver>();
         _rb = GetComponent<Rigidbody>();
-        _bodyCollider = GetComponent<Collider>();           // the root capsule, NOT the weapon child
+        _bodyCollider = GetComponent<Collider>();
         _networkTransform = GetComponent<NetworkTransform>();
         _attackTriggerHash = string.IsNullOrEmpty(attackTriggerName) ? 0 : Animator.StringToHash(attackTriggerName);
 
-        if (animator == null) animator = GetComponentInChildren<Animator>();
+        if (animator == null)
+        {
+            if (_animationDriver != null && _animationDriver.Animator != null)
+                animator = _animationDriver.Animator;
+            else
+                animator = GetComponentInChildren<Animator>();
+        }
+
+        EnsureBladeHitboxAlignedAndClean();
+        BuildBlockShieldVfx();
+    }
+
+    /// <summary>
+    /// Ensures the weapon hitbox is aligned to the GreatSword blade mesh on Sword_Hand
+    /// and hides/removes any debug hitbox visual renderers so swings are completely clean in Play Mode.
+    /// </summary>
+    private void EnsureBladeHitboxAlignedAndClean()
+    {
+        // Hide any legacy debug visual renderer unconditionally
+        if (hitboxDebugVisual != null)
+        {
+            hitboxDebugVisual.enabled = false;
+            hitboxDebugVisual.gameObject.SetActive(false);
+            hitboxDebugVisual = null;
+        }
+
+        // Find Sword_Hand on the character model
+        Transform swordHand = null;
+        foreach (Transform t in GetComponentsInChildren<Transform>(true))
+        {
+            if (t.name == "Sword_Hand")
+            {
+                swordHand = t;
+                break;
+            }
+            if (t.name == "WeaponHitboxVisual")
+            {
+                var r = t.GetComponent<Renderer>();
+                if (r != null) r.enabled = false;
+                t.gameObject.SetActive(false);
+            }
+        }
+
+        if (weaponHitbox == null)
+        {
+            Transform existingWh = null;
+            foreach (Transform t in GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name == "WeaponHitbox") { existingWh = t; break; }
+            }
+            if (existingWh != null) weaponHitbox = existingWh.GetComponent<Collider>();
+        }
+
+        if (swordHand != null && weaponHitbox != null)
+        {
+            Transform whTransform = weaponHitbox.transform;
+            // Disable any debug renderers on or under WeaponHitbox
+            foreach (Renderer r in whTransform.GetComponentsInChildren<Renderer>(true))
+            {
+                r.enabled = false;
+                if (r.gameObject != whTransform.gameObject)
+                    r.gameObject.SetActive(false);
+            }
+
+            // Parent WeaponHitbox to Sword_Hand and replace SphereCollider with BoxCollider aligned to the blade
+            if (whTransform.parent != swordHand)
+            {
+                whTransform.SetParent(swordHand, false);
+                whTransform.localPosition = Vector3.zero;
+                whTransform.localRotation = Quaternion.identity;
+                whTransform.localScale = Vector3.one;
+            }
+
+            if (weaponHitbox is SphereCollider oldSphere)
+            {
+                Destroy(oldSphere);
+                var box = whTransform.GetComponent<BoxCollider>();
+                if (box == null) box = whTransform.gameObject.AddComponent<BoxCollider>();
+                box.center = Vector3.zero;
+                box.size = new Vector3(1.6f, 0.5f, 8.6f);
+                box.isTrigger = true;
+                weaponHitbox = box;
+            }
+            else if (weaponHitbox is BoxCollider box)
+            {
+                box.center = Vector3.zero;
+                box.size = new Vector3(1.6f, 0.5f, 8.6f);
+                box.isTrigger = true;
+            }
+        }
 
         if (weaponHitbox == null)
         {
             Debug.LogError($"[PlayerCombat] '{name}': weaponHitbox is not assigned - attacks will never hit.", this);
             return;
         }
-        if (weaponHitbox.gameObject == gameObject)
-        {
-            Debug.LogError($"[PlayerCombat] '{name}': weaponHitbox must live on a CHILD object, not the root.", this);
-            weaponHitbox = null;
-            return;
-        }
-        if (!(weaponHitbox is SphereCollider || weaponHitbox is BoxCollider || weaponHitbox is CapsuleCollider))
-            Debug.LogWarning("[PlayerCombat] weaponHitbox should be a Sphere/Box/Capsule collider (needed for exact overlap checks).", this);
 
         weaponHitbox.isTrigger = true;
         SetHitbox(false);
+    }
+
+    /// <summary>
+    /// Creates the Right-Click Block Shield VFX (translucent energy dome + glowing parry ring) around the player.
+    /// Toggled on all peers via replicated IsBlocking state.
+    /// </summary>
+    private void BuildBlockShieldVfx()
+    {
+        Transform existing = transform.Find("BlockShieldVFX");
+        if (existing != null)
+        {
+            _blockVfxRoot = existing.gameObject;
+            _blockDome = existing.Find("ShieldDome");
+            _blockRing = existing.Find("ShieldRing");
+            _blockVfxRoot.SetActive(false);
+            return;
+        }
+
+        _blockVfxRoot = new GameObject("BlockShieldVFX");
+        _blockVfxRoot.transform.SetParent(transform, false);
+        _blockVfxRoot.transform.localPosition = Vector3.zero;
+
+        Shader shader = Shader.Find("Sprites/Default");
+        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Unlit/Color");
+
+        // 1. Translucent Frontal Energy Barrier Dome
+        GameObject dome = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        dome.name = "ShieldDome";
+        var domeCol = dome.GetComponent<Collider>();
+        if (domeCol != null) Destroy(domeCol);
+        dome.transform.SetParent(_blockVfxRoot.transform, false);
+        dome.transform.localPosition = new Vector3(0f, 0.15f, 0.25f);
+        dome.transform.localScale = new Vector3(1.35f, 1.65f, 1.15f);
+        var domeRenderer = dome.GetComponent<Renderer>();
+        if (domeRenderer != null)
+        {
+            domeRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            domeRenderer.receiveShadows = false;
+            if (shader != null)
+            {
+                var mat = new Material(shader);
+                mat.color = new Color(0.18f, 0.78f, 1.0f, 0.26f);
+                domeRenderer.sharedMaterial = mat;
+            }
+        }
+        _blockDome = dome.transform;
+
+        // 2. Glowing Ground Guard Ring
+        GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        ring.name = "ShieldRing";
+        var ringCol = ring.GetComponent<Collider>();
+        if (ringCol != null) Destroy(ringCol);
+        ring.transform.SetParent(_blockVfxRoot.transform, false);
+        ring.transform.localPosition = new Vector3(0f, -0.92f, 0f);
+        ring.transform.localScale = new Vector3(1.65f, 0.02f, 1.65f);
+        var ringRenderer = ring.GetComponent<Renderer>();
+        if (ringRenderer != null)
+        {
+            ringRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            ringRenderer.receiveShadows = false;
+            if (shader != null)
+            {
+                var mat = new Material(shader);
+                mat.color = new Color(0.25f, 0.90f, 1.0f, 0.58f);
+                ringRenderer.sharedMaterial = mat;
+            }
+        }
+        _blockRing = ring.transform;
+
+        _blockVfxRoot.SetActive(false);
     }
 
     public override void Spawned()
@@ -187,13 +390,12 @@ public class PlayerCombat : NetworkBehaviour
 
         if (Object.HasStateAuthority)
         {
-            // Config-driven max health (the property initializer only knows the constant).
             NetworkHealth = maxHealth;
+            NetworkStamina = maxStamina;
         }
 
-        // Late joiners may see an already-dead player; callbacks are not guaranteed for
-        // initial values, so apply the current state explicitly.
         ApplyHealthState(forceNotify: true);
+        UpdateBlockVfxVisual(IsBlocking && !IsDead);
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
@@ -205,33 +407,172 @@ public class PlayerCombat : NetworkBehaviour
         _hitWindowRoutine = null;
         _respawnRoutine = null;
         CloseHitWindow();
+        UpdateBlockVfxVisual(false);
         _lastHitSequenceByAttacker.Clear();
     }
 
-    // ------------------------------------------------------------------ 1. local input
+    // ------------------------------------------------------------------ 1. local input & stamina tick
 
     public bool IsLocallyControlled =>
         Object.HasInputAuthority || (Runner != null && Runner.GameMode == GameMode.Shared && Object.HasStateAuthority);
 
+    public override void FixedUpdateNetwork()
+    {
+        if (!_isSpawned || !Object.HasStateAuthority) return;
+        TickStaminaRegen(Runner.DeltaTime);
+    }
+
     private void Update()
     {
-        // Input is polled ONLY for the peer that controls this object.
-        if (!_isSpawned || !IsLocallyControlled) return;
+        // Animate active Block VFX pulse on all peers
+        if (_blockVfxRoot != null && _blockVfxRoot.activeSelf)
+        {
+            if (_blockDome != null)
+            {
+                float s = 1f + Mathf.Sin(Time.time * 6f) * 0.035f;
+                _blockDome.localScale = new Vector3(1.35f * s, 1.65f * s, 1.15f * s);
+            }
+            if (_blockRing != null)
+            {
+                float r = 1.65f + Mathf.Sin(Time.time * 4.5f) * 0.08f;
+                _blockRing.localScale = new Vector3(r, 0.02f, r);
+            }
+        }
+
+        if (!_isSpawned) return;
+
+        // While the hit window is open on the State Authority peer, poll active blade overlaps
+        // so fast animated sword swings on Sword_Hand never miss between physics ticks.
+        if (Object.HasStateAuthority && IsHitWindowOpen && !IsDead)
+        {
+            PollActiveWeaponHits();
+        }
+
+        if (!IsLocallyControlled) return;
 
         if (IsDead)
         {
             _bufferedUntil = -1f;
+            SetBlockingInput(false);
             return;
+        }
+
+        // Dodge / Roll (Spacebar or LeftControl)
+        if (PollDodgePressed())
+        {
+            TryRequestDodge();
+        }
+
+        // Block (Right Mouse Button or LeftAlt)
+        if (Application.isFocused && Time.time >= _overrideBlockUntil)
+        {
+            bool wantBlock = !IsDodging && CurrentStamina > 0f && PollBlockHeld();
+            SetBlockingInput(wantBlock);
         }
 
         if (PollAttackPressed()) _bufferedUntil = Time.time + inputBufferSeconds;
 
-        // Fire as soon as the cooldown allows, if a click is still buffered.
-        if (_bufferedUntil >= Time.time && Time.time >= _nextLocalAttackTime)
+        // Fire as soon as the cooldown allows, if a click is still buffered and stamina > 0.
+        if (_bufferedUntil >= Time.time && Time.time >= _nextLocalAttackTime && !IsDodging)
         {
             _bufferedUntil = -1f;
-            TryRequestAttack();
+            if (CanAttack)
+            {
+                if (_localBlockingSent) SetBlockingInput(false);
+                TryRequestAttack();
+            }
         }
+    }
+
+    private void TickStaminaRegen(float dt)
+    {
+        if (IsDead) return;
+
+        bool sprinting = _capsule != null && _capsule.NetworkSprinting;
+        if (sprinting || IsDodging || IsHitWindowOpen) return;
+        if (Time.time < _nextStaminaRegenTime) return;
+
+        if (NetworkStamina < maxStamina)
+        {
+            NetworkStamina = Mathf.Min(maxStamina, NetworkStamina + staminaRegenRate * dt);
+            if (_sprintExhaustedCooldown && NetworkStamina >= 12f)
+                _sprintExhaustedCooldown = false;
+        }
+    }
+
+    /// <summary>Consumes stamina while sprinting. Returns true if sprint can continue, false if depleted.</summary>
+    public bool ConsumeSprintStamina(float dt)
+    {
+        if (!_isSpawned || IsDead) return false;
+        if (_sprintExhaustedCooldown || NetworkStamina <= 0f)
+        {
+            _sprintExhaustedCooldown = true;
+            return false;
+        }
+
+        if (Object.HasStateAuthority)
+        {
+            float cost = sprintStaminaPerSecond * dt;
+            NetworkStamina = Mathf.Max(0f, NetworkStamina - cost);
+            _nextStaminaRegenTime = Time.time + staminaRegenDelay;
+            if (NetworkStamina <= 0.01f)
+            {
+                NetworkStamina = 0f;
+                _sprintExhaustedCooldown = true;
+                return false;
+            }
+        }
+        return NetworkStamina > 0f;
+    }
+
+    private bool TryConsumeAuthorityStamina(float cost)
+    {
+        if (!Object.HasStateAuthority) return false;
+        if (NetworkStamina <= 0f) return false;
+
+        NetworkStamina = Mathf.Max(0f, NetworkStamina - cost);
+        _nextStaminaRegenTime = Time.time + staminaRegenDelay;
+        if (NetworkStamina <= 0.01f)
+        {
+            NetworkStamina = 0f;
+            _sprintExhaustedCooldown = true;
+        }
+        return true;
+    }
+
+    /// <summary>Directly sets stamina on State Authority (for testing or special mechanics).</summary>
+    public void SetStamina(float value)
+    {
+        if (!_isSpawned || !Object.HasStateAuthority) return;
+        NetworkStamina = Mathf.Clamp(value, 0f, maxStamina);
+        if (NetworkStamina <= 0f)
+        {
+            _sprintExhaustedCooldown = true;
+            _nextStaminaRegenTime = Time.time + staminaRegenDelay;
+        }
+        else if (NetworkStamina >= 12f)
+        {
+            _sprintExhaustedCooldown = false;
+        }
+    }
+
+    /// <summary>Restores stamina (used by Stamina Elixir consumable).</summary>
+    public void RestoreStamina(float amount)
+    {
+        if (!_isSpawned || !Object.HasStateAuthority || IsDead || amount <= 0f) return;
+        float before = NetworkStamina;
+        NetworkStamina = Mathf.Min(maxStamina, NetworkStamina + amount);
+        _sprintExhaustedCooldown = false;
+        Debug.Log($"[PlayerCombat] Restored {NetworkStamina - before:0} Stamina ({before:0} -> {NetworkStamina:0}/{maxStamina:0}).");
+    }
+
+    /// <summary>Applies a temporary attack damage buff (used by Reinforced GreatSword Oil).</summary>
+    public void ApplyAttackBuff(int bonusDamage, float durationSeconds)
+    {
+        if (bonusDamage <= 0 || durationSeconds <= 0f) return;
+        _attackBuffBonus = bonusDamage;
+        _attackBuffUntil = Time.time + durationSeconds;
+        Debug.Log($"[PlayerCombat] Applied +{bonusDamage} Attack Buff for {durationSeconds:0}s.");
     }
 
     private static bool PollAttackPressed()
@@ -241,16 +582,45 @@ public class PlayerCombat : NetworkBehaviour
         var mouse = Mouse.current;
         if (mouse == null || !mouse.leftButton.wasPressedThisFrame) return false;
 
-        // Do not swing when the click was meant for a UI element.
         if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return false;
 
         return true;
     }
 
-    /// <summary>Client-side gate (cooldown) in front of the request RPC. Safe to call from other systems.</summary>
+    private static bool PollBlockHeld()
+    {
+        if (!Application.isFocused || GameplayInput.IsBlocked) return false;
+
+        var kb = Keyboard.current;
+        if (kb != null && kb.leftAltKey.isPressed) return true;
+
+        var mouse = Mouse.current;
+        if (mouse != null && mouse.rightButton.isPressed)
+        {
+            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool PollDodgePressed()
+    {
+        if (!Application.isFocused || GameplayInput.IsBlocked) return false;
+
+        var kb = Keyboard.current;
+        return kb != null && (kb.spaceKey.wasPressedThisFrame || kb.leftCtrlKey.wasPressedThisFrame);
+    }
+
+    /// <summary>Client-side gate (cooldown + stamina) in front of the request RPC. Safe to call from other systems.</summary>
     public bool TryRequestAttack()
     {
         if (!_isSpawned || !IsLocallyControlled || IsDead) return false;
+        if (CurrentStamina <= 0f)
+        {
+            Debug.Log("[PlayerCombat] Attack prevented: Stamina depleted.");
+            return false;
+        }
         if (Time.time < _nextLocalAttackTime) return false;
 
         _nextLocalAttackTime = Time.time + attackCooldown;
@@ -258,36 +628,180 @@ public class PlayerCombat : NetworkBehaviour
         return true;
     }
 
+    /// <summary>Initiates a directional dodge roll if stamina > 0 and replicates the animation across all peers.</summary>
+    public bool TryRequestDodge()
+    {
+        if (!_isSpawned || !IsLocallyControlled || IsDead) return false;
+        if (CurrentStamina <= 0f)
+        {
+            Debug.Log("[PlayerCombat] Dodge prevented: Stamina depleted.");
+            return false;
+        }
+        if (Time.time < _nextLocalDodgeTime) return false;
+
+        _nextLocalDodgeTime = Time.time + dodgeCooldown;
+        SetBlockingInput(false);
+
+        Vector3 worldDir = _capsule != null ? _capsule.DesiredMoveWorld() : Vector3.zero;
+        if (worldDir.sqrMagnitude < 0.001f)
+            worldDir = transform.forward;
+        worldDir.Normalize();
+
+        if (_capsule != null)
+            _capsule.StartDash(worldDir, dodgeDistance, dodgeDuration);
+
+        Vector3 localDir = Quaternion.Inverse(transform.rotation) * worldDir;
+        Vector2 roll2D = new Vector2(localDir.x, localDir.z);
+        if (roll2D.sqrMagnitude < 0.001f) roll2D = Vector2.up;
+        else roll2D.Normalize();
+
+        RPC_RequestDodge(roll2D.x, roll2D.y);
+        return true;
+    }
+
+    /// <summary>Updates blocking state for the locally controlled player and replicates to peers.</summary>
+    public void SetBlockingInput(bool blocking, float holdSeconds = 0f)
+    {
+        if (!_isSpawned || !IsLocallyControlled) return;
+        if (IsDead || CurrentStamina <= 0f) blocking = false;
+        if (holdSeconds > 0f) _overrideBlockUntil = Time.time + holdSeconds;
+
+        if (_capsule != null)
+            _capsule.SpeedMultiplier = blocking ? blockMoveSpeedMultiplier : 1f;
+
+        if (_localBlockingSent == blocking) return;
+        _localBlockingSent = blocking;
+        if (Object.HasStateAuthority)
+        {
+            IsBlocking = !IsDead && blocking;
+            UpdateBlockVfxVisual(IsBlocking);
+            RPC_BroadcastBlocking(IsBlocking);
+        }
+        else
+        {
+            RPC_SetBlocking(blocking);
+        }
+    }
+
     // ------------------------------------------------------------------ 2. RPC pipeline
 
-    /// <summary>IA -> SA. Ask the authority to perform an attack. Carries no data: nothing to forge.</summary>
+    /// <summary>IA -> SA. Ask the authority to perform an attack. Validates cooldown and stamina.</summary>
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     public void RPC_RequestAttack()
     {
         if (!Object.HasStateAuthority) return;
         if (IsDead) return;
+        if (NetworkStamina <= 0f) return;
 
-        // Authoritative rate limit - the real defence against RPC spam.
         float now = Time.time;
         if (now < _nextAuthorityAttackTime - cooldownTolerance) return;
+        if (!TryConsumeAuthorityStamina(attackStaminaCost)) return;
+
         _nextAuthorityAttackTime = now + attackCooldown;
 
+        if (IsBlocking)
+        {
+            IsBlocking = false;
+            UpdateBlockVfxVisual(false);
+        }
+
+        if (now - _lastAuthorityAttackTime <= comboResetSeconds)
+            _authorityComboStep = (_authorityComboStep % 3) + 1;
+        else
+            _authorityComboStep = 1;
+
+        _lastAuthorityAttackTime = now;
+        ComboStep = _authorityComboStep;
+
         _sequenceCounter++;
-        RPC_BroadcastAttack(_sequenceCounter);
+        RPC_BroadcastAttack(_sequenceCounter, _authorityComboStep);
     }
 
     /// <summary>SA -> All. Cosmetic start of the swing and the timed hit window on every peer.</summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_BroadcastAttack(int sequence)
+    public void RPC_BroadcastAttack(int sequence, int comboStep = 1)
     {
         CurrentSequence = sequence;
+        ComboStep = comboStep;
 
-        if (animator != null && _attackTriggerHash != 0) animator.SetTrigger(_attackTriggerHash);
+        if (_animationDriver != null)
+            _animationDriver.PlayAttack(comboStep);
+        else if (animator != null && _attackTriggerHash != 0)
+            animator.SetTrigger(_attackTriggerHash);
+
         if (attackVfx != null) attackVfx.Play();
         onAttackStarted?.Invoke();
 
         if (_hitWindowRoutine != null) StopCoroutine(_hitWindowRoutine);
         _hitWindowRoutine = StartCoroutine(HitWindowRoutine());
+    }
+
+    /// <summary>IA -> SA. Requests a directional dodge roll.</summary>
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_RequestDodge(float rollX, float rollY)
+    {
+        if (!Object.HasStateAuthority || IsDead) return;
+        if (!TryConsumeAuthorityStamina(dodgeStaminaCost)) return;
+
+        if (IsBlocking)
+        {
+            IsBlocking = false;
+            UpdateBlockVfxVisual(false);
+        }
+        _dodgeInvulnerableUntil = Time.time + dodgeDuration;
+        RPC_BroadcastDodge(rollX, rollY);
+    }
+
+    /// <summary>SA -> All. Plays the directional roll animation on every peer.</summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastDodge(float rollX, float rollY)
+    {
+        _dodgeInvulnerableUntil = Time.time + dodgeDuration;
+        if (_hitWindowRoutine != null) { StopCoroutine(_hitWindowRoutine); _hitWindowRoutine = null; }
+        CloseHitWindow();
+        UpdateBlockVfxVisual(false);
+
+        if (_animationDriver != null)
+            _animationDriver.PlayDodge(rollX, rollY);
+    }
+
+    /// <summary>IA -> SA. Sets replicated blocking state.</summary>
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_SetBlocking(NetworkBool blocking)
+    {
+        if (!Object.HasStateAuthority) return;
+        IsBlocking = !IsDead && NetworkStamina > 0f && blocking;
+        UpdateBlockVfxVisual(IsBlocking);
+        RPC_BroadcastBlocking(IsBlocking);
+    }
+
+    /// <summary>SA -> All. Ensures immediate block animation &amp; Block Shield VFX transitions on all peers.</summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastBlocking(NetworkBool blocking)
+    {
+        UpdateBlockVfxVisual(blocking && !IsDead);
+        if (_animationDriver != null)
+            _animationDriver.SetBlocking(blocking);
+    }
+
+    private void OnBlockingChanged()
+    {
+        UpdateBlockVfxVisual(IsBlocking && !IsDead);
+        if (_animationDriver != null)
+            _animationDriver.SetBlocking(IsBlocking);
+    }
+
+    private void UpdateBlockVfxVisual(bool active)
+    {
+        if (_blockVfxRoot == null) BuildBlockShieldVfx();
+        if (_blockVfxRoot != null && _blockVfxRoot.activeSelf != active)
+            _blockVfxRoot.SetActive(active);
+    }
+
+    private void OnStaminaChanged()
+    {
+        if (!_isSpawned) return;
+        StaminaChanged?.Invoke(NetworkStamina, maxStamina);
     }
 
     // ------------------------------------------------------------------ 3. hit window
@@ -298,7 +812,6 @@ public class PlayerCombat : NetworkBehaviour
 
         if (useAnimationEvents)
         {
-            // Animation Events open/close the window; this is only the safety net.
             yield return new WaitForSeconds(hitWindowSafetyTimeout);
         }
         else
@@ -312,10 +825,7 @@ public class PlayerCombat : NetworkBehaviour
         _hitWindowRoutine = null;
     }
 
-    /// <summary>Animation Event hook. NOTE: Animation Events only reach components on the Animator's own GameObject.</summary>
     public void AnimEvent_OpenHitWindow() { if (useAnimationEvents) OpenHitWindow(); }
-
-    /// <summary>Animation Event hook.</summary>
     public void AnimEvent_CloseHitWindow() { if (useAnimationEvents) CloseHitWindow(); }
 
     private void OpenHitWindow()
@@ -323,6 +833,7 @@ public class PlayerCombat : NetworkBehaviour
         if (!_isSpawned || IsDead) return;
         IsHitWindowOpen = true;
         SetHitbox(true);
+        if (Object.HasStateAuthority) PollActiveWeaponHits();
     }
 
     private void CloseHitWindow()
@@ -334,23 +845,27 @@ public class PlayerCombat : NetworkBehaviour
     private void SetHitbox(bool active)
     {
         if (weaponHitbox != null) weaponHitbox.enabled = active;
-        if (hitboxDebugVisual != null) hitboxDebugVisual.enabled = active;
+        // Debug hitbox visuals stay permanently disabled during Play Mode so the blade swing is clean.
+        if (hitboxDebugVisual != null) hitboxDebugVisual.enabled = false;
     }
 
-    // ------------------------------------------------------------------ 4. hit resolution (victim side)
+    // ------------------------------------------------------------------ 4. hit resolution
 
-    /// <summary>
-    /// Unity delivers trigger events of every collider on this Rigidbody to this root object.
-    /// That includes our OWN weapon touching things, so everything not "a foreign, open weapon
-    /// overlapping MY body" is filtered out below.
-    /// </summary>
     private void OnTriggerEnter(Collider other)
     {
-        // Authority gate: a peer only ever resolves hits against the player it owns.
+        HandleTriggerOverlap(other);
+    }
+
+    private void OnTriggerStay(Collider other)
+    {
+        HandleTriggerOverlap(other);
+    }
+
+    private void HandleTriggerOverlap(Collider other)
+    {
         if (!_isSpawned || !Object.HasStateAuthority) return;
         if (IsDead || other == null) return;
 
-        // Our own weapon touching an enemy NPC (NPCs are damaged via RPC to THEIR authority).
         var npc = other.GetComponentInParent<EnemyNPC>();
         if (npc != null)
         {
@@ -361,22 +876,32 @@ public class PlayerCombat : NetworkBehaviour
         var attacker = other.GetComponentInParent<PlayerCombat>();
         if (attacker == null || attacker == this || !attacker._isSpawned) return;
 
-        // Must be the attacker's weapon, and the window must really be open (as seen here).
         if (other != attacker.weaponHitbox || !attacker.IsHitWindowOpen || attacker.IsDead) return;
-
-        // Weapon-vs-weapon contact also raises this event; require a REAL overlap with our body.
         if (!WeaponOverlapsBody(attacker)) return;
-
-        // Sanity range check (guards against forged/desynced positions).
         if ((attacker.transform.position - transform.position).sqrMagnitude > maxHitDistance * maxHitDistance) return;
 
-        // One hit per swing per attacker.
         NetworkId attackerId = attacker.Object.Id;
         if (_lastHitSequenceByAttacker.TryGetValue(attackerId, out int lastSeq) && lastSeq == attacker.CurrentSequence) return;
         _lastHitSequenceByAttacker[attackerId] = attacker.CurrentSequence;
 
-        // Damage comes from OUR copy of the attacker's config - never from the network.
         RPC_TakeDamage(attacker.attackDamage);
+    }
+
+    /// <summary>
+    /// Actively checks blade collider overlaps and forward melee sweep during the open hit window.
+    /// Ensures animated bone colliders (Sword_Hand/WeaponHitbox) never miss between FixedUpdate frames.
+    /// </summary>
+    private void PollActiveWeaponHits()
+    {
+        if (!IsHitWindowOpen || weaponHitbox == null) return;
+        Physics.SyncTransforms();
+
+        for (int i = 0; i < EnemyNPC.All.Count; i++)
+        {
+            EnemyNPC npc = EnemyNPC.All[i];
+            if (npc == null || !npc.IsSpawned || !npc.IsAlive || npc.BodyCollider == null) continue;
+            TryHitNpc(npc, npc.BodyCollider);
+        }
     }
 
     private bool WeaponOverlapsBody(PlayerCombat attacker)
@@ -397,7 +922,7 @@ public class PlayerCombat : NetworkBehaviour
     private readonly Dictionary<NetworkId, float> _lastNpcAttackTime = new Dictionary<NetworkId, float>();
     private const float NpcDamageRangeSlack = 3f;
 
-    /// <summary>Attacker side: our (State Authority) weapon overlapped an NPC body -> ask the NPC's authority to apply damage.</summary>
+    /// <summary>Attacker side: our blade overlapped an NPC body -> calculate combo/crit damage and notify NPC authority.</summary>
     private void TryHitNpc(EnemyNPC npc, Collider other)
     {
         if (!IsHitWindowOpen || weaponHitbox == null) return;
@@ -405,21 +930,36 @@ public class PlayerCombat : NetworkBehaviour
 
         Transform w = weaponHitbox.transform;
         Transform b = npc.BodyCollider.transform;
-        if (!Physics.ComputePenetration(weaponHitbox, w.position, w.rotation, npc.BodyCollider, b.position, b.rotation, out _, out _)) return;
+        bool bladeOverlap = Physics.ComputePenetration(weaponHitbox, w.position, w.rotation, npc.BodyCollider, b.position, b.rotation, out _, out _);
+
+        if (!bladeOverlap)
+        {
+            // Also check if the enemy is right inside the GreatSword's immediate front cleave arc (<= 2.65m and within front 110 deg)
+            Vector3 toNpc = npc.transform.position - transform.position;
+            toNpc.y = 0f;
+            float d = toNpc.magnitude;
+            if (d > 2.65f) return;
+            if (d > 0.65f && Vector3.Dot(transform.forward, toNpc / d) < 0.15f) return;
+        }
 
         NetworkId id = npc.Object.Id;
-        if (_lastNpcHitSequence.TryGetValue(id, out int seq) && seq == CurrentSequence) return;   // one hit per swing
+        if (_lastNpcHitSequence.TryGetValue(id, out int seq) && seq == CurrentSequence) return;
         _lastNpcHitSequence[id] = CurrentSequence;
 
-        int damage = attackDamage + WeaponDamageBonus;
-        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} hit NPC {npc.name} (id={id}) for {damage} (base {attackDamage} + gear {WeaponDamageBonus})."); 
-        npc.RPC_TakeDamage(damage);
+        int basePlusGear = attackDamage + WeaponDamageBonus + ActiveBuffDamageBonus;
+        bool isCrit = ComboStep >= 2;
+        float mult = ComboStep switch
+        {
+            2 => comboStep2CritMultiplier,
+            3 => comboStep3CritMultiplier,
+            _ => 1f
+        };
+        int finalDamage = Mathf.Max(1, Mathf.RoundToInt(basePlusGear * mult));
+
+        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} (Combo {ComboStep}{(isCrit ? " CRIT!" : "")}) hit NPC {npc.name} (id={id}) for {finalDamage}.");
+        npc.RPC_TakeDamageWithCrit(finalDamage, isCrit, ComboStep);
     }
 
-    /// <summary>
-    /// NPC authority -> this player's State Authority. The amount is NOT taken from the caller: it is read from
-    /// the NPC's own config here, after checking that the NPC is alive, in range and not spamming.
-    /// </summary>
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_ReceiveNpcDamage(NetworkId npcId)
     {
@@ -466,19 +1006,29 @@ public class PlayerCombat : NetworkBehaviour
         Debug.Log($"[PlayerCombat] Healed {NetworkHealth - before} ({before} -> {NetworkHealth}/{maxHealth}).");
     }
 
-    // ------------------------------------------------------------------ 5. health
+    // ------------------------------------------------------------------ 5. health & block stamina drain
 
-    /// <summary>
-    /// SA -> SA. The single place health is reduced. Only the owner of this object ever executes it,
-    /// and the amount is re-validated here regardless of who called.
-    /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.StateAuthority)]
     public void RPC_TakeDamage(int damage)
     {
         if (!Object.HasStateAuthority) return;
-        if (IsDead) return;
+        if (IsDead || IsDodging) return;
 
         damage = Mathf.Clamp(damage, 0, maxDamagePerHit);
+        if (IsBlocking && NetworkStamina > 0f)
+        {
+            damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1f - blockDamageReduction)));
+            TryConsumeAuthorityStamina(blockHitStaminaCost);
+            if (NetworkStamina <= 0f)
+            {
+                IsBlocking = false;
+                _localBlockingSent = false;
+                if (_capsule != null) _capsule.SpeedMultiplier = 1f;
+                UpdateBlockVfxVisual(false);
+                RPC_BroadcastBlocking(false);
+                Debug.Log("[PlayerCombat] Guard broken! Stamina depleted from blocking hit.");
+            }
+        }
         if (damage <= 0) return;
 
         NetworkHealth = Mathf.Max(0, NetworkHealth - damage);
@@ -496,7 +1046,9 @@ public class PlayerCombat : NetworkBehaviour
 
         TeleportToSpawn();
         _lastHitSequenceByAttacker.Clear();
-        NetworkHealth = maxHealth;           // replicates -> everybody un-hides the body
+        NetworkStamina = maxStamina;
+        _sprintExhaustedCooldown = false;
+        NetworkHealth = maxHealth;
     }
 
     private void TeleportToSpawn()
@@ -511,7 +1063,6 @@ public class PlayerCombat : NetworkBehaviour
         if (_networkTransform != null) _networkTransform.Teleport(_spawnPosition, Quaternion.identity);
     }
 
-    /// <summary>Fusion change-detection callback: runs on every peer when NetworkHealth changes.</summary>
     private void OnHealthChanged()
     {
         ApplyHealthState(forceNotify: false);
@@ -524,24 +1075,32 @@ public class PlayerCombat : NetworkBehaviour
         int health = NetworkHealth;
         bool dead = health <= 0;
 
+        if (!forceNotify && health < _lastHealthValue && !dead)
+            _animationDriver?.PlayHitReaction();
+        _lastHealthValue = health;
+
         HealthChanged?.Invoke(health, maxHealth);
 
         if (!forceNotify && dead == _lastDeadState) return;
         _lastDeadState = dead;
 
-        // Freeze movement through the explicit hook on PlayerCapsule (no-op if absent).
-        if (_capsule != null) _capsule.MovementLocked = dead;
+        if (_capsule != null)
+        {
+            _capsule.MovementLocked = dead;
+            if (dead) _capsule.SpeedMultiplier = 1f;
+        }
 
         if (dead)
         {
+            if (Object.HasStateAuthority && IsBlocking) IsBlocking = false;
+            UpdateBlockVfxVisual(false);
             if (_hitWindowRoutine != null) { StopCoroutine(_hitWindowRoutine); _hitWindowRoutine = null; }
             CloseHitWindow();
             _bufferedUntil = -1f;
         }
 
-        // Hide the body while dead. Enabling/disabling the renderer does not interfere with
-        // PlayerCapsule's MaterialPropertyBlock colouring.
-        if (_capsule != null && _capsule.bodyRenderer != null) _capsule.bodyRenderer.enabled = !dead;
+        if (_capsule != null) _capsule.SetBodyVisible(!dead);
+        _animationDriver?.SetDead(dead);
 
         DeathStateChanged?.Invoke(dead);
     }
@@ -554,11 +1113,11 @@ public class PlayerCombat : NetworkBehaviour
         if (!showDebugHud || !_isSpawned || !IsLocallyControlled) return;
 
         float cd = Mathf.Max(0f, _nextLocalAttackTime - Time.time);
-        GUI.Box(new Rect(10f, 10f, 260f, 64f), GUIContent.none);
-        GUI.Label(new Rect(18f, 14f, 250f, 58f),
-            $"HP  {NetworkHealth}/{maxHealth}   {(IsDead ? "DEAD" : "ALIVE")}\n" +
-            $"Cooldown  {cd:0.00}s   Swing #{CurrentSequence}\n" +
-            $"Hit window  {(IsHitWindowOpen ? "OPEN" : "closed")}");
+        GUI.Box(new Rect(10f, 10f, 280f, 82f), GUIContent.none);
+        GUI.Label(new Rect(18f, 14f, 266f, 76f),
+            $"HP  {NetworkHealth}/{maxHealth}   STA  {NetworkStamina:0}/{maxStamina:0}\n" +
+            $"Cooldown  {cd:0.00}s   Combo {ComboStep}   Swing #{CurrentSequence}\n" +
+            $"Block {(IsBlocking ? "ON (VFX)" : "off")}   HitWindow {(IsHitWindowOpen ? "OPEN" : "closed")}");
     }
 
     private void OnDrawGizmosSelected()
@@ -573,9 +1132,103 @@ public class PlayerCombat : NetworkBehaviour
 }
 
 /// <summary>
-/// Local-only combat presentation. It has no gameplay authority: PlayerCombat and EnemyNPC
-/// remain responsible for the Fusion RPCs and networked health. Attached at runtime to the
-/// locally controlled player so no prefab or scene wiring is required.
+/// World-space 3D floating damage number &amp; Combo Critical Hit popup.
+/// Spawned on all peers when an enemy takes damage so floating numbers and "CRIT!" labels are visible in 3D space.
+/// </summary>
+public sealed class FloatingDamagePopup : MonoBehaviour
+{
+    public static readonly List<FloatingDamagePopup> ActivePopups = new List<FloatingDamagePopup>();
+
+    public int DamageAmount { get; private set; }
+    public bool IsCritical { get; private set; }
+    public int ComboStep { get; private set; }
+
+    private TextMeshPro _tmp;
+    private Vector3 _startPos;
+    private float _spawnTime;
+    private const float Lifetime = 1.05f;
+
+    public static FloatingDamagePopup Spawn(Vector3 worldPos, int amount, bool isCrit, int comboStep = 1)
+    {
+        var go = new GameObject(isCrit ? $"FloatingCritPopup_{amount}" : $"FloatingDamagePopup_{amount}");
+        Vector2 jitter = UnityEngine.Random.insideUnitCircle * 0.25f;
+        go.transform.position = worldPos + new Vector3(jitter.x, 0.35f, jitter.y);
+
+        var popup = go.AddComponent<FloatingDamagePopup>();
+        popup.Init(amount, isCrit, comboStep);
+        return popup;
+    }
+
+    private void Init(int amount, bool isCrit, int comboStep)
+    {
+        DamageAmount = amount;
+        IsCritical = isCrit;
+        ComboStep = comboStep;
+        _startPos = transform.position;
+        _spawnTime = Time.unscaledTime;
+
+        _tmp = gameObject.AddComponent<TextMeshPro>();
+        _tmp.alignment = TextAlignmentOptions.Center;
+        _tmp.textWrappingMode = TextWrappingModes.NoWrap;
+        _tmp.fontStyle = FontStyles.Bold;
+
+        if (isCrit)
+        {
+            _tmp.text = $"CRIT!\n-{amount}";
+            _tmp.fontSize = comboStep >= 3 ? 5.2f : 4.4f;
+            _tmp.color = comboStep >= 3
+                ? new Color(1.0f, 0.38f, 0.08f, 1f)   // Fiery Orange-Gold Finisher Crit
+                : new Color(1.0f, 0.78f, 0.12f, 1f);  // Bright Gold Combo Crit
+        }
+        else
+        {
+            _tmp.text = $"-{amount}";
+            _tmp.fontSize = 3.2f;
+            _tmp.color = new Color(1.0f, 0.95f, 0.78f, 1f);
+        }
+
+        if (!ActivePopups.Contains(this)) ActivePopups.Add(this);
+    }
+
+    private void OnDestroy()
+    {
+        ActivePopups.Remove(this);
+    }
+
+    private void Update()
+    {
+        float age = Time.unscaledTime - _spawnTime;
+        if (age >= Lifetime)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        float t = Mathf.Clamp01(age / Lifetime);
+        float rise = (IsCritical ? 1.35f : 0.95f) * t;
+        transform.position = _startPos + Vector3.up * rise;
+
+        // Punch scale on crit
+        float scale = IsCritical
+            ? (t < 0.18f ? Mathf.Lerp(0.6f, 1.35f, t / 0.18f) : Mathf.Lerp(1.35f, 1.0f, (t - 0.18f) / 0.82f))
+            : 1.0f;
+        transform.localScale = Vector3.one * scale;
+
+        var cam = Camera.main;
+        if (cam != null)
+            transform.rotation = cam.transform.rotation;
+
+        if (_tmp != null && t > 0.6f)
+        {
+            Color c = _tmp.color;
+            c.a = Mathf.Clamp01(1f - (t - 0.6f) / 0.4f);
+            _tmp.color = c;
+        }
+    }
+}
+
+/// <summary>
+/// Local player HUD (HP bar, Stamina bar, Combo counter, Crosshair, and screen-space damage/crit popups).
 /// </summary>
 public sealed class CombatHud : MonoBehaviour
 {
@@ -583,11 +1236,12 @@ public sealed class CombatHud : MonoBehaviour
     {
         public Transform target;
         public int amount;
+        public bool isCrit;
         public Color color;
         public float startedAt;
     }
 
-    private const float PopupLifetime = 0.9f;
+    private const float PopupLifetime = 1.05f;
     private const float ComboTimeout = 2.5f;
     private static CombatHud _localHud;
     private readonly List<Popup> _popups = new List<Popup>(16);
@@ -603,17 +1257,24 @@ public sealed class CombatHud : MonoBehaviour
         if (combat.GetComponent<CombatHud>() == null) combat.gameObject.AddComponent<CombatHud>();
     }
 
-    /// <summary>Called on all peers by EnemyNPC; only the attacker sees their local combo increment.</summary>
-    public static void NotifyEnemyDamaged(EnemyNPC enemy, int amount, PlayerRef attacker)
+    /// <summary>Called on all peers by EnemyNPC when damaged.</summary>
+    public static void NotifyEnemyDamaged(EnemyNPC enemy, int amount, PlayerRef attacker, bool isCrit = false, int comboStep = 1)
     {
         if (_localHud == null || enemy == null || amount <= 0) return;
-        var local = PlayerCombat.Local;
-        if (local == null || local.Runner == null || local.Runner.LocalPlayer != attacker) return;
 
-        _localHud.AddPopup(enemy.LockPoint, amount, new Color(1f, 0.82f, 0.18f));
-        _localHud._combo = Time.unscaledTime - _localHud._lastComboTime <= ComboTimeout ? _localHud._combo + 1 : 1;
-        _localHud._lastComboTime = Time.unscaledTime;
-        Debug.Log($"[CombatHud] Damage dealt: {amount}; combo {_localHud._combo}.");
+        Color c = isCrit
+            ? (comboStep >= 3 ? new Color(1f, 0.42f, 0.10f) : new Color(1f, 0.82f, 0.12f))
+            : new Color(1f, 0.94f, 0.72f);
+
+        _localHud.AddPopup(enemy.LockPoint, amount, c, isCrit);
+
+        var local = PlayerCombat.Local;
+        if (local != null && local.Runner != null && local.Runner.LocalPlayer == attacker)
+        {
+            _localHud._combo = Time.unscaledTime - _localHud._lastComboTime <= ComboTimeout ? _localHud._combo + 1 : 1;
+            _localHud._lastComboTime = Time.unscaledTime;
+            Debug.Log($"[CombatHud] Damage dealt: {amount}{(isCrit ? " (CRIT!)" : "")}; combo {_localHud._combo}.");
+        }
     }
 
     private void Awake()
@@ -631,7 +1292,7 @@ public sealed class CombatHud : MonoBehaviour
     {
         _localHud = this;
         if (_combat != null) _lastHealth = _combat.NetworkHealth;
-        Debug.Log("[CombatHud] Local tactical crosshair and combat text enabled.");
+        Debug.Log("[CombatHud] Local tactical crosshair, HP & Stamina bars, and combat text enabled.");
     }
 
     private void OnDisable()
@@ -652,15 +1313,15 @@ public sealed class CombatHud : MonoBehaviour
         if (_lastHealth >= 0 && current < _lastHealth)
         {
             int damage = _lastHealth - current;
-            AddPopup(transform, damage, new Color(1f, 0.25f, 0.25f));
+            AddPopup(transform, damage, new Color(1f, 0.25f, 0.25f), isCrit: false);
             Debug.Log($"[CombatHud] Local player received {damage} damage ({current}/{max}).");
         }
         _lastHealth = current;
     }
 
-    private void AddPopup(Transform target, int amount, Color color)
+    private void AddPopup(Transform target, int amount, Color color, bool isCrit)
     {
-        _popups.Add(new Popup { target = target, amount = amount, color = color, startedAt = Time.unscaledTime });
+        _popups.Add(new Popup { target = target, amount = amount, isCrit = isCrit, color = color, startedAt = Time.unscaledTime });
     }
 
     private void OnGUI()
@@ -675,21 +1336,50 @@ public sealed class CombatHud : MonoBehaviour
     private void DrawStatus()
     {
         if (_combat == null || !_combat.IsSpawned) return;
-        const float width = 260f, height = 26f;
-        float x = 28f, y = Screen.height - 62f;
-        float fraction = Mathf.Clamp01(_combat.NetworkHealth / (float)Mathf.Max(1, _combat.MaxHealth));
+        const float width = 268f, hpHeight = 24f, staHeight = 20f;
+        float x = 28f, y = Screen.height - 92f;
+
+        float hpFrac = Mathf.Clamp01(_combat.NetworkHealth / (float)Mathf.Max(1, _combat.MaxHealth));
+        float staFrac = Mathf.Clamp01(_combat.CurrentStamina / Mathf.Max(1f, _combat.MaxStamina));
+
         var old = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, .72f);
-        GUI.DrawTexture(new Rect(x - 3f, y - 3f, width + 6f, height + 28f), Texture2D.whiteTexture);
+        // Background frame
+        GUI.color = new Color(0f, 0f, 0f, .76f);
+        GUI.DrawTexture(new Rect(x - 4f, y - 4f, width + 8f, hpHeight + staHeight + 34f), Texture2D.whiteTexture);
+
+        // 1. HP Bar
         GUI.color = new Color(.18f, .05f, .06f, 1f);
-        GUI.DrawTexture(new Rect(x, y, width, height), Texture2D.whiteTexture);
-        GUI.color = Color.Lerp(new Color(.85f, .12f, .16f), new Color(.18f, .86f, .35f), fraction);
-        GUI.DrawTexture(new Rect(x, y, width * fraction, height), Texture2D.whiteTexture);
+        GUI.DrawTexture(new Rect(x, y, width, hpHeight), Texture2D.whiteTexture);
+        GUI.color = Color.Lerp(new Color(.85f, .12f, .16f), new Color(.18f, .86f, .35f), hpFrac);
+        GUI.DrawTexture(new Rect(x, y, width * hpFrac, hpHeight), Texture2D.whiteTexture);
+
         GUI.color = Color.white;
-        GUIStyle label = new GUIStyle(GUI.skin.label) { fontSize = 15, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-        GUI.Label(new Rect(x + 8f, y + 1f, width - 16f, height), $"HP  {_combat.NetworkHealth} / {_combat.MaxHealth}", label);
-        GUIStyle caption = new GUIStyle(GUI.skin.label) { fontSize = 12, alignment = TextAnchor.UpperLeft };
-        GUI.Label(new Rect(x, y + height + 4f, width, 18f), "ACTION STATUS", caption);
+        GUIStyle hpLabel = new GUIStyle(GUI.skin.label) { fontSize = 14, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
+        GUI.Label(new Rect(x + 8f, y, width - 16f, hpHeight), $"HP  {_combat.NetworkHealth} / {_combat.MaxHealth}", hpLabel);
+
+        // 2. Stamina Bar
+        float staY = y + hpHeight + 4f;
+        GUI.color = new Color(.08f, .12f, .16f, 1f);
+        GUI.DrawTexture(new Rect(x, staY, width, staHeight), Texture2D.whiteTexture);
+        Color staColor = _combat.CurrentStamina <= 15f
+            ? new Color(1.0f, 0.35f, 0.12f)
+            : Color.Lerp(new Color(0.95f, 0.65f, 0.12f), new Color(0.20f, 0.82f, 0.98f), staFrac);
+        GUI.color = staColor;
+        GUI.DrawTexture(new Rect(x, staY, width * staFrac, staHeight), Texture2D.whiteTexture);
+
+        GUI.color = Color.white;
+        GUIStyle staLabel = new GUIStyle(GUI.skin.label) { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
+        GUI.Label(new Rect(x + 8f, staY, width - 16f, staHeight), $"STAMINA  {_combat.CurrentStamina:0} / {_combat.MaxStamina:0}", staLabel);
+
+        // Status footer (Block / Attack Buff / Exhausted)
+        GUIStyle caption = new GUIStyle(GUI.skin.label) { fontSize = 11, fontStyle = FontStyle.Bold, alignment = TextAnchor.UpperLeft };
+        string statusText = _combat.IsBlocking
+            ? "GUARD ACTIVE (70% DMG REDUCTION)"
+            : (_combat.CurrentStamina <= 0.5f ? "EXHAUSTED (RECOVERING STAMINA)" : "ACTION STATUS: READY");
+        if (_combat.ActiveBuffDamageBonus > 0)
+            statusText += $"  |  +ATK {_combat.ActiveBuffDamageBonus} ({_combat.ActiveBuffRemainingSeconds:0}s)";
+        GUI.Label(new Rect(x, staY + staHeight + 3f, width + 80f, 18f), statusText, caption);
+
         GUI.color = old;
     }
 
@@ -719,11 +1409,18 @@ public sealed class CombatHud : MonoBehaviour
         {
             Popup popup = _popups[i];
             float t = Mathf.Clamp01((Time.unscaledTime - popup.startedAt) / PopupLifetime);
-            Vector3 screen = cam.WorldToScreenPoint(popup.target.position + Vector3.up * (1.45f + t * .8f));
+            Vector3 screen = cam.WorldToScreenPoint(popup.target.position + Vector3.up * (1.5f + t * .9f));
             if (screen.z <= 0f) continue;
+
             GUI.color = new Color(popup.color.r, popup.color.g, popup.color.b, 1f - t);
-            GUIStyle style = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 22, fontStyle = FontStyle.Bold };
-            GUI.Label(new Rect(screen.x - 55f, Screen.height - screen.y - 16f, 110f, 32f), $"-{popup.amount}", style);
+            GUIStyle style = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = popup.isCrit ? 26 : 21,
+                fontStyle = FontStyle.Bold
+            };
+            string text = popup.isCrit ? $"CRIT! -{popup.amount}" : $"-{popup.amount}";
+            GUI.Label(new Rect(screen.x - 85f, Screen.height - screen.y - 20f, 170f, 36f), text, style);
         }
         GUI.color = old;
     }

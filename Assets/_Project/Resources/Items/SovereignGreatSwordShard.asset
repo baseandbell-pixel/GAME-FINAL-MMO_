@@ -1,0 +1,30 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a50f769c8171e1d4ab1fb508bf69d8be, type: 3}
+  m_Name: SovereignGreatSwordShard
+  m_EditorClassIdentifier: Assembly-CSharp::ItemData
+  itemId: sovereign_greatsword_shard
+  displayName: Sovereign GreatSword Shard
+  description: Mythic shard of the Sovereign Blade. Grants +35 Weapon Damage when
+    equipped.
+  type: 1
+  tier: 3
+  icon: {fileID: 0}
+  worldColor: {r: 1, g: 0.62, b: 0.08, a: 1}
+  stackable: 0
+  maxStack: 1
+  healAmount: 0
+  staminaRestoreAmount: 0
+  attackBuffBonus: 0
+  attackBuffDuration: 0
+  damageBonus: 35
+  droppable: 1

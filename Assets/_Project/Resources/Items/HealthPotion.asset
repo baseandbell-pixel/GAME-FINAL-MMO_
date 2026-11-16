@@ -13,13 +13,17 @@ MonoBehaviour:
   m_Name: HealthPotion
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: health_potion
-  displayName: Health Potion
-  description: Restores 40 health.
+  displayName: Healing Potion
+  description: Restores 45 HP when consumed.
   type: 0
+  tier: 0
   icon: {fileID: 0}
-  worldColor: {r: 0.2, g: 0.9, b: 0.3, a: 1}
+  worldColor: {r: 0.25, g: 0.92, b: 0.38, a: 1}
   stackable: 1
   maxStack: 10
-  healAmount: 40
+  healAmount: 45
+  staminaRestoreAmount: 0
+  attackBuffBonus: 0
+  attackBuffDuration: 0
   damageBonus: 0
   droppable: 1
