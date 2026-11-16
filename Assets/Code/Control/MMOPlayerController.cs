@@ -273,6 +273,16 @@ public sealed class MMOPlayerController : MonoBehaviour
     public bool IsAttacking =>
         _attackActive;
 
+    public int CurrentAttackStep =>
+        _attackStep;
+
+    /// <summary>
+    /// Fired when Attack1 (step = 1) or Attack2 (step = 2) begins on the local player.
+    /// </summary>
+    public event System.Action<int> OnAttackStepStarted;
+
+    private MMOPlayerFusion _fusionDriver;
+
     // =========================================================
     // AWAKE
     // =========================================================
@@ -288,14 +298,17 @@ public sealed class MMOPlayerController : MonoBehaviour
                 GetComponentInChildren<Animator>(true);
         }
 
-        bool hasFusionDriver =
-            GetComponent<MMOPlayerFusion>() != null;
+        _fusionDriver = GetComponent<MMOPlayerFusion>();
+        bool hasActiveFusionObject =
+            _fusionDriver != null &&
+            _fusionDriver.Object != null &&
+            _fusionDriver.Object.IsValid;
 
         _inputEnabled =
-            !hasFusionDriver && allowStandaloneInput;
+            !hasActiveFusionObject && allowStandaloneInput;
 
         _characterController.enabled =
-            !hasFusionDriver;
+            !hasActiveFusionObject;
 
         if (animator == null)
         {
@@ -329,10 +342,31 @@ public sealed class MMOPlayerController : MonoBehaviour
         if (_cameraController == null)
         {
             _cameraController =
-                FindObjectOfType<MMOCameraController>();
+                FindAnyObjectByType<MMOCameraController>();
         }
 
-        if (_inputEnabled &&
+        // If started directly in Map1 without an active Photon Fusion session,
+        // enable standalone local control and lock gameplay camera immediately.
+        bool isNetworkSpawned =
+            _fusionDriver != null &&
+            _fusionDriver.Object != null &&
+            _fusionDriver.Object.IsValid;
+
+        if (!isNetworkSpawned && allowStandaloneInput)
+        {
+            _inputEnabled = true;
+            if (_characterController != null)
+            {
+                _characterController.enabled = true;
+            }
+
+            if (_cameraController != null)
+            {
+                _cameraController.SetTarget(transform);
+                _cameraController.SetGameplayEnabled(true);
+            }
+        }
+        else if (_inputEnabled &&
             _cameraController != null)
         {
             _cameraController.SetTarget(transform);
@@ -384,6 +418,18 @@ public sealed class MMOPlayerController : MonoBehaviour
         else
         {
             _cachedSprintHeld = false;
+        }
+
+        // Standalone mode (when testing directly inside Map1 without an active Fusion NetworkObject):
+        // drive movement directly from Update.
+        bool drivenByFusion =
+            _fusionDriver != null &&
+            _fusionDriver.Object != null &&
+            _fusionDriver.Object.IsValid;
+
+        if (!drivenByFusion)
+        {
+            SimulateNetworked(Time.deltaTime);
         }
     }
 
@@ -927,6 +973,8 @@ public sealed class MMOPlayerController : MonoBehaviour
                 0f
             );
         }
+
+        OnAttackStepStarted?.Invoke(1);
     }
 
     // =========================================================
@@ -946,6 +994,9 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         _attackCommandTime = Time.time;
 
+        // Reset the sequence timer for Attack2 so a 2-hit combo never triggers the 5s safety timeout early.
+        _attackSequenceStartedAt = Time.time;
+
         _networkActionCode = 3;
 
         _networkActionSequence++;
@@ -960,6 +1011,8 @@ public sealed class MMOPlayerController : MonoBehaviour
         _currentMoveSpeed = 0f;
 
         _speedSmoothVelocity = 0f;
+
+        OnAttackStepStarted?.Invoke(2);
     }
 
     // =========================================================

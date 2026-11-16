@@ -87,6 +87,9 @@ public sealed class MMOCameraController : MonoBehaviour
     private bool _initialized;
     private Targetable _lockedTarget; // <--- จุดที่แก้ไข/เพิ่มเติม
     private float _lastTargetVisibleTime;
+    private float _shakeTimer;
+    private float _shakeDuration;
+    private float _shakeIntensity;
 
     public Transform Target => target;
     public Transform CameraTransform => transform;
@@ -276,9 +279,27 @@ public sealed class MMOCameraController : MonoBehaviour
             _currentDistance = Mathf.Lerp(_currentDistance, allowedDistance, returnLerp);
         }
 
+        Vector3 finalPosition = focusPoint + castDirection * _currentDistance;
+        if (_shakeTimer > 0f)
+        {
+            _shakeTimer -= deltaTime;
+            float decay = _shakeDuration > 0.001f ? Mathf.Clamp01(_shakeTimer / _shakeDuration) : 0f;
+            finalPosition += Random.insideUnitSphere * (_shakeIntensity * decay);
+        }
+
         transform.SetPositionAndRotation(
-            focusPoint + castDirection * _currentDistance,
+            finalPosition,
             cameraRotation);
+    }
+
+    /// <summary>
+    /// Triggers a short camera shake (e.g., on Critical Hit impact).
+    /// </summary>
+    public void TriggerImpactShake(float intensity = 0.14f, float duration = 0.14f)
+    {
+        _shakeIntensity = Mathf.Max(_shakeIntensity, intensity);
+        _shakeDuration = Mathf.Max(0.01f, duration);
+        _shakeTimer = _shakeDuration;
     }
 
     public void SetTarget(Transform newTarget)

@@ -1,0 +1,192 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &5689006105842233571
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_Name
+      value: Enemy_Monster
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 743927549188352026}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1974953392409807613}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1726108052776393660}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 2994956930962096984}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 5055086437025334615}
+  m_SourcePrefab: {fileID: 100100000, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+--- !u!1 &4769876298519285170 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+  m_PrefabInstance: {fileID: 5689006105842233571}
+  m_PrefabAsset: {fileID: 0}
+--- !u!95 &743927549188352026
+Animator:
+  serializedVersion: 7
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_Avatar: {fileID: 0}
+  m_Controller: {fileID: 22100000, guid: 0d43ba903bc4ecf4dbc88b8e2f9dbaeb, type: 2}
+  m_CullingMode: 0
+  m_UpdateMode: 0
+  m_ApplyRootMotion: 0
+  m_LinearVelocityBlending: 0
+  m_StabilizeFeet: 0
+  m_AnimatePhysics: 0
+  m_WarningMessage: 
+  m_HasTransformHierarchy: 1
+  m_AllowConstantClipSamplingOptimization: 1
+  m_KeepAnimatorStateOnDisable: 0
+  m_WriteDefaultValuesOnDisable: 0
+--- !u!136 &1974953392409807613
+CapsuleCollider:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_IsTrigger: 0
+  m_ProvidesContacts: 0
+  m_Enabled: 1
+  serializedVersion: 2
+  m_Radius: 0.48
+  m_Height: 2
+  m_Direction: 1
+  m_Center: {x: 0, y: 1, z: 0}
+--- !u!114 &1726108052776393660
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8192751503749146021bc1e3fd6b4c12, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Targetable
+  aimPoint: {fileID: 0}
+  fallbackAimOffset: {x: 0, y: 1.25, z: 0}
+  lockVisual: {fileID: 6105273478567910661}
+  lockColor: {r: 1, g: 0.8, b: 0.1, a: 1}
+--- !u!114 &2994956930962096984
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5aeda54a98e4ead4e83d5633f00e47e8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MonsterAnimatorBridge
+  config: {fileID: 11400000, guid: 704c87d4f1e7000439db617e525e6162, type: 2}
+  animator: {fileID: 0}
+  navMeshAgent: {fileID: 0}
+  autoReadNavMeshSpeed: 1
+  evadeSpeedMultiplier: 1.35
+--- !u!114 &5055086437025334615
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: effc0c5f8af241646aed9550172e7a81, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MMOMonsterAI
+  displayName: Ancient Warrior
+  level: 5
+  maxHealth: 1000
+  minAttackDamage: 45
+  maxAttackDamage: 70
+  monsterCritChance: 0.15
+  expReward: 250
+  aggroRadius: 7
+  territoryRadius: 13.5
+  patrolRadius: 3.5
+  showTerritoryRings: 1
+  patrolWalkSpeed: 1.5
+  chaseRunSpeed: 3.8
+  evadeRunSpeed: 5.2
+  attackRange: 2.35
+  attackCooldown: 2
+  attackHitDelay: 0.45
+  respawnDelay: 5.5
+--- !u!137 &6105273478567910661 stripped
+SkinnedMeshRenderer:
+  m_CorrespondingSourceObject: {fileID: 1894081440512372198, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+  m_PrefabInstance: {fileID: 5689006105842233571}
+  m_PrefabAsset: {fileID: 0}
