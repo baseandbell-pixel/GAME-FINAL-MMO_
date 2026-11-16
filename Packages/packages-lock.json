@@ -1,5 +1,15 @@
 {
   "dependencies": {
+    "com.anklebreaker.unity-mcp": {
+      "version": "https://github.com/AnkleBreaker-Studio/unity-mcp-plugin.git#v2.41.4",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {
+        "com.unity.ugui": "1.0.0",
+        "com.unity.test-framework": "1.1.33"
+      },
+      "hash": "cd3d12bb125111bef36d0d8eec84f824bde584b7"
+    },
     "com.unity.ai.navigation": {
       "version": "2.0.13",
       "depth": 0,
@@ -86,9 +96,30 @@
     },
     "com.unity.nuget.mono-cecil": {
       "version": "1.11.6",
-      "depth": 3,
+      "depth": 1,
       "source": "registry",
       "dependencies": {},
+      "url": "https://packages.unity.com"
+    },
+    "com.unity.nuget.newtonsoft-json": {
+      "version": "3.2.2",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {},
+      "url": "https://packages.unity.com"
+    },
+    "com.unity.pipeline": {
+      "version": "1.0.0",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.unity.test-framework": "1.1.33",
+        "com.unity.nuget.mono-cecil": "1.11.6",
+        "com.unity.modules.uielements": "1.0.0",
+        "com.unity.modules.jsonserialize": "1.0.0",
+        "com.unity.modules.screencapture": "1.0.0",
+        "com.unity.nuget.newtonsoft-json": "3.0.2"
+      },
       "url": "https://packages.unity.com"
     },
     "com.unity.render-pipelines.core": {
