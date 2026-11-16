@@ -2023,6 +2023,9 @@ MonoBehaviour:
   _StatPointsVIT: 0
   _StatPointsEND: 0
   _StatPointsAGI: 0
+  _NetworkGold: 0
+  _IsInSafeZone:
+    RawValue: 0
   _NetworkGearDamageBonus: 0
   _NetworkGearMaxHealthBonus: 0
   _NetworkGearMaxStaminaBonus: 0
