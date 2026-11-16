@@ -7,9 +7,11 @@ public class IdleVariationController : MonoBehaviour
     public float minIdleWait = 8f;
     public float maxIdleWait = 15f;
 
-    [Header("จำนวนท่าสุ่ม")]
-    [Range(1, 4)]
-    public int variationCount = 4;
+    [Header("จำนวนท่าสุ่ม (แยกมือเปล่า / ถือดาบ)")]
+    [Range(1, 5)]
+    public int unarmedVariationCount = 5;
+    [Range(1, 5)]
+    public int combatVariationCount = 4;
 
     [Header("Animator Parameters")]
     public string idleVariantParameter = "IdleVariant";
@@ -156,7 +158,8 @@ public class IdleVariationController : MonoBehaviour
 
     int GetNextVariant(bool combatMode)
     {
-        int count = Mathf.Clamp(variationCount, 1, 4);
+        int maxCount = combatMode ? combatVariationCount : unarmedVariationCount;
+        int count = Mathf.Clamp(maxCount, 1, 5);
 
         int last = combatMode
             ? lastCombatVariant
