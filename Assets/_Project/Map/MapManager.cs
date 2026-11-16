@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -8,22 +9,23 @@ public enum MarkerKind
     LocalPlayer,
     RemotePlayer,
     Enemy,
-    Loot
+    Loot,
+    Boss,
+    EnemyCamp,
+    LootChest,
+    Waypoint
 }
 
 public struct MapMarker
 {
     public Vector3 position;
     public MarkerKind kind;
+    public string label;
 }
 
 /// <summary>
-/// Owns the top-down map camera and gathers marker data. Cost control:
-///  - the camera is DISABLED and enabled for exactly one frame every refreshInterval seconds (default 10 Hz),
-///    rendering into a small RenderTexture with shadows and post-processing off;
-///  - markers are plain UI dots computed from the existing registries (PlayerCombat.All, EnemyNPC.All, WorldItem.All),
-///    no extra physics or per-marker cameras.
-/// M toggles the large world map. Add one MapManager to a scene; it builds its own camera and UI.
+/// Owns the top-down map camera, gathers world marker data (Players, Enemies, Boss, Camps, Loot Chests, Waypoint),
+/// and manages the Waypoint coordinate &amp; distance backend.
 /// </summary>
 public class MapManager : MonoBehaviour
 {
@@ -35,18 +37,30 @@ public class MapManager : MonoBehaviour
     [SerializeField] private float refreshInterval = 0.1f;
     [SerializeField] private Color backgroundColor = new Color(0.07f, 0.09f, 0.11f, 1f);
 
-    [Header("Ranges (world metres from the player to the map edge)")]
+    [Header("Ranges (world metres from the focus to the map edge)")]
     [Min(5f)] [SerializeField] private float minimapRadius = 30f;
-    [Min(10f)] [SerializeField] private float worldMapRadius = 80f;
+    [Min(10f)] [SerializeField] private float worldMapRadius = 52f;
+    [SerializeField] private Vector3 worldMapCenter = new Vector3(-2f, 0f, 4f);
+
+    [Header("Waypoint")]
+    [SerializeField] private float waypointAutoClearRadius = 2.5f;
 
     public bool IsWorldMapOpen { get; private set; }
     public RenderTexture MapTexture => _texture;
     public float CurrentRadius => IsWorldMapOpen ? worldMapRadius : minimapRadius;
+    public float MinimapRadius => minimapRadius;
+    public float WorldMapRadius => worldMapRadius;
+
+    // ---- Waypoint Backend ----
+    public bool HasActiveWaypoint { get; private set; }
+    public Vector3 ActiveWaypointPosition { get; private set; }
+    public event Action<bool, Vector3> WaypointChanged;
 
     private Camera _cam;
     private RenderTexture _texture;
     private float _nextRender;
     private Vector3 _focus;
+    private GameObject _worldWaypointBeacon;
 
     private void Awake()
     {
@@ -85,7 +99,7 @@ public class MapManager : MonoBehaviour
             urp.requiresDepthOption = CameraOverrideOption.Off;
         }
 
-        _cam.enabled = false;      // enabled one frame at a time in LateUpdate
+        _cam.enabled = false;
 
         gameObject.AddComponent<MinimapUI>();
         Debug.Log($"[MapManager] Ready (RT {textureSize}px, minimap {minimapRadius}m, world map {worldMapRadius}m, {1f / refreshInterval:0} Hz).");
@@ -101,42 +115,182 @@ public class MapManager : MonoBehaviour
     private void Update()
     {
         var kb = Keyboard.current;
-        if (kb == null) return;
-
-        if (kb.mKey.wasPressedThisFrame)
+        if (kb != null)
         {
-            Debug.Log("[MapManager] InputSystem Key.M received; toggling world map.");
-            ToggleWorldMap();
+            if (kb.mKey.wasPressedThisFrame)
+            {
+                Debug.Log("[MapManager] InputSystem Key.M received; toggling world map.");
+                if (!IsWorldMapOpen && InventoryUI.Instance != null && InventoryUI.Instance.IsOpen)
+                {
+                    InventoryUI.Instance.SwitchToWorldMapTab();
+                }
+                else
+                {
+                    ToggleWorldMap();
+                }
+            }
+            else if (IsWorldMapOpen && kb.escapeKey.wasPressedThisFrame)
+            {
+                SetWorldMapOpen(false);
+            }
         }
-        else if (IsWorldMapOpen && kb.escapeKey.wasPressedThisFrame) ToggleWorldMap();
+
+        if (HasActiveWaypoint && PlayerCombat.Local != null && PlayerCombat.Local.IsSpawned)
+        {
+            if (GetLocalPlayerDistanceToWaypoint() <= waypointAutoClearRadius)
+            {
+                Debug.Log("[MapManager] Reached active waypoint - clearing pin.");
+                ClearWaypoint();
+            }
+        }
     }
+
+    // ------------------------------------------------------------------ Waypoint API
+
+    /// <summary>Pins a world-space waypoint coordinate on the map and displays a 3D beacon.</summary>
+    public void SetWaypoint(Vector3 worldPos)
+    {
+        ActiveWaypointPosition = new Vector3(worldPos.x, 0f, worldPos.z);
+        HasActiveWaypoint = true;
+        UpdateWorldWaypointBeacon(true);
+        Debug.Log($"[MapManager] Waypoint pinned at {ActiveWaypointPosition} (distance={GetLocalPlayerDistanceToWaypoint():0.0}m).");
+        WaypointChanged?.Invoke(true, ActiveWaypointPosition);
+    }
+
+    /// <summary>
+    /// Converts a normalized click offset inside the map view (-1..+1 from map center) into a world coordinate and pins the waypoint.
+    /// </summary>
+    public void SetWaypointFromNormalizedMapClick(Vector2 normalizedOffsetFromCenter)
+    {
+        float r = CurrentRadius;
+        Vector3 worldPos = new Vector3(
+            _focus.x + Mathf.Clamp(normalizedOffsetFromCenter.x, -1f, 1f) * r,
+            0f,
+            _focus.z + Mathf.Clamp(normalizedOffsetFromCenter.y, -1f, 1f) * r);
+        SetWaypoint(worldPos);
+    }
+
+    /// <summary>Removes the active waypoint marker.</summary>
+    public void ClearWaypoint()
+    {
+        if (!HasActiveWaypoint) return;
+        HasActiveWaypoint = false;
+        ActiveWaypointPosition = Vector3.zero;
+        UpdateWorldWaypointBeacon(false);
+        Debug.Log("[MapManager] Waypoint cleared.");
+        WaypointChanged?.Invoke(false, Vector3.zero);
+    }
+
+    private void UpdateWorldWaypointBeacon(bool active)
+    {
+        if (!active)
+        {
+            if (_worldWaypointBeacon != null) _worldWaypointBeacon.SetActive(false);
+            return;
+        }
+
+        if (_worldWaypointBeacon == null)
+        {
+            _worldWaypointBeacon = new GameObject("WaypointBeacon3D");
+            var beam = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            beam.name = "Beam";
+            var col = beam.GetComponent<Collider>();
+            if (col != null) Destroy(col);
+            beam.transform.SetParent(_worldWaypointBeacon.transform, false);
+            beam.transform.localPosition = new Vector3(0f, 12f, 0f);
+            beam.transform.localScale = new Vector3(0.45f, 12f, 0.45f);
+            var r = beam.GetComponent<Renderer>();
+            Shader shader = Shader.Find("Sprites/Default");
+            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (r != null && shader != null)
+            {
+                var mat = new Material(shader);
+                mat.color = new Color(0.18f, 0.96f, 0.65f, 0.35f);
+                r.sharedMaterial = mat;
+            }
+        }
+
+        _worldWaypointBeacon.transform.position = ActiveWaypointPosition;
+        _worldWaypointBeacon.SetActive(true);
+    }
+
+    /// <summary>Calculates planar XZ distance in meters from any world position to the active waypoint.</summary>
+    public float GetDistanceToWaypoint(Vector3 fromWorldPos)
+    {
+        if (!HasActiveWaypoint) return 0f;
+        Vector3 a = new Vector3(fromWorldPos.x, 0f, fromWorldPos.z);
+        Vector3 b = new Vector3(ActiveWaypointPosition.x, 0f, ActiveWaypointPosition.z);
+        return Vector3.Distance(a, b);
+    }
+
+    /// <summary>Calculates planar XZ distance in meters from the local player to the active waypoint.</summary>
+    public float GetLocalPlayerDistanceToWaypoint()
+    {
+        if (!HasActiveWaypoint) return 0f;
+        var local = PlayerCombat.Local;
+        if (local == null || !local.IsSpawned) return Vector3.Distance(new Vector3(_focus.x, 0f, _focus.z), ActiveWaypointPosition);
+        return GetDistanceToWaypoint(local.transform.position);
+    }
+
+    // ------------------------------------------------------------------ Map Camera & Markers
 
     public void ToggleWorldMap()
     {
-        if (!IsWorldMapOpen && GameplayInput.IsBlocked)
+        SetWorldMapOpen(!IsWorldMapOpen);
+    }
+
+    public void SetWorldMapOpen(bool open)
+    {
+        if (open == IsWorldMapOpen) return;
+
+        if (open && GameplayInput.IsBlocked)
         {
             Debug.LogWarning("[MapManager] Another UI is open - world map not opened.");
             return;
         }
 
-        IsWorldMapOpen = !IsWorldMapOpen;
+        IsWorldMapOpen = open;
         if (IsWorldMapOpen) GameplayInput.PushBlocker("MapManager");
         else GameplayInput.PopBlocker("MapManager");
 
-        if (_cam != null) _cam.orthographicSize = CurrentRadius;
-        _nextRender = 0f;                       // refresh immediately
+        UpdateFocus();
+        if (_cam != null)
+        {
+            _cam.orthographicSize = CurrentRadius;
+            _cam.transform.position = new Vector3(_focus.x, cameraHeight, _focus.z);
+        }
+        _nextRender = 0f;
         Debug.Log($"[MapManager] World map {(IsWorldMapOpen ? "opened" : "closed")} (radius {CurrentRadius}m).");
+    }
+
+    /// <summary>Closes the World Map and opens the Character &amp; Upgrade window cleanly without freeing GameplayInput lock.</summary>
+    public void SwitchToCharacterTab()
+    {
+        SetWorldMapOpen(false);
+        if (InventoryUI.Instance != null)
+        {
+            InventoryUI.Instance.SetOpen(true);
+        }
+    }
+
+    private void UpdateFocus()
+    {
+        if (IsWorldMapOpen)
+        {
+            _focus = worldMapCenter;
+            return;
+        }
+        var local = PlayerCombat.Local;
+        if (local != null && local.IsSpawned) _focus = local.transform.position;
     }
 
     private void LateUpdate()
     {
         if (_cam == null) return;
 
-        // A camera that was enabled last frame has rendered by now: switch it off again.
         if (_cam.enabled) { _cam.enabled = false; return; }
 
-        var local = PlayerCombat.Local;
-        if (local != null && local.IsSpawned) _focus = local.transform.position;
+        UpdateFocus();
 
         if (Time.unscaledTime < _nextRender) return;
         _nextRender = Time.unscaledTime + refreshInterval;
@@ -146,7 +300,6 @@ public class MapManager : MonoBehaviour
         _cam.enabled = true;
     }
 
-    /// <summary>World position the map is centred on.</summary>
     public Vector3 Focus => _focus;
 
     /// <summary>Fills 'into' (cleared first) with every marker that should be visible right now.</summary>
@@ -161,7 +314,33 @@ public class MapManager : MonoBehaviour
             into.Add(new MapMarker
             {
                 position = p.transform.position,
-                kind = p == PlayerCombat.Local ? MarkerKind.LocalPlayer : MarkerKind.RemotePlayer
+                kind = p == PlayerCombat.Local ? MarkerKind.LocalPlayer : MarkerKind.RemotePlayer,
+                label = p == PlayerCombat.Local ? "You" : "Player"
+            });
+        }
+
+        if (SandboxWorldSpawner.Instance != null)
+        {
+            var camps = SandboxWorldSpawner.Instance.Camps;
+            for (int i = 0; i < camps.Count; i++)
+            {
+                var c = camps[i];
+                string shortName = $"Camp {c.CampId}";
+                into.Add(new MapMarker
+                {
+                    position = c.Center,
+                    kind = MarkerKind.EnemyCamp,
+                    label = c.IsCleared ? $"{shortName} ({c.GetFormattedRespawnTime()})" : shortName
+                });
+            }
+
+            into.Add(new MapMarker
+            {
+                position = SandboxWorldSpawner.Instance.BossArenaCenter,
+                kind = MarkerKind.Boss,
+                label = SandboxWorldSpawner.Instance.IsBossRespawning
+                    ? $"BOSS ({SandboxWorldSpawner.Instance.GetBossRespawnCountdownText().Replace("Boss respawns in ", "")})"
+                    : "BOSS"
             });
         }
 
@@ -169,14 +348,46 @@ public class MapManager : MonoBehaviour
         {
             var e = EnemyNPC.All[i];
             if (e == null || !e.IsAlive) continue;
-            into.Add(new MapMarker { position = e.transform.position, kind = MarkerKind.Enemy });
+            into.Add(new MapMarker
+            {
+                position = e.transform.position,
+                kind = e.IsBoss ? MarkerKind.Boss : MarkerKind.Enemy,
+                label = e.IsBoss ? "BOSS" : ""
+            });
+        }
+
+        for (int i = 0; i < LootChest.All.Count; i++)
+        {
+            var ch = LootChest.All[i];
+            if (ch == null || ch.IsOpened) continue;
+            into.Add(new MapMarker
+            {
+                position = ch.transform.position,
+                kind = MarkerKind.LootChest,
+                label = ch.IsBossChest ? "Boss Chest" : "Chest"
+            });
         }
 
         for (int i = 0; i < WorldItem.All.Count; i++)
         {
             var w = WorldItem.All[i];
             if (w == null || !w.IsSpawned || w.Claimed) continue;
-            into.Add(new MapMarker { position = w.transform.position, kind = MarkerKind.Loot });
+            into.Add(new MapMarker
+            {
+                position = w.transform.position,
+                kind = MarkerKind.Loot,
+                label = w.Data != null ? w.Data.displayName : "Loot"
+            });
+        }
+
+        if (HasActiveWaypoint)
+        {
+            into.Add(new MapMarker
+            {
+                position = ActiveWaypointPosition,
+                kind = MarkerKind.Waypoint,
+                label = $"Waypoint ({GetLocalPlayerDistanceToWaypoint():0}m)"
+            });
         }
     }
 }

@@ -3,11 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Per-player, client-side inventory. Only the peer that controls the player activates it (checked through
-/// PlayerCombat's authority flags), so remote proxies carry an inert component.
-///
-/// NOTE: inventory contents live on the owning client only (not networked, not persisted). Items cross the
-/// network exclusively as WorldItem pickups/drops. Persisting to GoogleAPI/backend is the next step.
+/// Per-player inventory and 4-slot equipment manager (Sword, Shield, Armor, Pants).
+/// Aggregates equipped gear stats and pushes them to PlayerCombat / PlayerCapsule for networked stat calculation.
 /// </summary>
 [RequireComponent(typeof(PlayerCombat))]
 public class InventoryManager : MonoBehaviour
@@ -21,24 +18,44 @@ public class InventoryManager : MonoBehaviour
 
     private readonly List<InventorySlot> _slots = new List<InventorySlot>();
     private PlayerCombat _combat;
+    private PlayerCapsule _capsule;
     private InventoryUI _ui;
     private bool _activated;
 
     public IReadOnlyList<InventorySlot> Slots => _slots;
     public int Capacity => capacity;
-    public int Experience { get; private set; }
+    public int Experience => _combat != null && _combat.IsSpawned ? _combat.NetworkExperience : _localExpFallback;
+    public int Level => _combat != null && _combat.IsSpawned ? _combat.NetworkLevel : 1;
+    public int UnspentStatPoints => _combat != null && _combat.IsSpawned ? _combat.NetworkUnspentStatPoints : 0;
+
+    // 4 Equippable Gear Slots: Sword (Weapon), Shield, Armor (Chestplate), Pants (Greaves)
     public string EquippedWeaponId { get; private set; }
-    public string EquippedEquipmentId { get; private set; }
+    public string EquippedShieldId { get; private set; }
+    public string EquippedArmorId { get; private set; }
+    public string EquippedPantsId { get; private set; }
+    public string EquippedEquipmentId => EquippedArmorId;
+
+    // Aggregated gear bonuses
+    public int GearDamageBonus { get; private set; }
+    public int GearMaxHealthBonus { get; private set; }
+    public int GearMaxStaminaBonus { get; private set; }
+    public int GearDefenseBonus { get; private set; }
+    public float GearMoveSpeedBonus { get; private set; }
+    public float GearCritChanceBonus { get; private set; }
+
     public WorldItem WorldItemPrefab => worldItemPrefab;
 
-    /// <summary>Raised whenever slots, equipment or experience change.</summary>
+    /// <summary>Raised whenever slots, equipment, level, or experience change.</summary>
     public event Action Changed;
+
+    private int _localExpFallback;
 
     // ------------------------------------------------------------------ lifecycle
 
     private void Awake()
     {
         _combat = GetComponent<PlayerCombat>();
+        _capsule = GetComponent<PlayerCapsule>();
         for (int i = 0; i < capacity; i++) _slots.Add(new InventorySlot());
     }
 
@@ -49,14 +66,21 @@ public class InventoryManager : MonoBehaviour
 
         _activated = true;
         Local = this;
+        _combat.ProgressionChanged += OnProgressionChanged;
         Debug.Log($"[Inventory] Activated for local player '{name}' ({capacity} slots).");
         if (createUi) _ui = InventoryUI.Create(this);
     }
 
     private void OnDestroy()
     {
+        if (_combat != null) _combat.ProgressionChanged -= OnProgressionChanged;
         if (Local == this) Local = null;
         if (_ui != null) Destroy(_ui.gameObject);
+    }
+
+    private void OnProgressionChanged()
+    {
+        Changed?.Invoke();
     }
 
     // ------------------------------------------------------------------ add / remove
@@ -112,7 +136,7 @@ public class InventoryManager : MonoBehaviour
 
         int added = quantity - remaining;
         if (added > 0)
-            Debug.Log($"[Inventory] +{added}x {item.displayName} [{item.tier}]" + (remaining > 0 ? $" ({remaining} did not fit)" : ""));
+            Debug.Log($"[Inventory] +{added}x {item.displayName} [{ItemData.GetTierDisplayName(item.tier)}]" + (remaining > 0 ? $" ({remaining} did not fit)" : ""));
         else
             Debug.LogWarning($"[Inventory] Inventory full: could not add {item.displayName}.");
 
@@ -153,7 +177,7 @@ public class InventoryManager : MonoBehaviour
         return n;
     }
 
-    // ------------------------------------------------------------------ use / equip / drop
+    // ------------------------------------------------------------------ use / equip / unequip / drop
 
     public bool UseItem(int slotIndex)
     {
@@ -208,33 +232,96 @@ public class InventoryManager : MonoBehaviour
         return true;
     }
 
-    /// <summary>Toggles equip state for a Weapon/Equipment slot.</summary>
+    /// <summary>Toggles or swaps equip state for a Sword, Shield, Armor, or Pants slot by inventory slot index.</summary>
     public bool EquipItem(int slotIndex)
     {
         var s = GetSlot(slotIndex);
         if (s == null || s.IsEmpty) return false;
+        return EquipItem(s.item);
+    }
 
-        var item = s.item;
-        if (!item.IsEquippable)
+    /// <summary>Equips or unequips the given ItemData into its matching EquipmentSlotType (Sword, Shield, Armor, Pants).</summary>
+    public bool EquipItem(ItemData item)
+    {
+        if (item == null || !item.IsEquippable)
         {
-            Debug.LogWarning($"[Inventory] {item.displayName} cannot be equipped.");
+            if (item != null) Debug.LogWarning($"[Inventory] {item.displayName} cannot be equipped.");
             return false;
         }
 
-        if (item.type == ItemType.Weapon)
-            EquippedWeaponId = EquippedWeaponId == item.itemId ? null : item.itemId;
-        else
-            EquippedEquipmentId = EquippedEquipmentId == item.itemId ? null : item.itemId;
+        EquipmentSlotType slotType = item.GetEquipmentSlot();
+        switch (slotType)
+        {
+            case EquipmentSlotType.Sword:
+                EquippedWeaponId = EquippedWeaponId == item.itemId ? null : item.itemId;
+                break;
+            case EquipmentSlotType.Shield:
+                EquippedShieldId = EquippedShieldId == item.itemId ? null : item.itemId;
+                break;
+            case EquipmentSlotType.Armor:
+                EquippedArmorId = EquippedArmorId == item.itemId ? null : item.itemId;
+                break;
+            case EquipmentSlotType.Pants:
+                EquippedPantsId = EquippedPantsId == item.itemId ? null : item.itemId;
+                break;
+            default:
+                return false;
+        }
 
-        Debug.Log($"[Inventory] {(IsEquipped(item) ? "Equipped" : "Unequipped")} {item.displayName}.");
+        Debug.Log($"[Inventory] {(IsEquipped(item) ? "Equipped" : "Unequipped")} {item.displayName} in slot {slotType}.");
         RecomputeBonus();
         Changed?.Invoke();
         return true;
     }
 
+    /// <summary>Cleanly unequips whatever item is currently in the specified gear slot.</summary>
+    public bool UnequipSlot(EquipmentSlotType slotType)
+    {
+        bool changed = false;
+        switch (slotType)
+        {
+            case EquipmentSlotType.Sword:
+                if (EquippedWeaponId != null) { EquippedWeaponId = null; changed = true; }
+                break;
+            case EquipmentSlotType.Shield:
+                if (EquippedShieldId != null) { EquippedShieldId = null; changed = true; }
+                break;
+            case EquipmentSlotType.Armor:
+                if (EquippedArmorId != null) { EquippedArmorId = null; changed = true; }
+                break;
+            case EquipmentSlotType.Pants:
+                if (EquippedPantsId != null) { EquippedPantsId = null; changed = true; }
+                break;
+        }
+
+        if (changed)
+        {
+            Debug.Log($"[Inventory] Unequipped slot {slotType}.");
+            RecomputeBonus();
+            Changed?.Invoke();
+        }
+        return changed;
+    }
+
+    public ItemData GetEquippedItem(EquipmentSlotType slotType)
+    {
+        return slotType switch
+        {
+            EquipmentSlotType.Sword => ItemRegistry.Get(EquippedWeaponId),
+            EquipmentSlotType.Shield => ItemRegistry.Get(EquippedShieldId),
+            EquipmentSlotType.Armor => ItemRegistry.Get(EquippedArmorId),
+            EquipmentSlotType.Pants => ItemRegistry.Get(EquippedPantsId),
+            _ => null
+        };
+    }
+
     public bool IsEquipped(ItemData item)
     {
-        return item != null && (item.itemId == EquippedWeaponId || item.itemId == EquippedEquipmentId);
+        if (item == null || string.IsNullOrEmpty(item.itemId)) return false;
+        return item.itemId == EquippedWeaponId ||
+               item.itemId == EquippedShieldId ||
+               item.itemId == EquippedArmorId ||
+               item.itemId == EquippedPantsId;
     }
 
     /// <summary>Drops the whole stack in front of the player as a networked WorldItem.</summary>
@@ -277,8 +364,12 @@ public class InventoryManager : MonoBehaviour
     public void AddExperience(int amount)
     {
         if (amount <= 0) return;
-        Experience += amount;
-        Debug.Log($"[Inventory] +{amount} EXP (total {Experience}).");
+        _localExpFallback += amount;
+        if (_combat != null && _combat.IsSpawned)
+        {
+            _combat.AddExperience(amount);
+        }
+        Debug.Log($"[Inventory] +{amount} EXP (Level {Level}, EXP {Experience}).");
         Changed?.Invoke();
     }
 
@@ -290,11 +381,12 @@ public class InventoryManager : MonoBehaviour
         return _slots[index];
     }
 
-    /// <summary>Unequips anything that no longer exists in the inventory.</summary>
     private void ValidateEquipment()
     {
-        if (EquippedWeaponId != null && !Has(EquippedWeaponId)) { Debug.Log("[Inventory] Equipped weapon left the inventory - unequipped."); EquippedWeaponId = null; }
-        if (EquippedEquipmentId != null && !Has(EquippedEquipmentId)) { Debug.Log("[Inventory] Equipped gear left the inventory - unequipped."); EquippedEquipmentId = null; }
+        if (EquippedWeaponId != null && !Has(EquippedWeaponId)) { EquippedWeaponId = null; }
+        if (EquippedShieldId != null && !Has(EquippedShieldId)) { EquippedShieldId = null; }
+        if (EquippedArmorId != null && !Has(EquippedArmorId)) { EquippedArmorId = null; }
+        if (EquippedPantsId != null && !Has(EquippedPantsId)) { EquippedPantsId = null; }
         RecomputeBonus();
     }
 
@@ -304,15 +396,46 @@ public class InventoryManager : MonoBehaviour
         return false;
     }
 
-    private void RecomputeBonus()
+    public void RecomputeBonus()
     {
-        int bonus = 0;
-        var w = ItemRegistry.Get(EquippedWeaponId);
-        var e = ItemRegistry.Get(EquippedEquipmentId);
-        if (w != null) bonus += w.damageBonus;
-        if (e != null) bonus += e.damageBonus;
+        int dmg = 0, hp = 0, sta = 0, def = 0;
+        float spd = 0f, crit = 0f;
 
-        if (_combat != null) _combat.WeaponDamageBonus = bonus;
-        Debug.Log($"[Inventory] Gear damage bonus is now +{bonus}.");
+        AccumulateItemStats(ItemRegistry.Get(EquippedWeaponId), ref dmg, ref hp, ref sta, ref def, ref spd, ref crit);
+        AccumulateItemStats(ItemRegistry.Get(EquippedShieldId), ref dmg, ref hp, ref sta, ref def, ref spd, ref crit);
+        AccumulateItemStats(ItemRegistry.Get(EquippedArmorId), ref dmg, ref hp, ref sta, ref def, ref spd, ref crit);
+        AccumulateItemStats(ItemRegistry.Get(EquippedPantsId), ref dmg, ref hp, ref sta, ref def, ref spd, ref crit);
+
+        GearDamageBonus = dmg;
+        GearMaxHealthBonus = hp;
+        GearMaxStaminaBonus = sta;
+        GearDefenseBonus = def;
+        GearMoveSpeedBonus = spd;
+        GearCritChanceBonus = crit;
+
+        if (_combat != null)
+        {
+            _combat.ApplyEquipmentBonuses(dmg, hp, sta, def, spd, crit);
+        }
+
+        Debug.Log($"[Inventory] Recomputed Gear Bonuses -> ATK +{dmg}, HP +{hp}, STA +{sta}, DEF +{def}, SPD +{spd:0.00}, CRIT +{crit * 100f:0}%.");
+    }
+
+    private static void AccumulateItemStats(
+        ItemData item,
+        ref int dmg,
+        ref int hp,
+        ref int sta,
+        ref int def,
+        ref float spd,
+        ref float crit)
+    {
+        if (item == null) return;
+        dmg += item.damageBonus;
+        hp += item.maxHealthBonus;
+        sta += item.maxStaminaBonus;
+        def += item.defenseBonus;
+        spd += item.moveSpeedBonus;
+        crit += item.critChanceBonus;
     }
 }

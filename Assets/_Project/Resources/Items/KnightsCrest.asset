@@ -13,17 +13,23 @@ MonoBehaviour:
   m_Name: KnightsCrest
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: knights_crest
-  displayName: Knight's Crest
-  description: An ancient emblem of valor. Grants +16 Attack Damage when equipped.
-  type: 2
+  displayName: Royal Knight's Armor
+  description: Epic plate armor of the Royal Guard. +95 Max HP, +25 Max Stamina,
+    +10 Attack, +6 Defense.
+  type: 6
   tier: 2
   icon: {fileID: 0}
-  worldColor: {r: 0.74, g: 0.3, b: 0.98, a: 1}
+  worldColor: {r: 0.75, g: 0.32, b: 0.98, a: 1}
   stackable: 0
   maxStack: 1
   healAmount: 0
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 16
+  damageBonus: 10
+  maxHealthBonus: 95
+  maxStaminaBonus: 25
+  defenseBonus: 6
+  moveSpeedBonus: 0
+  critChanceBonus: 0
   droppable: 1

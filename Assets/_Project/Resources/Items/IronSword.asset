@@ -13,13 +13,22 @@ MonoBehaviour:
   m_Name: IronSword
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: iron_sword
-  displayName: Iron Sword
-  description: A sturdy blade. +10 damage when equipped.
+  displayName: Iron GreatSword
+  description: Standard-issue iron greatsword. +10 Attack Damage.
   type: 1
+  tier: 0
   icon: {fileID: 0}
-  worldColor: {r: 1, g: 0.55, b: 0.1, a: 1}
+  worldColor: {r: 0.82, g: 0.85, b: 0.88, a: 1}
   stackable: 0
   maxStack: 1
   healAmount: 0
+  staminaRestoreAmount: 0
+  attackBuffBonus: 0
+  attackBuffDuration: 0
   damageBonus: 10
+  maxHealthBonus: 0
+  maxStaminaBonus: 0
+  defenseBonus: 0
+  moveSpeedBonus: 0
+  critChanceBonus: 0
   droppable: 1

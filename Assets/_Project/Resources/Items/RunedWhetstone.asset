@@ -13,17 +13,22 @@ MonoBehaviour:
   m_Name: RunedWhetstone
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: runed_whetstone
-  displayName: Runed Whetstone
-  description: Arcane-etched whetstone. Grants +20 Weapon Damage when equipped.
+  displayName: Runed GreatSword
+  description: Arcane-etched greatsword. +24 Attack Damage, +10% Crit.
   type: 1
   tier: 2
   icon: {fileID: 0}
-  worldColor: {r: 0.82, g: 0.25, b: 0.95, a: 1}
+  worldColor: {r: 0.78, g: 0.28, b: 0.96, a: 1}
   stackable: 0
   maxStack: 1
   healAmount: 0
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 20
+  damageBonus: 24
+  maxHealthBonus: 0
+  maxStaminaBonus: 0
+  defenseBonus: 0
+  moveSpeedBonus: 0
+  critChanceBonus: 0.1
   droppable: 1

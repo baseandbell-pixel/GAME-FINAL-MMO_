@@ -26,4 +26,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
+  maxHealthBonus: 0
+  maxStaminaBonus: 0
+  defenseBonus: 0
+  moveSpeedBonus: 0
+  critChanceBonus: 0
   droppable: 1

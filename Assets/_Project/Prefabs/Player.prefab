@@ -513,14 +513,14 @@ RectTransform:
   m_GameObject: {fileID: 1757416691327172075}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_LocalScale: {x: 0.75, y: 0.75, z: 0.75}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 8571293347966388967}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 1.8}
+  m_AnchoredPosition: {x: 0, y: 1.42}
   m_SizeDelta: {x: 5, y: 1}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!23 &2854409971336043779
@@ -619,8 +619,8 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 8
-  m_fontSizeBase: 8
+  m_fontSize: 3
+  m_fontSizeBase: 3
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
@@ -1945,6 +1945,9 @@ MonoBehaviour:
   moveXParameter: MoveX
   moveYParameter: MoveY
   sprintParameter: IsSprinting
+  overheadNameFontSize: 3
+  overheadNameScale: 0.75
+  overheadNameOffset: {x: 0, y: 1.42, z: 0}
   moveSpeed: 6
   runSpeed: 1.6
   acceleration: 40
@@ -2004,7 +2007,7 @@ MonoBehaviour:
   maxHitDistance: 5
   maxHealth: 100
   respawnDelaySeconds: 3
-  showDebugHud: 1
+  showDebugHud: 0
   onAttackStarted:
     m_PersistentCalls:
       m_Calls: []
@@ -2013,6 +2016,19 @@ MonoBehaviour:
   _IsBlocking:
     RawValue: 0
   _ComboStep: 1
+  _NetworkLevel: 1
+  _NetworkExperience: 0
+  _NetworkUnspentStatPoints: 0
+  _StatPointsSTR: 0
+  _StatPointsVIT: 0
+  _StatPointsEND: 0
+  _StatPointsAGI: 0
+  _NetworkGearDamageBonus: 0
+  _NetworkGearMaxHealthBonus: 0
+  _NetworkGearMaxStaminaBonus: 0
+  _NetworkGearDefenseBonus: 0
+  _NetworkGearMoveSpeedBonus: 0
+  _NetworkGearCritBonus: 0
 --- !u!114 &1183383062373467830
 MonoBehaviour:
   m_ObjectHideFlags: 0

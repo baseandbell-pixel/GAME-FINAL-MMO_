@@ -13,10 +13,10 @@ MonoBehaviour:
   m_Name: DragonSlayerRelic
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: dragon_slayer_relic
-  displayName: Dragon-Slayer Relic
-  description: Legendary talisman forged in dragonfire. Grants +30 Attack Damage
-    when equipped.
-  type: 2
+  displayName: Dragon-Slayer Chestplate
+  description: Legendary dragonfire plate armor. +160 Max HP, +40 Max Stamina, +20
+    Attack, +10 Defense.
+  type: 6
   tier: 3
   icon: {fileID: 0}
   worldColor: {r: 1, g: 0.78, b: 0.12, a: 1}
@@ -26,5 +26,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 30
+  damageBonus: 20
+  maxHealthBonus: 160
+  maxStaminaBonus: 40
+  defenseBonus: 10
+  moveSpeedBonus: 0
+  critChanceBonus: 0
   droppable: 1

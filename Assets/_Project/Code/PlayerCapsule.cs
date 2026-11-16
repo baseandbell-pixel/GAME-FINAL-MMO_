@@ -17,6 +17,11 @@ public class PlayerCapsule : NetworkBehaviour
     [SerializeField] private string moveYParameter = "MoveY";
     [SerializeField] private string sprintParameter = "IsSprinting";
 
+    [Header("Overhead nameplate")]
+    [SerializeField] private float overheadNameFontSize = 3.0f;
+    [SerializeField] private float overheadNameScale = 0.75f;
+    [SerializeField] private Vector3 overheadNameOffset = new Vector3(0f, 1.42f, 0f);
+
     public float moveSpeed = 6f;
     public float runSpeed = 1.6f;
     public float acceleration = 40f;
@@ -55,9 +60,21 @@ public class PlayerCapsule : NetworkBehaviour
     /// <summary>True while a dodge dash overrides normal movement.</summary>
     public bool IsDashing => Time.time < _dashUntil;
 
-    /// <summary>Current networked stamina (mirrored from PlayerCombat).</summary>
+    // ---- Mirrored Stamina, Level & Stat Allocation API ----
     public float CurrentStamina => _combat != null ? _combat.NetworkStamina : 100f;
     public float MaxStamina => _combat != null ? _combat.MaxStamina : 100f;
+    public int Level => _combat != null && _combat.IsSpawned ? _combat.NetworkLevel : 1;
+    public int Experience => _combat != null && _combat.IsSpawned ? _combat.NetworkExperience : 0;
+    public int ExpToNextLevel => _combat != null ? _combat.ExpToNextLevel : 100;
+    public int UnspentStatPoints => _combat != null && _combat.IsSpawned ? _combat.NetworkUnspentStatPoints : 0;
+    public int StatSTR => _combat != null && _combat.IsSpawned ? _combat.StatPointsSTR : 0;
+    public int StatVIT => _combat != null && _combat.IsSpawned ? _combat.StatPointsVIT : 0;
+    public int StatEND => _combat != null && _combat.IsSpawned ? _combat.StatPointsEND : 0;
+    public int StatAGI => _combat != null && _combat.IsSpawned ? _combat.StatPointsAGI : 0;
+    public float TotalMoveSpeed => moveSpeed + (_combat != null ? _combat.TotalMoveSpeedBonus : 0f);
+
+    public void AddExperience(int amount) => _combat?.AddExperience(amount);
+    public bool AllocateStatPoint(PlayerStatType stat) => _combat != null && _combat.AllocateStatPoint(stat);
 
     Rigidbody rb;
     PlayerCombat _combat;
@@ -73,8 +90,9 @@ public class PlayerCapsule : NetworkBehaviour
     bool isOwner;
     MaterialPropertyBlock _mpb;
     Transform _labelTransform;
-    Vector3 _labelOffset = new Vector3(0f, 2f, 0f);
+    Vector3 _labelOffset = new Vector3(0f, 1.42f, 0f);
     int _appliedAvatar = -1;
+    int _appliedLevel = -1;
     string _appliedNick;
 
     void Awake()
@@ -83,22 +101,17 @@ public class PlayerCapsule : NetworkBehaviour
         collider = GetComponent<CapsuleCollider>();
         _combat = GetComponent<PlayerCombat>();
 
-        // Legacy fallback only: with a character model the first child renderer could be the model or a sword.
         if (bodyRenderer == null && characterVisual == null) bodyRenderer = GetComponentInChildren<Renderer>();
         if (animator == null) animator = characterVisual != null ? characterVisual.GetComponentInChildren<Animator>() : GetComponentInChildren<Animator>();
         _animationDriver = GetComponent<PlayerAnimationDriver>();
 
-        // With a model, the primitive capsule mesh is only a collider placeholder.
         if (characterVisual != null && bodyRenderer != null) bodyRenderer.enabled = false;
 
-        // A capsule that tips over is not what we want; rotation is done by script.
         rb.freezeRotation = true;
     }
 
     public override void Spawned()
     {
-        // Shared Mode grants the spawning peer State Authority. Some connection paths also expose
-        // Input Authority, so accept either; never make movement depend on master-client status.
         isOwner = IsLocallyControlled;
 
         if (isOwner)
@@ -149,7 +162,6 @@ public class PlayerCapsule : NetworkBehaviour
         sprintHeld = value.isPressed;
     }
 
-    /// <summary>Sets movement and sprint input directly (used by Input messages or automated tests).</summary>
     public void SetMoveInput(Vector2 move, bool sprint = false, float holdSeconds = 0.25f)
     {
         moveInput = Vector2.ClampMagnitude(move, 1f);
@@ -157,7 +169,6 @@ public class PlayerCapsule : NetworkBehaviour
         _overrideMoveUntil = holdSeconds > 0f ? Time.time + holdSeconds : 0f;
     }
 
-    /// <summary>True only for the copy this peer may drive. In Shared Mode this is the locally spawned object.</summary>
     public bool IsLocallyControlled => Object != null && (Object.HasInputAuthority || (Runner != null && Runner.GameMode == GameMode.Shared && Object.HasStateAuthority));
 
     private void Update()
@@ -195,7 +206,6 @@ public class PlayerCapsule : NetworkBehaviour
         var wanted = MovementLocked ? Vector3.zero : DesiredMoveWorld();
         bool isMoving = wanted.sqrMagnitude > 0.001f;
 
-        // Stamina gate for sprinting: sprinting requires available stamina and drains it over time.
         bool canSprint = _combat == null || (_combat.CanSprint && !_combat.IsBlocking);
         bool effectiveSprint = sprintHeld && isMoving && canSprint;
         if (effectiveSprint && _combat != null)
@@ -203,7 +213,8 @@ public class PlayerCapsule : NetworkBehaviour
             effectiveSprint = _combat.ConsumeSprintStamina(Time.fixedDeltaTime);
         }
 
-        float speed = moveSpeed * (effectiveSprint ? 4f : 1f) * Mathf.Max(0f, SpeedMultiplier);
+        float basePlusGearSpeed = TotalMoveSpeed;
+        float speed = basePlusGearSpeed * (effectiveSprint ? 2.65f : 1f) * Mathf.Max(0f, SpeedMultiplier);
         Vector3 wantedVelocity = wanted * speed;
         Vector3 velocity = rb.linearVelocity;
         Vector3 horizontal = new Vector3(velocity.x, 0f, velocity.z);
@@ -232,8 +243,6 @@ public class PlayerCapsule : NetworkBehaviour
             rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
         }
 
-        // State Authority writes the replicated values; in Shared Mode this is always the peer
-        // that owns this avatar. Proxies consume them in Render for synchronized locomotion.
         if (Object.HasStateAuthority)
         {
             Vector3 refSpace = (MovementReference != null && strafeInActionCamera && FacingTarget == null)
@@ -244,7 +253,6 @@ public class PlayerCapsule : NetworkBehaviour
         }
     }
 
-    /// <summary>Owner only: the current WASD/stick direction in world space (camera-relative when a MovementReference is set), magnitude 0..1.</summary>
     public Vector3 DesiredMoveWorld()
     {
         var wanted = new Vector3(moveInput.x, 0f, moveInput.y);
@@ -253,7 +261,6 @@ public class PlayerCapsule : NetworkBehaviour
         return wanted;
     }
 
-    /// <summary>Owner only: overrides horizontal velocity for <paramref name="duration"/> seconds (dodge roll).</summary>
     public void StartDash(Vector3 worldDirection, float distance, float duration)
     {
         if (!isOwner || duration <= 0f) return;
@@ -263,7 +270,6 @@ public class PlayerCapsule : NetworkBehaviour
         _dashUntil = Time.time + duration;
     }
 
-    /// <summary>Death hide/show. A rigged character stays visible (it plays its death animation); the legacy capsule is hidden.</summary>
     public void SetBodyVisible(bool visible)
     {
         if (characterVisual != null) return;
@@ -288,8 +294,10 @@ public class PlayerCapsule : NetworkBehaviour
     {
         if (nameLabel == null) return;
 
+        nameLabel.fontSize = overheadNameFontSize;
         _labelTransform = nameLabel.transform;
-        _labelOffset = _labelTransform.localPosition;
+        _labelTransform.localScale = Vector3.one * overheadNameScale;
+        _labelOffset = overheadNameOffset;
         if (detachNameLabel) _labelTransform.SetParent(null, worldPositionStays: true);
     }
 
@@ -326,10 +334,13 @@ public class PlayerCapsule : NetworkBehaviour
         }
 
         string nick = Nick.Value;
-        if (nameLabel != null && (force || _appliedNick != nick))
+        int lvl = Level;
+        if (nameLabel != null && (force || _appliedNick != nick || _appliedLevel != lvl))
         {
             _appliedNick = nick;
-            nameLabel.text = Object.HasStateAuthority ? $"{nick} (You)" : nick;
+            _appliedLevel = lvl;
+            nameLabel.fontSize = overheadNameFontSize;
+            nameLabel.text = Object.HasStateAuthority ? $"Lv.{lvl} {nick}" : $"Lv.{lvl} {nick}";
         }
     }
 }

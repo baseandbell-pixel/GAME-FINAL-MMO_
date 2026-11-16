@@ -5,9 +5,9 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// Physical Treasure Chest spawned at the center of an enemy camp once all enemies in the camp are defeated.
-/// Players can approach within <see cref="interactRadius"/> and press [E] to open the chest and roll
-/// the Tiered Loot Table (50% Common, 30% Rare, 15% Epic, 5% Legendary), spawning networked <see cref="WorldItem"/> drops.
+/// Physical Treasure Chest spawned at the center of an enemy camp or Boss Arena once defeated.
+/// Supports both standard 4-Tier Camp Chests (50% Normal, 30% Rare, 15% Epic, 5% Legendary)
+/// and Boss Reward Chests (30% Rare, 45% Epic, 25% Legendary).
 /// </summary>
 [DisallowMultipleComponent]
 public class LootChest : MonoBehaviour
@@ -16,11 +16,13 @@ public class LootChest : MonoBehaviour
 
     [Header("Chest configuration")]
     [SerializeField] private int campId = 1;
+    [SerializeField] private bool isBossChest;
     [SerializeField] private float interactRadius = 3.2f;
     [SerializeField] private int dropsPerChest = 2;
     [SerializeField] private WorldItem worldItemPrefab;
 
     public int CampId => campId;
+    public bool IsBossChest => isBossChest;
     public bool IsOpened { get; private set; }
     public IReadOnlyList<ItemData> DroppedItems => _droppedItems;
 
@@ -37,21 +39,35 @@ public class LootChest : MonoBehaviour
     private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
     private static readonly int ColorId = Shader.PropertyToID("_Color");
 
-    public static LootChest SpawnAt(Vector3 position, int campId, WorldItem itemPrefab)
+    public static LootChest SpawnAt(Vector3 position, int campId, WorldItem itemPrefab, bool isBossChest = false, bool replaceExisting = true)
     {
-        for (int i = 0; i < All.Count; i++)
+        for (int i = All.Count - 1; i >= 0; i--)
         {
             if (All[i] != null && All[i].campId == campId)
-                return All[i];
+            {
+                if (replaceExisting)
+                {
+                    Destroy(All[i].gameObject);
+                    All.RemoveAt(i);
+                }
+                else
+                {
+                    return All[i];
+                }
+            }
         }
 
-        var go = new GameObject($"CampTreasureChest_{campId}");
+        var go = new GameObject(isBossChest ? $"BossTreasureChest_{campId}" : $"CampTreasureChest_{campId}");
         go.transform.position = new Vector3(position.x, 0f, position.z);
+        if (isBossChest) go.transform.localScale = new Vector3(1.35f, 1.35f, 1.35f);
+
         var chest = go.AddComponent<LootChest>();
         chest.campId = campId;
+        chest.isBossChest = isBossChest;
+        chest.dropsPerChest = isBossChest ? 3 : 2;
         chest.worldItemPrefab = itemPrefab;
         chest.BuildVisuals();
-        Debug.Log($"[LootChest] Spawned Camp {campId} Reward Treasure Chest at {go.transform.position}.");
+        Debug.Log($"[LootChest] Spawned {(isBossChest ? "BOSS " : "")}Camp {campId} Reward Treasure Chest at {go.transform.position}.");
         return chest;
     }
 
@@ -74,15 +90,14 @@ public class LootChest : MonoBehaviour
     {
         if (_lidPivot != null) return;
 
-        // Solid physical collider on root so players & NPCs do not walk through the chest
         var box = GetComponent<BoxCollider>();
         if (box == null) box = gameObject.AddComponent<BoxCollider>();
         box.center = new Vector3(0f, 0.45f, 0f);
         box.size = new Vector3(1.25f, 0.9f, 0.85f);
         box.isTrigger = false;
 
-        Color woodDark = new Color(0.36f, 0.21f, 0.09f, 1f);
-        Color woodLid = new Color(0.44f, 0.26f, 0.11f, 1f);
+        Color woodDark = isBossChest ? new Color(0.45f, 0.08f, 0.12f, 1f) : new Color(0.36f, 0.21f, 0.09f, 1f);
+        Color woodLid = isBossChest ? new Color(0.58f, 0.10f, 0.16f, 1f) : new Color(0.44f, 0.26f, 0.11f, 1f);
         Color goldTrim = new Color(0.95f, 0.76f, 0.18f, 1f);
         Color glowGold = new Color(1.0f, 0.85f, 0.25f, 1f);
 
@@ -113,7 +128,8 @@ public class LootChest : MonoBehaviour
 
         // Ground Beacon Ring
         var ring = CreatePart(transform, "ChestBeacon", PrimitiveType.Cylinder,
-            new Vector3(0f, 0.02f, 0f), new Vector3(1.85f, 0.015f, 1.85f), new Color(1f, 0.82f, 0.22f, 1f));
+            new Vector3(0f, 0.02f, 0f), new Vector3(1.85f, 0.015f, 1.85f),
+            isBossChest ? new Color(1f, 0.45f, 0.12f, 1f) : new Color(1f, 0.82f, 0.22f, 1f));
         _beaconRing = ring.transform;
 
         // Warm Golden Light
@@ -122,17 +138,19 @@ public class LootChest : MonoBehaviour
         lightGo.transform.localPosition = new Vector3(0f, 1.15f, 0f);
         _chestLight = lightGo.AddComponent<Light>();
         _chestLight.type = LightType.Point;
-        _chestLight.color = new Color(1f, 0.82f, 0.28f);
-        _chestLight.intensity = 2.5f;
-        _chestLight.range = 5.5f;
+        _chestLight.color = isBossChest ? new Color(1f, 0.55f, 0.18f) : new Color(1f, 0.82f, 0.28f);
+        _chestLight.intensity = isBossChest ? 3.4f : 2.5f;
+        _chestLight.range = isBossChest ? 7.0f : 5.5f;
 
         // World-space 3D Label
         var labelGo = new GameObject("ChestLabel");
         labelGo.transform.SetParent(transform, false);
         labelGo.transform.localPosition = new Vector3(0f, 1.55f, 0f);
         _worldLabel = labelGo.AddComponent<TextMeshPro>();
-        _worldLabel.text = "TREASURE CHEST\n<size=75%>[E] Open Reward</size>";
-        _worldLabel.fontSize = 3.0f;
+        _worldLabel.text = isBossChest
+            ? "BOSS TREASURE CHEST\n<size=75%>[E] Open High-Tier Loot</size>"
+            : "TREASURE CHEST\n<size=75%>[E] Open Reward</size>";
+        _worldLabel.fontSize = 2.6f;
         _worldLabel.alignment = TextAlignmentOptions.Center;
         _worldLabel.color = new Color(1f, 0.86f, 0.24f, 1f);
         _worldLabel.textWrappingMode = TextWrappingModes.NoWrap;
@@ -163,21 +181,18 @@ public class LootChest : MonoBehaviour
 
     private void Update()
     {
-        // Animate lid opening
         if (IsOpened && _lidPivot != null && _lidAngle > -68f)
         {
             _lidAngle = Mathf.MoveTowards(_lidAngle, -68f, 180f * Time.deltaTime);
             _lidPivot.localRotation = Quaternion.Euler(_lidAngle, 0f, 0f);
         }
 
-        // Gentle pulse on ground ring while unopened
         if (_beaconRing != null && !IsOpened)
         {
             float pulse = 1.80f + Mathf.Sin(Time.time * 3.2f) * 0.12f;
             _beaconRing.localScale = new Vector3(pulse, 0.015f, pulse);
         }
 
-        // Billboard world label
         var cam = Camera.main;
         if (cam != null && _worldLabel != null)
         {
@@ -210,8 +225,7 @@ public class LootChest : MonoBehaviour
     }
 
     /// <summary>
-    /// Opens the chest, rolls the Tiered Loot Table (50% Common, 30% Rare, 15% Epic, 5% Legendary),
-    /// and spawns WorldItem drops around the chest.
+    /// Opens the chest, rolls the 4-Tier Loot Table, and spawns WorldItem drops around the chest.
     /// </summary>
     public List<ItemData> OpenChest(PlayerCombat opener = null)
     {
@@ -225,19 +239,21 @@ public class LootChest : MonoBehaviour
             worldItemPrefab = InventoryManager.Local.WorldItemPrefab;
 
         _droppedItems.Clear();
-        ItemTier highestTier = ItemTier.Common;
+        ItemTier highestTier = ItemTier.Normal;
         int count = Mathf.Max(1, dropsPerChest);
 
         for (int i = 0; i < count; i++)
         {
-            ItemData rolled = ItemRegistry.RollTieredLoot(out ItemTier rolledTier);
+            ItemData rolled = isBossChest
+                ? ItemRegistry.RollBossLoot(out ItemTier rolledTier)
+                : ItemRegistry.RollTieredLoot(out rolledTier);
             if (rolled == null) continue;
 
             _droppedItems.Add(rolled);
             if (rolledTier > highestTier) highestTier = rolledTier;
 
             float angle = (i / (float)count) * Mathf.PI * 2f + 0.4f;
-            Vector3 dropOffset = new Vector3(Mathf.Cos(angle) * 1.35f, 0.45f, Mathf.Sin(angle) * 1.35f);
+            Vector3 dropOffset = new Vector3(Mathf.Cos(angle) * 1.45f, 0.45f, Mathf.Sin(angle) * 1.45f);
             Vector3 dropPos = transform.position + dropOffset;
 
             WorldItem spawnedDrop = null;
@@ -248,18 +264,17 @@ public class LootChest : MonoBehaviour
 
             if (spawnedDrop == null && InventoryManager.Local != null)
             {
-                // Fallback if WorldItem prefab wasn't wired: add directly to local inventory
                 InventoryManager.Local.AddItem(rolled, 1);
             }
 
-            Debug.Log($"[LootChest] Camp {campId} Chest rolled [{rolledTier}] -> {rolled.displayName} (id={rolled.itemId}, worldDrop={(spawnedDrop != null)}).");
+            Debug.Log($"[LootChest] {(isBossChest ? "Boss " : "")}Camp {campId} Chest rolled [{ItemData.GetTierDisplayName(rolledTier)}] -> {rolled.displayName} (id={rolled.itemId}).");
         }
 
         if (_beaconRing != null) _beaconRing.gameObject.SetActive(false);
         if (_chestLight != null) _chestLight.color = ItemData.GetTierColor(highestTier);
 
         string summary = _droppedItems.Count > 0
-            ? string.Join("  +  ", _droppedItems.ConvertAll(d => $"[{d.tier}] {d.displayName}"))
+            ? string.Join("  +  ", _droppedItems.ConvertAll(d => $"[{ItemData.GetTierDisplayName(d.tier)}] {d.displayName}"))
             : "Empty";
 
         if (_worldLabel != null)
@@ -268,7 +283,7 @@ public class LootChest : MonoBehaviour
             _worldLabel.color = ItemData.GetTierColor(highestTier);
         }
 
-        _bannerText = $"CAMP CLEAR REWARD:  {summary}";
+        _bannerText = $"{(isBossChest ? "BOSS" : "CAMP")} CLEAR REWARD:  {summary}";
         _bannerColor = ItemData.GetTierColor(highestTier);
         _bannerUntil = Time.unscaledTime + 4.0f;
 
@@ -293,14 +308,14 @@ public class LootChest : MonoBehaviour
                 fontSize = 15,
                 fontStyle = FontStyle.Bold
             };
-            GUI.Label(rect, "[E] Open Camp Reward Chest (Tiered Loot)", style);
+            GUI.Label(rect, isBossChest ? "[E] Open Boss Reward Chest (High-Tier Loot)" : "[E] Open Camp Reward Chest (Tiered Loot)", style);
             GUI.color = prev;
         }
 
         if (Time.unscaledTime < _bannerUntil && !string.IsNullOrEmpty(_bannerText))
         {
             float alpha = Mathf.Clamp01(_bannerUntil - Time.unscaledTime);
-            var rect = new Rect(Screen.width * 0.5f - 260f, 82f, 520f, 36f);
+            var rect = new Rect(Screen.width * 0.5f - 280f, 82f, 560f, 36f);
             var prev = GUI.color;
             GUI.color = new Color(0.05f, 0.05f, 0.08f, 0.85f * alpha);
             GUI.DrawTexture(rect, Texture2D.whiteTexture);

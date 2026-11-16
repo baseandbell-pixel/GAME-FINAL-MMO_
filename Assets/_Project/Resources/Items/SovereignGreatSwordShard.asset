@@ -13,18 +13,22 @@ MonoBehaviour:
   m_Name: SovereignGreatSwordShard
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: sovereign_greatsword_shard
-  displayName: Sovereign GreatSword Shard
-  description: Mythic shard of the Sovereign Blade. Grants +35 Weapon Damage when
-    equipped.
+  displayName: Sovereign GreatSword
+  description: Mythic blade of the Sovereign King. +38 Attack Damage, +20% Crit.
   type: 1
   tier: 3
   icon: {fileID: 0}
-  worldColor: {r: 1, g: 0.62, b: 0.08, a: 1}
+  worldColor: {r: 1, g: 0.65, b: 0.1, a: 1}
   stackable: 0
   maxStack: 1
   healAmount: 0
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 35
+  damageBonus: 38
+  maxHealthBonus: 0
+  maxStaminaBonus: 0
+  defenseBonus: 0
+  moveSpeedBonus: 0
+  critChanceBonus: 0.2
   droppable: 1

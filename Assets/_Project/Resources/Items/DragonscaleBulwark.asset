@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a50f769c8171e1d4ab1fb508bf69d8be, type: 3}
+  m_Name: DragonscaleBulwark
+  m_EditorClassIdentifier: Assembly-CSharp::ItemData
+  itemId: dragonscale_bulwark
+  displayName: Dragonscale Bulwark Shield
+  description: Forged from ancient dragon scales. +130 Max HP, +50 Max Stamina, +10
+    Attack, +10 Defense.
+  type: 5
+  tier: 3
+  icon: {fileID: 0}
+  worldColor: {r: 1, g: 0.74, b: 0.14, a: 1}
+  stackable: 0
+  maxStack: 1
+  healAmount: 0
+  staminaRestoreAmount: 0
+  attackBuffBonus: 0
+  attackBuffDuration: 0
+  damageBonus: 10
+  maxHealthBonus: 130
+  maxStaminaBonus: 50
+  defenseBonus: 10
+  moveSpeedBonus: 0
+  critChanceBonus: 0
+  droppable: 1

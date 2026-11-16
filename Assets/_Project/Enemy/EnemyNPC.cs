@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using Fusion;
-using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -26,16 +25,16 @@ public class LootEntry
 }
 
 /// <summary>
-/// Hostile NPC for Photon Fusion SHARED MODE.
-/// Includes rebalanced combat stats, obstacle-avoidance steering + depenetration (preventing walking through walls/pillars),
-/// and world-space floating damage / combo critical hit popups.
+/// Hostile NPC &amp; Solo Arena Boss for Photon Fusion SHARED MODE.
+/// Supports both standard camp enemies (4 per camp, 90s camp respawn) and the Arena Boss
+/// (higher HP, Heavy Slam every 3rd attack, 300 EXP reward, and 240s respawn cooldown).
 /// </summary>
 [RequireComponent(typeof(Collider))]
 public class EnemyNPC : NetworkBehaviour, ILockTarget
 {
     public static readonly List<EnemyNPC> All = new List<EnemyNPC>();
 
-    // ---- stats (rebalanced for 4-enemy camp encounters) ----
+    // ---- stats (rebalanced for 4-enemy camp encounters & Boss overrides) ----
     [Header("Combat stats")]
     public int MaxHealth = 120;
     public int AttackDamage = 6;
@@ -43,16 +42,16 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public float AttackRange = 2.4f;
 
     [Header("AI")]
-    [Min(1f)] [SerializeField] private float aggroRadius = 10f;
+    [Min(1f)] [SerializeField] private float aggroRadius = 6.8f;
     [Tooltip("If the chased player gets this far from the NPC's home, it gives up and returns.")]
-    [Min(2f)] [SerializeField] private float leashRadius = 25f;
-    [SerializeField] private float patrolRadius = 5f;
+    [Min(2f)] [SerializeField] private float leashRadius = 22f;
+    [SerializeField] private float patrolRadius = 3.5f;
     [SerializeField] private Vector2 idleWaitRange = new Vector2(1.5f, 4f);
     [SerializeField] private float patrolSpeed = 1.4f;
     [SerializeField] private float chaseSpeed = 2.8f;
     [SerializeField] private float returnSpeed = 3.8f;
     [SerializeField] private float turnSpeed = 10f;
-    [Min(0f)] [SerializeField] private float despawnDelayAfterDeath = 4f;
+    [Min(0f)] [SerializeField] private float despawnDelayAfterDeath = 2.5f;
 
     [Header("Obstacle navigation")]
     [SerializeField] private float obstacleCheckDistance = 2.4f;
@@ -60,8 +59,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     [SerializeField] private float allySeparationRadius = 1.35f;
 
     [Header("Damage validation (authority side)")]
-    [SerializeField] private int maxDamagePerHit = 120;
-    [SerializeField] private float maxHitDistance = 6f;
+    [SerializeField] private int maxDamagePerHit = 250;
+    [SerializeField] private float maxHitDistance = 6.5f;
     [SerializeField] private float minSecondsBetweenHitsPerPlayer = 0.18f;
 
     [Header("Rewards")]
@@ -86,6 +85,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     [Networked] public Vector3 HomePosition { get; set; }
     /// <summary>Spawner-assigned group identifier. NPCs with the same id assist each other.</summary>
     [Networked] public int CampId { get; set; }
+    /// <summary>True when this NPC is the dedicated Arena Boss.</summary>
+    [Networked, OnChangedRender(nameof(OnBossFlagChanged))]
+    public NetworkBool IsBoss { get; set; }
 
     // ---- public API ----
     public bool IsSpawned { get; private set; }
@@ -94,16 +96,22 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public float AggroRadius => aggroRadius;
     public float ChaseSpeed => chaseSpeed;
     public float PatrolSpeed => patrolSpeed;
+    public int ExperienceReward => experienceReward;
+    public int CurrentAttackDamage => IsBoss && (_bossAttackCounter % 3 == 0)
+        ? Mathf.RoundToInt(AttackDamage * 1.5f)
+        : AttackDamage;
 
     // ILockTarget
     public Transform LockPoint => _lockPoint != null ? _lockPoint : transform;
     public bool IsLockable => IsAlive;
-    public string LockName => name;
+    public string LockName => IsBoss ? $"[BOSS] Sovereign Golem" : name;
 
     // ---- private ----
     private Transform _lockPoint;
+    private GameObject _bossCrownRoot;
     private MaterialPropertyBlock _mpb;
     private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+    private static readonly int ColorId = Shader.PropertyToID("_Color");
     private static readonly int HitTrigger = Animator.StringToHash("Hit");
     private static readonly int AttackTrigger = Animator.StringToHash("Attack");
     private static readonly int DieTrigger = Animator.StringToHash("Die");
@@ -114,6 +122,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private bool _hasPatrolPoint;
     private Vector3 _patrolPoint;
     private bool _flashing;
+    private bool _bossConfigured;
+    private int _bossAttackCounter;
     private int _avoidSign;
     private float _avoidSignUntil;
     private static readonly Collider[] s_overlapBuffer = new Collider[24];
@@ -140,13 +150,15 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         IsSpawned = true;
         if (!All.Contains(this)) All.Add(this);
 
+        if (IsBoss) ApplyBossConfiguration();
+
         if (Object.HasStateAuthority)
         {
             CurrentHealth = MaxHealth;
             HomePosition = transform.position;
             State = NpcState.Idle;
             TargetId = default;
-            Debug.Log($"[EnemyNPC] {name} spawned with authority. HP={CurrentHealth}/{MaxHealth}, dmg={AttackDamage}, chaseSpeed={chaseSpeed}, home={HomePosition}.");
+            Debug.Log($"[EnemyNPC] {name} (Boss={IsBoss}, Camp={CampId}) spawned with authority. HP={CurrentHealth}/{MaxHealth}, dmg={AttackDamage}, EXP={experienceReward}, home={HomePosition}.");
         }
         else
         {
@@ -154,6 +166,76 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
 
         RefreshVisuals();
+    }
+
+    private void OnBossFlagChanged()
+    {
+        if (IsSpawned && IsBoss)
+        {
+            ApplyBossConfiguration();
+            RefreshVisuals();
+        }
+    }
+
+    public void ApplyBossConfiguration()
+    {
+        if (_bossConfigured) return;
+        _bossConfigured = true;
+
+        gameObject.name = "Boss_SovereignGolem";
+        MaxHealth = 600;
+        AttackDamage = 14;
+        AttackCooldown = 1.9f;
+        AttackRange = 3.2f;
+        aggroRadius = 11.0f;
+        leashRadius = 20.0f;
+        patrolRadius = 4.0f;
+        chaseSpeed = 3.1f;
+        returnSpeed = 4.2f;
+        experienceReward = 300;
+        maxDamagePerHit = 300;
+        maxHitDistance = 7.5f;
+
+        transform.localScale = new Vector3(2.15f, 2.25f, 2.15f);
+        if (_lockPoint != null) _lockPoint.localPosition = new Vector3(0f, 0.85f, 0f);
+
+        // Build distinct Boss Crown & Shoulder Pauldron primitives on the capsule placeholder
+        if (_bossCrownRoot == null)
+        {
+            _bossCrownRoot = new GameObject("BossVisualCrown");
+            _bossCrownRoot.transform.SetParent(transform, false);
+            _bossCrownRoot.transform.localPosition = Vector3.zero;
+
+            Color gold = new Color(1.0f, 0.78f, 0.14f, 1f);
+            Color darkCrimson = new Color(0.35f, 0.04f, 0.08f, 1f);
+
+            CreateBossPart(_bossCrownRoot.transform, "CrownRing", PrimitiveType.Cylinder,
+                new Vector3(0f, 1.05f, 0f), new Vector3(0.68f, 0.08f, 0.68f), gold);
+            CreateBossPart(_bossCrownRoot.transform, "ShoulderLeft", PrimitiveType.Cube,
+                new Vector3(-0.55f, 0.42f, 0f), new Vector3(0.38f, 0.28f, 0.48f), darkCrimson);
+            CreateBossPart(_bossCrownRoot.transform, "ShoulderRight", PrimitiveType.Cube,
+                new Vector3(0.55f, 0.42f, 0f), new Vector3(0.38f, 0.28f, 0.48f), darkCrimson);
+        }
+    }
+
+    private static void CreateBossPart(Transform parent, string partName, PrimitiveType type, Vector3 localPos, Vector3 localScale, Color color)
+    {
+        var part = GameObject.CreatePrimitive(type);
+        part.name = partName;
+        var col = part.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        part.transform.SetParent(parent, false);
+        part.transform.localPosition = localPos;
+        part.transform.localScale = localScale;
+        var r = part.GetComponent<Renderer>();
+        if (r != null)
+        {
+            var mpb = new MaterialPropertyBlock();
+            r.GetPropertyBlock(mpb);
+            mpb.SetColor(BaseColorId, color);
+            mpb.SetColor(ColorId, color);
+            r.SetPropertyBlock(mpb);
+        }
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
@@ -250,8 +332,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (Time.time >= _nextAttackTime)
         {
             _nextAttackTime = Time.time + AttackCooldown;
-            Debug.Log($"[EnemyNPC] {name} attacks {target.name} (dmg {AttackDamage}, cooldown {AttackCooldown}s).");
-            RPC_PlayAttackFx();
+            _bossAttackCounter++;
+            bool heavySlam = IsBoss && (_bossAttackCounter % 3 == 0);
+            Debug.Log($"[EnemyNPC] {name} attacks {target.name} (dmg {CurrentAttackDamage}{(heavySlam ? " HEAVY SLAM!" : "")}, cooldown {AttackCooldown}s).");
+            RPC_PlayAttackFx(heavySlam);
             target.RPC_ReceiveNpcDamage(Object.Id);
         }
     }
@@ -298,7 +382,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void BroadcastCampAggro(PlayerCombat target)
     {
-        if (target == null || !target.IsSpawned || CampId <= 0) return;
+        if (target == null || !target.IsSpawned || CampId <= 0 || IsBoss) return;
 
         int alerted = 0;
         for (int i = 0; i < All.Count; i++)
@@ -318,16 +402,11 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (State == NpcState.Returning || State == NpcState.Dead) return;
 
         PlayerCombat target = FindPlayerByNetworkId(targetId);
-        if (target == null || target.IsDead)
-        {
-            Debug.LogWarning($"[EnemyNPC] {name} ignored camp aggro: target {targetId} was unavailable.");
-            return;
-        }
+        if (target == null || target.IsDead) return;
 
         SetTarget(target);
         if (State == NpcState.Idle || State == NpcState.Patrol)
             ChangeState(NpcState.Chasing, "camp ally aggro");
-        Debug.Log($"[EnemyNPC] {name} joined camp {CampId} aggro on {target.name}.");
     }
 
     private void BeginReturn(string reason)
@@ -372,7 +451,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     // ------------------------------------------------------------------ obstacle-aware steering & collision
 
-    /// <summary>Moves on the XZ plane while steering around static obstacles and resolving collisions.</summary>
     private float MoveTowards(Vector3 destination, float speed, float dt)
     {
         Vector3 pos = transform.position;
@@ -384,7 +462,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         Vector3 desiredDir = delta / dist;
         Vector3 steeredDir = ComputeObstacleAvoidanceDir(pos, desiredDir, Mathf.Min(dist, obstacleCheckDistance));
 
-        // Soft separation from fellow camp enemies so they fan out instead of stacking
         Vector3 separation = ComputeAllySeparation(pos);
         Vector3 finalDir = steeredDir + separation * 0.55f;
         finalDir.y = 0f;
@@ -396,7 +473,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         float step = Mathf.Min(speed * dt, dist);
         Vector3 nextPos = pos + finalDir * step;
 
-        // Hard collision resolution against obstacles so enemies never clip or walk through walls/pillars
         ResolveObstaclePenetration(ref nextPos);
         nextPos.y = pos.y;
 
@@ -412,7 +488,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             return desiredDir;
         }
 
-        // Choose a consistent flank side around the obstacle
         if (Time.time > _avoidSignUntil || _avoidSign == 0)
         {
             Vector3 tangentRight = new Vector3(desiredDir.z, 0f, -desiredDir.x);
@@ -520,7 +595,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (BodyCollider == null) return false;
 
         Vector3 checkCenter = new Vector3(candidatePos.x, 1.0f, candidatePos.z);
-        int count = Physics.OverlapSphereNonAlloc(checkCenter, 1.2f, s_overlapBuffer, ~0, QueryTriggerInteraction.Ignore);
+        int count = Physics.OverlapSphereNonAlloc(checkCenter, 1.4f, s_overlapBuffer, ~0, QueryTriggerInteraction.Ignore);
         bool pushed = false;
 
         for (int i = 0; i < count; i++)
@@ -551,7 +626,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (col.GetComponentInParent<EnemyNPC>() != null) return false;
         if (col.GetComponentInParent<PlayerCombat>() != null) return false;
 
-        // Ignore flat floor/ground colliders whose top surface is at or below ankle height
         Bounds b = col.bounds;
         if (b.max.y <= 0.25f) return false;
         return true;
@@ -577,14 +651,12 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     // ------------------------------------------------------------------ damage in
 
-    /// <summary>Backward-compatible damage RPC (non-crit).</summary>
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_TakeDamage(int damage, RpcInfo info = default)
     {
         ApplyIncomingDamage(damage, isCrit: false, comboStep: 1, info);
     }
 
-    /// <summary>Damage RPC carrying Combo &amp; Critical Hit flag for synced floating combat text.</summary>
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_TakeDamageWithCrit(int damage, NetworkBool isCrit, int comboStep, RpcInfo info = default)
     {
@@ -602,25 +674,24 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             Debug.LogWarning($"[EnemyNPC] {name}: damage from {info.Source} rejected (no player object for that peer).");
             return;
         }
-        if (attacker.IsDead) { Debug.LogWarning($"[EnemyNPC] {name}: damage rejected, attacker is dead."); return; }
+        if (attacker.IsDead) return;
 
         float dist = PlanarDistance(transform.position, attacker.transform.position);
-        if (dist > maxHitDistance)
+        float limit = IsBoss ? maxHitDistance + 1.5f : maxHitDistance;
+        if (dist > limit)
         {
-            Debug.LogWarning($"[EnemyNPC] {name}: damage rejected, attacker {dist:0.0}m away (max {maxHitDistance}).");
+            Debug.LogWarning($"[EnemyNPC] {name}: damage rejected, attacker {dist:0.0}m away (max {limit}).");
             return;
         }
 
         float now = Time.time;
         if (_lastDamageTime.TryGetValue(info.Source, out float last) && now - last < minSecondsBetweenHitsPerPlayer)
         {
-            Debug.LogWarning($"[EnemyNPC] {name}: damage rejected, {info.Source} hitting too fast.");
             return;
         }
         _lastDamageTime[info.Source] = now;
 
         int applied = Mathf.Clamp(damage, 1, maxDamagePerHit);
-        if (applied != damage) Debug.LogWarning($"[EnemyNPC] {name}: damage {damage} clamped to {applied}.");
 
         int before = CurrentHealth;
         CurrentHealth = Mathf.Max(0, before - applied);
@@ -634,15 +705,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             return;
         }
 
-        if (State == NpcState.Returning)
-        {
-            Debug.Log($"[EnemyNPC] {name} is returning home and ignores the hit.");
-            return;
-        }
+        if (State == NpcState.Returning) return;
         if (!TargetId.IsValid)
         {
             SetTarget(attacker);
-            Debug.Log($"[EnemyNPC] {name} aggro: attacked by {attacker.name}.");
         }
         if (State == NpcState.Idle || State == NpcState.Patrol)
         {
@@ -672,12 +738,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void SpawnLoot()
     {
-        if (lootTable == null || lootTable.Length == 0) return;
-        if (lootPrefab == null)
-        {
-            Debug.LogWarning($"[EnemyNPC] {name} has a loot table but no lootPrefab assigned - no drops.");
-            return;
-        }
+        if (lootTable == null || lootTable.Length == 0 || lootPrefab == null) return;
 
         foreach (var entry in lootTable)
         {
@@ -688,8 +749,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             Vector2 o = UnityEngine.Random.insideUnitCircle * 1.2f;
             Vector3 pos = new Vector3(transform.position.x + o.x, 0.4f, transform.position.z + o.y);
 
-            var drop = WorldItem.Spawn(Runner, lootPrefab, pos, entry.item, qty);
-            Debug.Log($"[EnemyNPC] {name} dropped {qty}x {entry.item.displayName} ({(drop != null ? "spawned" : "SPAWN FAILED")}).");
+            WorldItem.Spawn(Runner, lootPrefab, pos, entry.item, qty);
         }
     }
 
@@ -702,30 +762,59 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         onHit?.Invoke();
         if (!_flashing && gameObject.activeInHierarchy) StartCoroutine(FlashRoutine());
 
-        // Spawn 3D World-Space Floating Damage / CRIT! Number on every peer
         FloatingDamagePopup.Spawn(LockPoint != null ? LockPoint.position : transform.position + Vector3.up * 1.4f, damage, isCrit, comboStep);
-
-        // Notify local HUD
         CombatHud.NotifyEnemyDamaged(this, damage, attacker, isCrit, comboStep);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_PlayAttackFx()
+    public void RPC_PlayAttackFx(NetworkBool isHeavySlam = default)
     {
         if (animator != null) animator.SetTrigger(AttackTrigger);
+        if (isHeavySlam && gameObject.activeInHierarchy)
+        {
+            StartCoroutine(BossSlamShockwaveRoutine());
+        }
+    }
+
+    private IEnumerator BossSlamShockwaveRoutine()
+    {
+        var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        ring.name = "BossShockwave";
+        var col = ring.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        ring.transform.position = new Vector3(transform.position.x, 0.08f, transform.position.z);
+        var r = ring.GetComponent<Renderer>();
+        if (r != null)
+        {
+            var mpb = new MaterialPropertyBlock();
+            r.GetPropertyBlock(mpb);
+            mpb.SetColor(BaseColorId, new Color(1f, 0.35f, 0.1f, 0.8f));
+            mpb.SetColor(ColorId, new Color(1f, 0.35f, 0.1f, 0.8f));
+            r.SetPropertyBlock(mpb);
+        }
+
+        float elapsed = 0f;
+        while (elapsed < 0.35f)
+        {
+            elapsed += Time.deltaTime;
+            float s = Mathf.Lerp(1.0f, 6.5f, elapsed / 0.35f);
+            if (ring != null) ring.transform.localScale = new Vector3(s, 0.03f, s);
+            yield return null;
+        }
+        if (ring != null) Destroy(ring);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_Died(PlayerRef killer, int exp)
     {
-        Debug.Log($"[EnemyNPC] {name} died (killer {killer}).");
+        Debug.Log($"[EnemyNPC] {name} died (killer {killer}, exp={exp}).");
         if (animator != null) animator.SetTrigger(DieTrigger);
         onDeath?.Invoke();
 
         if (Runner != null && Runner.LocalPlayer == killer)
         {
             if (InventoryManager.Local != null) InventoryManager.Local.AddExperience(exp);
-            else Debug.LogWarning("[EnemyNPC] Killer has no local InventoryManager - experience not granted.");
+            else if (PlayerCombat.Local != null) PlayerCombat.Local.AddExperience(exp);
         }
     }
 
@@ -752,13 +841,27 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (_flashing) return;
 
         Color c;
-        switch (State)
+        if (IsBoss)
         {
-            case NpcState.Chasing: c = new Color(1f, 0.15f, 0.1f); break;
-            case NpcState.Attacking: c = new Color(1f, 0.5f, 0f); break;
-            case NpcState.Returning: c = new Color(0.85f, 0.85f, 0.2f); break;
-            case NpcState.Dead: c = new Color(0.25f, 0.25f, 0.25f); break;
-            default: c = new Color(0.6f, 0.2f, 0.2f); break;
+            switch (State)
+            {
+                case NpcState.Chasing: c = new Color(0.88f, 0.08f, 0.22f); break;
+                case NpcState.Attacking: c = new Color(1.0f, 0.38f, 0.05f); break;
+                case NpcState.Returning: c = new Color(0.95f, 0.78f, 0.15f); break;
+                case NpcState.Dead: c = new Color(0.22f, 0.18f, 0.20f); break;
+                default: c = new Color(0.52f, 0.08f, 0.18f); break;
+            }
+        }
+        else
+        {
+            switch (State)
+            {
+                case NpcState.Chasing: c = new Color(1f, 0.15f, 0.1f); break;
+                case NpcState.Attacking: c = new Color(1f, 0.5f, 0f); break;
+                case NpcState.Returning: c = new Color(0.85f, 0.85f, 0.2f); break;
+                case NpcState.Dead: c = new Color(0.25f, 0.25f, 0.25f); break;
+                default: c = new Color(0.6f, 0.2f, 0.2f); break;
+            }
         }
         SetColor(c);
     }
@@ -775,25 +878,27 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void OnGUI()
     {
-        if (!IsSpawned || Event.current.type != EventType.Repaint) return;
+        if (!IsSpawned || GameplayInput.IsBlocked || Event.current.type != EventType.Repaint) return;
         var cam = Camera.main;
         if (cam == null) return;
 
-        Vector3 world = transform.position + Vector3.up * 1.6f;
+        float heightOffset = IsBoss ? 2.85f : 1.6f;
+        Vector3 world = transform.position + Vector3.up * heightOffset;
         Vector3 sp = cam.WorldToScreenPoint(world);
-        if (sp.z <= 0f || sp.z > 35f) return;
+        if (sp.z <= 0f || sp.z > 45f) return;
 
         float y = Screen.height - sp.y;
-        const float w = 70f;
+        float w = IsBoss ? 120f : 70f;
         float frac = MaxHealth > 0 ? Mathf.Clamp01(CurrentHealth / (float)MaxHealth) : 0f;
 
         var prev = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, 0.7f);
-        GUI.DrawTexture(new Rect(sp.x - w * 0.5f - 1f, y - 1f, w + 2f, 8f), Texture2D.whiteTexture);
-        GUI.color = Color.Lerp(Color.red, Color.green, frac);
-        GUI.DrawTexture(new Rect(sp.x - w * 0.5f, y, w * frac, 6f), Texture2D.whiteTexture);
+        GUI.color = new Color(0f, 0f, 0f, 0.75f);
+        GUI.DrawTexture(new Rect(sp.x - w * 0.5f - 1f, y - 1f, w + 2f, IsBoss ? 11f : 8f), Texture2D.whiteTexture);
+        GUI.color = IsBoss ? Color.Lerp(new Color(0.8f, 0.1f, 0.2f), new Color(1f, 0.75f, 0.15f), frac) : Color.Lerp(Color.red, Color.green, frac);
+        GUI.DrawTexture(new Rect(sp.x - w * 0.5f, y, w * frac, IsBoss ? 9f : 6f), Texture2D.whiteTexture);
         GUI.color = prev;
-        GUI.Label(new Rect(sp.x - 60f, y - 20f, 120f, 20f), $"{name}  {State}");
+        string label = IsBoss ? $"[BOSS] Sovereign Golem ({CurrentHealth}/{MaxHealth})" : $"{name}  {State}";
+        GUI.Label(new Rect(sp.x - 95f, y - 20f, 190f, 20f), label);
     }
 
     private void OnDrawGizmosSelected()

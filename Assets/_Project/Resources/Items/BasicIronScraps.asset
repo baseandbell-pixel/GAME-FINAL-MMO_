@@ -14,11 +14,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: basic_iron_scraps
   displayName: Basic Iron Scraps
-  description: Common salvaged iron fragments from enemy camps.
+  description: Normal salvaged iron fragments from enemy camps.
   type: 4
   tier: 0
   icon: {fileID: 0}
-  worldColor: {r: 0.72, g: 0.76, b: 0.8, a: 1}
+  worldColor: {r: 0.75, g: 0.78, b: 0.82, a: 1}
   stackable: 1
   maxStack: 20
   healAmount: 0
@@ -26,4 +26,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
+  maxHealthBonus: 0
+  maxStaminaBonus: 0
+  defenseBonus: 0
+  moveSpeedBonus: 0
+  critChanceBonus: 0
   droppable: 1
