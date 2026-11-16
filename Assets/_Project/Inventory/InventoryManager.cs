@@ -3,11 +3,41 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Per-player, client-side inventory. Only the peer that controls the player activates it (checked through
-/// PlayerCombat's authority flags), so remote proxies carry an inert component.
-///
-/// NOTE: inventory contents live on the owning client only (not networked, not persisted). Items cross the
-/// network exclusively as WorldItem pickups/drops. Persisting to GoogleAPI/backend is the next step.
+/// Tracks an exact equipped item instance and its +Enhancement Level for each gear slot.
+/// </summary>
+[Serializable]
+public class EquippedGearRef
+{
+    public EquipmentSlotType slotType;
+    public string instanceId;
+    public string itemId;
+    public int enhancementLevel;
+
+    public bool IsEmpty => string.IsNullOrEmpty(itemId);
+
+    public ItemData ResolveItem() => string.IsNullOrEmpty(itemId) ? null : ItemRegistry.Get(itemId);
+
+    public void Clear()
+    {
+        instanceId = null;
+        itemId = null;
+        enhancementLevel = 0;
+    }
+}
+
+public struct EnhanceResult
+{
+    public bool attempted;
+    public bool succeeded;
+    public int previousLevel;
+    public int newLevel;
+    public int goldSpent;
+    public string message;
+}
+
+/// <summary>
+/// Per-player inventory &amp; 4-slot equipment manager with exact slotIndex operations,
+/// Drag-and-Drop reordering, Equipment Enhancement (+0 to +10), and PlayerSaveManager hooks.
 /// </summary>
 [RequireComponent(typeof(PlayerCombat))]
 public class InventoryManager : MonoBehaviour
@@ -20,18 +50,46 @@ public class InventoryManager : MonoBehaviour
     [SerializeField] private bool createUi = true;
 
     private readonly List<InventorySlot> _slots = new List<InventorySlot>();
+    private readonly Dictionary<EquipmentSlotType, EquippedGearRef> _equipped = new Dictionary<EquipmentSlotType, EquippedGearRef>
+    {
+        { EquipmentSlotType.Sword, new EquippedGearRef { slotType = EquipmentSlotType.Sword } },
+        { EquipmentSlotType.Shield, new EquippedGearRef { slotType = EquipmentSlotType.Shield } },
+        { EquipmentSlotType.Armor, new EquippedGearRef { slotType = EquipmentSlotType.Armor } },
+        { EquipmentSlotType.Pants, new EquippedGearRef { slotType = EquipmentSlotType.Pants } }
+    };
+
     private PlayerCombat _combat;
     private InventoryUI _ui;
     private bool _activated;
 
+    public bool IsActivated => _activated;
     public IReadOnlyList<InventorySlot> Slots => _slots;
     public int Capacity => capacity;
-    public int Experience { get; private set; }
-    public string EquippedWeaponId { get; private set; }
-    public string EquippedEquipmentId { get; private set; }
+    public int Experience => _combat != null && _combat.IsSpawned ? _combat.NetworkExperience : _localExpFallback;
+    public int Level => _combat != null && _combat.IsSpawned ? _combat.NetworkLevel : 1;
+    public int UnspentStatPoints => _combat != null && _combat.IsSpawned ? _combat.NetworkUnspentStatPoints : 0;
+    public int Gold => _combat != null && _combat.IsSpawned ? _combat.NetworkGold : 0;
 
-    /// <summary>Raised whenever slots, equipment or experience change.</summary>
+    public string EquippedWeaponId => _equipped[EquipmentSlotType.Sword].itemId;
+    public string EquippedShieldId => _equipped[EquipmentSlotType.Shield].itemId;
+    public string EquippedArmorId => _equipped[EquipmentSlotType.Armor].itemId;
+    public string EquippedPantsId => _equipped[EquipmentSlotType.Pants].itemId;
+    public string EquippedEquipmentId => EquippedArmorId;
+
+    // Aggregated gear bonuses
+    public int GearDamageBonus { get; private set; }
+    public int GearMaxHealthBonus { get; private set; }
+    public int GearMaxStaminaBonus { get; private set; }
+    public int GearDefenseBonus { get; private set; }
+    public float GearMoveSpeedBonus { get; private set; }
+    public float GearCritChanceBonus { get; private set; }
+
+    public WorldItem WorldItemPrefab => worldItemPrefab;
+
+    /// <summary>Raised whenever slots, equipment, currency, enhancement, or experience change.</summary>
     public event Action Changed;
+
+    private int _localExpFallback;
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -48,17 +106,25 @@ public class InventoryManager : MonoBehaviour
 
         _activated = true;
         Local = this;
+        _combat.ProgressionChanged += OnProgressionChanged;
+        PlayerSaveManager.EnsureExists();
         Debug.Log($"[Inventory] Activated for local player '{name}' ({capacity} slots).");
         if (createUi) _ui = InventoryUI.Create(this);
     }
 
     private void OnDestroy()
     {
+        if (_combat != null) _combat.ProgressionChanged -= OnProgressionChanged;
         if (Local == this) Local = null;
         if (_ui != null) Destroy(_ui.gameObject);
     }
 
-    // ------------------------------------------------------------------ add / remove
+    private void OnProgressionChanged()
+    {
+        Changed?.Invoke();
+    }
+
+    // ------------------------------------------------------------------ add / remove (exact & stacked)
 
     public bool CanAdd(ItemData item, int quantity)
     {
@@ -69,14 +135,14 @@ public class InventoryManager : MonoBehaviour
         foreach (var s in _slots)
         {
             if (s.IsEmpty) room += max;
-            else if (s.item == item) room += s.FreeSpace;
+            else if (s.item == item && s.enhancementLevel == 0) room += s.FreeSpace;
             if (room >= quantity) return true;
         }
         return room >= quantity;
     }
 
-    /// <summary>Adds items, filling existing stacks first. Returns the quantity that did NOT fit.</summary>
-    public int AddItem(ItemData item, int quantity)
+    /// <summary>Adds items to existing un-enhanced stacks or empty slots. Returns quantity that did NOT fit.</summary>
+    public int AddItem(ItemData item, int quantity, int enhancementLevel = 0)
     {
         if (item == null || quantity <= 0)
         {
@@ -87,12 +153,12 @@ public class InventoryManager : MonoBehaviour
         int remaining = quantity;
         int max = item.MaxStackSize;
 
-        if (item.stackable)
+        if (item.stackable && enhancementLevel == 0)
         {
             foreach (var s in _slots)
             {
                 if (remaining <= 0) break;
-                if (s.IsEmpty || s.item != item || s.FreeSpace <= 0) continue;
+                if (s.IsEmpty || s.item != item || s.enhancementLevel != 0 || s.FreeSpace <= 0) continue;
                 int add = Mathf.Min(s.FreeSpace, remaining);
                 s.quantity += add;
                 remaining -= add;
@@ -104,45 +170,58 @@ public class InventoryManager : MonoBehaviour
             if (remaining <= 0) break;
             if (!s.IsEmpty) continue;
             int add = Mathf.Min(max, remaining);
-            s.item = item;
-            s.quantity = add;
+            s.Set(item, add, enhancementLevel);
             remaining -= add;
         }
 
         int added = quantity - remaining;
         if (added > 0)
-            Debug.Log($"[Inventory] +{added}x {item.displayName}" + (remaining > 0 ? $" ({remaining} did not fit)" : ""));
+        {
+            Debug.Log($"[Inventory] +{added}x {item.displayName}{(enhancementLevel > 0 ? $" +{enhancementLevel}" : "")} [{ItemData.GetTierDisplayName(item.tier)}]");
+            Changed?.Invoke();
+            PlayerSaveManager.RequestAutoSave("AddItem");
+        }
         else
+        {
             Debug.LogWarning($"[Inventory] Inventory full: could not add {item.displayName}.");
+        }
 
-        if (added > 0) Changed?.Invoke();
         return remaining;
     }
 
-    /// <summary>Removes up to quantity of an item across slots. Returns how many were removed.</summary>
-    public int RemoveItem(ItemData item, int quantity)
+    /// <summary>Adds an item directly into a specific slotIndex if empty (used by tests or exact placement).</summary>
+    public bool AddItemAtSlot(int slotIndex, ItemData item, int quantity = 1, int enhancementLevel = 0)
     {
-        if (item == null || quantity <= 0) return 0;
+        var s = GetSlot(slotIndex);
+        if (s == null || !s.IsEmpty || item == null || quantity <= 0) return false;
+        s.Set(item, Mathf.Min(item.MaxStackSize, quantity), enhancementLevel);
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("AddItemAtSlot");
+        return true;
+    }
 
-        int toRemove = quantity;
-        foreach (var s in _slots)
+    /// <summary>Consumes quantity STRICTLY from the given slotIndex (never scans from slot 0).</summary>
+    public int ConsumeSlotAtExactIndex(int slotIndex, int quantity = 1)
+    {
+        var s = GetSlot(slotIndex);
+        if (s == null || s.IsEmpty || quantity <= 0) return 0;
+
+        int take = Mathf.Min(s.quantity, quantity);
+        string consumedInstanceId = s.instanceId;
+        string itemName = s.item.displayName;
+
+        s.quantity -= take;
+        if (s.quantity <= 0)
         {
-            if (toRemove <= 0) break;
-            if (s.IsEmpty || s.item != item) continue;
-            int take = Mathf.Min(s.quantity, toRemove);
-            s.quantity -= take;
-            toRemove -= take;
-            if (s.quantity <= 0) s.Clear();
+            s.Clear();
+            UnequipByInstanceId(consumedInstanceId);
         }
 
-        int removed = quantity - toRemove;
-        if (removed > 0)
-        {
-            Debug.Log($"[Inventory] -{removed}x {item.displayName}");
-            ValidateEquipment();
-            Changed?.Invoke();
-        }
-        return removed;
+        Debug.Log($"[Inventory] Slot {slotIndex}: consumed {take}x {itemName}.");
+        RecomputeBonus();
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("ConsumeExactSlot");
+        return take;
     }
 
     public int Count(ItemData item)
@@ -152,7 +231,49 @@ public class InventoryManager : MonoBehaviour
         return n;
     }
 
-    // ------------------------------------------------------------------ use / equip / drop
+    // ------------------------------------------------------------------ Drag-and-Drop Reordering
+
+    /// <summary>Moves, merges (if un-enhanced stackable), or swaps two exact inventory slots.</summary>
+    public bool SwapOrMoveSlots(int fromIndex, int toIndex)
+    {
+        if (fromIndex == toIndex) return false;
+        var fromSlot = GetSlot(fromIndex);
+        var toSlot = GetSlot(toIndex);
+        if (fromSlot == null || toSlot == null || fromSlot.IsEmpty) return false;
+
+        // Merge un-enhanced identical stackables
+        if (!toSlot.IsEmpty && fromSlot.item == toSlot.item && fromSlot.item.stackable &&
+            fromSlot.enhancementLevel == 0 && toSlot.enhancementLevel == 0 && toSlot.FreeSpace > 0)
+        {
+            int move = Mathf.Min(fromSlot.quantity, toSlot.FreeSpace);
+            toSlot.quantity += move;
+            fromSlot.quantity -= move;
+            if (fromSlot.quantity <= 0) fromSlot.Clear();
+        }
+        else
+        {
+            var temp = new InventorySlot();
+            temp.CopyFrom(toSlot);
+            toSlot.CopyFrom(fromSlot);
+            fromSlot.CopyFrom(temp);
+        }
+
+        Debug.Log($"[Inventory] Moved/Swapped slot {fromIndex} <-> slot {toIndex}.");
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("DragSwapSlots");
+        return true;
+    }
+
+    /// <summary>Equips an item dragged directly from inventory slotIndex onto an Equipment slot card.</summary>
+    public bool EquipFromDrag(int fromSlotIndex, EquipmentSlotType targetSlotType)
+    {
+        var s = GetSlot(fromSlotIndex);
+        if (s == null || s.IsEmpty || !s.item.IsEquippable) return false;
+        if (s.item.GetEquipmentSlot() != targetSlotType) return false;
+        return EquipSlotByIndex(fromSlotIndex, toggleOffIfAlreadyEquipped: false);
+    }
+
+    // ------------------------------------------------------------------ Exact-Slot Use / Equip / Drop
 
     public bool UseItem(int slotIndex)
     {
@@ -162,7 +283,7 @@ public class InventoryManager : MonoBehaviour
         var item = s.item;
         if (!item.IsUsable)
         {
-            Debug.LogWarning($"[Inventory] {item.displayName} is not usable.");
+            Debug.LogWarning($"[Inventory] Slot {slotIndex} ({item.displayName}) is not usable.");
             return false;
         }
         if (_combat == null || !_combat.IsSpawned || _combat.IsDead)
@@ -171,51 +292,153 @@ public class InventoryManager : MonoBehaviour
             return false;
         }
 
+        bool appliedAny = false;
+
         if (item.healAmount > 0)
         {
-            if (_combat.NetworkHealth >= _combat.MaxHealth)
+            if (_combat.NetworkHealth < _combat.MaxHealth)
+            {
+                _combat.HealSelf(item.healAmount);
+                appliedAny = true;
+            }
+            else if (item.staminaRestoreAmount <= 0 && item.attackBuffBonus <= 0)
             {
                 Debug.LogWarning("[Inventory] Health is already full - potion not consumed.");
                 return false;
             }
-            _combat.HealSelf(item.healAmount);
         }
 
-        Debug.Log($"[Inventory] Used {item.displayName}.");
-        RemoveItem(item, 1);
+        if (item.staminaRestoreAmount > 0)
+        {
+            _combat.RestoreStamina(item.staminaRestoreAmount);
+            appliedAny = true;
+        }
+
+        if (item.attackBuffBonus > 0)
+        {
+            float duration = item.attackBuffDuration > 0f ? item.attackBuffDuration : 30f;
+            _combat.ApplyAttackBuff(item.attackBuffBonus, duration);
+            appliedAny = true;
+        }
+
+        if (!appliedAny) return false;
+
+        Debug.Log($"[Inventory] Used item strictly at slot {slotIndex}: {item.displayName}.");
+        ConsumeSlotAtExactIndex(slotIndex, 1);
         return true;
     }
 
-    /// <summary>Toggles equip state for a Weapon/Equipment slot.</summary>
+    /// <summary>Equips or toggles equip strictly on the exact slotIndex clicked.</summary>
     public bool EquipItem(int slotIndex)
+    {
+        return EquipSlotByIndex(slotIndex, toggleOffIfAlreadyEquipped: true);
+    }
+
+    private bool EquipSlotByIndex(int slotIndex, bool toggleOffIfAlreadyEquipped)
     {
         var s = GetSlot(slotIndex);
         if (s == null || s.IsEmpty) return false;
+        s.EnsureInstanceId();
 
         var item = s.item;
         if (!item.IsEquippable)
         {
-            Debug.LogWarning($"[Inventory] {item.displayName} cannot be equipped.");
+            Debug.LogWarning($"[Inventory] Slot {slotIndex} ({item.displayName}) cannot be equipped.");
             return false;
         }
 
-        if (item.type == ItemType.Weapon)
-            EquippedWeaponId = EquippedWeaponId == item.itemId ? null : item.itemId;
-        else
-            EquippedEquipmentId = EquippedEquipmentId == item.itemId ? null : item.itemId;
+        EquipmentSlotType slotType = item.GetEquipmentSlot();
+        var eqRef = _equipped[slotType];
 
-        Debug.Log($"[Inventory] {(IsEquipped(item) ? "Equipped" : "Unequipped")} {item.displayName}.");
+        if (toggleOffIfAlreadyEquipped && eqRef.instanceId == s.instanceId)
+        {
+            eqRef.Clear();
+            Debug.Log($"[Inventory] Unequipped slot {slotIndex} ({item.displayName} +{s.enhancementLevel}).");
+        }
+        else
+        {
+            eqRef.slotType = slotType;
+            eqRef.instanceId = s.instanceId;
+            eqRef.itemId = item.itemId;
+            eqRef.enhancementLevel = s.enhancementLevel;
+            Debug.Log($"[Inventory] Equipped EXACT slot {slotIndex}: {item.displayName} +{s.enhancementLevel} (instance={s.instanceId}).");
+        }
+
         RecomputeBonus();
         Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("EquipItem");
         return true;
+    }
+
+    /// <summary>Convenience overload when equipping by ItemData directly (finds matching slot index).</summary>
+    public bool EquipItem(ItemData item)
+    {
+        if (item == null || !item.IsEquippable) return false;
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            if (!_slots[i].IsEmpty && _slots[i].item == item)
+                return EquipSlotByIndex(i, toggleOffIfAlreadyEquipped: false);
+        }
+        return false;
+    }
+
+    public bool UnequipSlot(EquipmentSlotType slotType)
+    {
+        if (!_equipped.TryGetValue(slotType, out EquippedGearRef eq) || eq.IsEmpty) return false;
+        eq.Clear();
+        Debug.Log($"[Inventory] Unequipped gear slot {slotType}.");
+        RecomputeBonus();
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("UnequipSlot");
+        return true;
+    }
+
+    private void UnequipByInstanceId(string instanceId)
+    {
+        if (string.IsNullOrEmpty(instanceId)) return;
+        foreach (var kv in _equipped)
+        {
+            if (kv.Value.instanceId == instanceId)
+                kv.Value.Clear();
+        }
+    }
+
+    public EquippedGearRef GetEquippedRef(EquipmentSlotType slotType)
+    {
+        return _equipped.TryGetValue(slotType, out var eq) ? eq : null;
+    }
+
+    public ItemData GetEquippedItem(EquipmentSlotType slotType)
+    {
+        return _equipped.TryGetValue(slotType, out var eq) ? eq.ResolveItem() : null;
+    }
+
+    public int GetEquippedEnhancementLevel(EquipmentSlotType slotType)
+    {
+        return _equipped.TryGetValue(slotType, out var eq) && !eq.IsEmpty ? eq.enhancementLevel : 0;
+    }
+
+    public bool IsSlotEquipped(int slotIndex)
+    {
+        var s = GetSlot(slotIndex);
+        if (s == null || s.IsEmpty) return false;
+        if (string.IsNullOrEmpty(s.instanceId)) return false;
+        EquipmentSlotType slotType = s.item.GetEquipmentSlot();
+        if (slotType == EquipmentSlotType.None) return false;
+        return _equipped.TryGetValue(slotType, out var eq) && eq.instanceId == s.instanceId;
     }
 
     public bool IsEquipped(ItemData item)
     {
-        return item != null && (item.itemId == EquippedWeaponId || item.itemId == EquippedEquipmentId);
+        if (item == null) return false;
+        foreach (var kv in _equipped)
+        {
+            if (!kv.Value.IsEmpty && kv.Value.itemId == item.itemId) return true;
+        }
+        return false;
     }
 
-    /// <summary>Drops the whole stack in front of the player as a networked WorldItem.</summary>
+    /// <summary>Drops strictly the exact slotIndex clicked (never searches from slot 0).</summary>
     public bool DropItem(int slotIndex)
     {
         var s = GetSlot(slotIndex);
@@ -237,8 +460,8 @@ public class InventoryManager : MonoBehaviour
             return false;
         }
 
-        Debug.Log($"[Inventory] Dropped {qty}x {item.displayName}.");
-        RemoveItem(item, qty);
+        Debug.Log($"[Inventory] Dropped strictly slot {slotIndex}: {qty}x {item.displayName}.");
+        ConsumeSlotAtExactIndex(slotIndex, qty);
         return true;
     }
 
@@ -252,45 +475,259 @@ public class InventoryManager : MonoBehaviour
         return WorldItem.Spawn(_combat != null ? _combat.Runner : null, worldItemPrefab, position, item, quantity);
     }
 
+    // ------------------------------------------------------------------ Equipment Enhancement (+0 to +10)
+
+    /// <summary>
+    /// Enhances a target gear slot (+0 -> +10) by consuming Gold and explicitly chosen Fodder inventory slot indices.
+    /// </summary>
+    public EnhanceResult TryEnhanceItem(int targetInventorySlotIndex, List<int> fodderSlotIndices, float? forcedRoll01 = null)
+    {
+        var targetSlot = GetSlot(targetInventorySlotIndex);
+        if (targetSlot == null || targetSlot.IsEmpty || targetSlot.item == null || !targetSlot.item.IsEquippable)
+        {
+            return new EnhanceResult { attempted = false, message = "Select valid equipment to enhance." };
+        }
+        if (targetSlot.enhancementLevel >= EnhancementSystem.MaxEnhancementLevel)
+        {
+            return new EnhanceResult { attempted = false, message = $"Already at maximum +{EnhancementSystem.MaxEnhancementLevel}." };
+        }
+        if (_combat == null || !_combat.IsSpawned)
+        {
+            return new EnhanceResult { attempted = false, message = "Player not ready." };
+        }
+
+        targetSlot.EnsureInstanceId();
+        var spec = EnhancementSystem.GetNextSpec(targetSlot.item, targetSlot.enhancementLevel);
+
+        if (_combat.NetworkGold < spec.goldCost)
+        {
+            return new EnhanceResult { attempted = false, message = $"Need {spec.goldCost} Gold (have {_combat.NetworkGold})." };
+        }
+
+        // Validate distinct fodder slots
+        var uniqueFodder = new List<int>();
+        if (fodderSlotIndices != null)
+        {
+            for (int i = 0; i < fodderSlotIndices.Count; i++)
+            {
+                int idx = fodderSlotIndices[i];
+                if (idx == targetInventorySlotIndex || uniqueFodder.Contains(idx)) continue;
+                var fs = GetSlot(idx);
+                if (EnhancementSystem.IsEligibleFodder(targetSlot.item, targetSlot.instanceId, fs, spec.minFodderTier))
+                    uniqueFodder.Add(idx);
+            }
+        }
+
+        if (uniqueFodder.Count < spec.requiredFodderCount)
+        {
+            return new EnhanceResult
+            {
+                attempted = false,
+                message = $"Select {spec.requiredFodderCount} eligible [{ItemData.GetTierDisplayName(spec.minFodderTier)}+] fodder gear item(s)."
+            };
+        }
+
+        // Spend Gold & Consume Exact Fodder Slots
+        if (!_combat.TrySpendGold(spec.goldCost))
+        {
+            return new EnhanceResult { attempted = false, message = "Failed to spend Gold." };
+        }
+
+        for (int i = 0; i < spec.requiredFodderCount; i++)
+        {
+            ConsumeSlotAtExactIndex(uniqueFodder[i], 1);
+        }
+
+        // Re-locate target slot in case anything changed (index stays identical because slots are fixed array)
+        int prevLvl = targetSlot.enhancementLevel;
+        float roll = forcedRoll01.HasValue ? Mathf.Clamp01(forcedRoll01.Value) : UnityEngine.Random.value;
+        bool success = roll <= spec.successRate;
+
+        if (success)
+        {
+            targetSlot.enhancementLevel++;
+            EquipmentSlotType slotType = targetSlot.item.GetEquipmentSlot();
+            if (_equipped.TryGetValue(slotType, out var eq) && eq.instanceId == targetSlot.instanceId)
+            {
+                eq.enhancementLevel = targetSlot.enhancementLevel;
+            }
+            RecomputeBonus();
+        }
+
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave(success ? "EnhanceSuccess" : "EnhanceFail");
+
+        string msg = success
+            ? $"SUCCESS! {targetSlot.item.displayName} enhanced +{prevLvl} -> +{targetSlot.enhancementLevel}!"
+            : $"FAILED! Fodder & {spec.goldCost} Gold consumed ({targetSlot.item.displayName} stays +{prevLvl}).";
+        Debug.Log($"[Enhancement] {msg} (rate={spec.successRate * 100f:0}%, roll={roll:0.00})");
+
+        return new EnhanceResult
+        {
+            attempted = true,
+            succeeded = success,
+            previousLevel = prevLvl,
+            newLevel = targetSlot.enhancementLevel,
+            goldSpent = spec.goldCost,
+            message = msg
+        };
+    }
+
+    public int FindSlotIndexByInstanceId(string instanceId)
+    {
+        if (string.IsNullOrEmpty(instanceId)) return -1;
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            if (!_slots[i].IsEmpty && _slots[i].instanceId == instanceId) return i;
+        }
+        return -1;
+    }
+
+    // ------------------------------------------------------------------ EXP & Gold
+
     public void AddExperience(int amount)
     {
         if (amount <= 0) return;
-        Experience += amount;
-        Debug.Log($"[Inventory] +{amount} EXP (total {Experience}).");
+        _localExpFallback += amount;
+        if (_combat != null && _combat.IsSpawned)
+            _combat.AddExperience(amount);
+        Changed?.Invoke();
+    }
+
+    public void AddGold(int amount, string source = "Reward")
+    {
+        if (_combat != null && _combat.IsSpawned)
+            _combat.AddGold(amount, source);
+    }
+
+    // ------------------------------------------------------------------ Persistence Export / Restore
+
+    public void ExportSaveData(PlayerSaveData data)
+    {
+        if (data == null) return;
+        data.inventorySlots.Clear();
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            var s = _slots[i];
+            if (s.IsEmpty || s.item == null) continue;
+            s.EnsureInstanceId();
+            data.inventorySlots.Add(new SavedInventorySlotData
+            {
+                slotIndex = i,
+                instanceId = s.instanceId,
+                itemId = s.item.itemId,
+                quantity = s.quantity,
+                enhancementLevel = s.enhancementLevel
+            });
+        }
+
+        data.equippedSlots.Clear();
+        foreach (var kv in _equipped)
+        {
+            if (kv.Value.IsEmpty) continue;
+            data.equippedSlots.Add(new SavedEquippedSlotData
+            {
+                slotType = (int)kv.Key,
+                instanceId = kv.Value.instanceId,
+                itemId = kv.Value.itemId,
+                enhancementLevel = kv.Value.enhancementLevel
+            });
+        }
+    }
+
+    public void RestoreSaveData(PlayerSaveData data)
+    {
+        if (data == null) return;
+
+        for (int i = 0; i < _slots.Count; i++) _slots[i].Clear();
+        foreach (var kv in _equipped) kv.Value.Clear();
+
+        if (data.inventorySlots != null)
+        {
+            foreach (var saved in data.inventorySlots)
+            {
+                if (saved == null || saved.slotIndex < 0 || saved.slotIndex >= _slots.Count) continue;
+                var item = ItemRegistry.Get(saved.itemId);
+                if (item == null || saved.quantity <= 0) continue;
+                _slots[saved.slotIndex].Set(item, saved.quantity, saved.enhancementLevel, saved.instanceId);
+            }
+        }
+
+        if (data.equippedSlots != null)
+        {
+            foreach (var savedEq in data.equippedSlots)
+            {
+                if (savedEq == null) continue;
+                var slotType = (EquipmentSlotType)savedEq.slotType;
+                if (!_equipped.TryGetValue(slotType, out var eqRef)) continue;
+                var item = ItemRegistry.Get(savedEq.itemId);
+                if (item == null) continue;
+
+                eqRef.slotType = slotType;
+                eqRef.instanceId = savedEq.instanceId;
+                eqRef.itemId = savedEq.itemId;
+                eqRef.enhancementLevel = savedEq.enhancementLevel;
+            }
+        }
+
+        RecomputeBonus();
         Changed?.Invoke();
     }
 
     // ------------------------------------------------------------------ helpers
 
-    private InventorySlot GetSlot(int index)
+    public InventorySlot GetSlot(int index)
     {
         if (index < 0 || index >= _slots.Count) return null;
         return _slots[index];
     }
 
-    /// <summary>Unequips anything that no longer exists in the inventory.</summary>
-    private void ValidateEquipment()
+    public void RecomputeBonus()
     {
-        if (EquippedWeaponId != null && !Has(EquippedWeaponId)) { Debug.Log("[Inventory] Equipped weapon left the inventory - unequipped."); EquippedWeaponId = null; }
-        if (EquippedEquipmentId != null && !Has(EquippedEquipmentId)) { Debug.Log("[Inventory] Equipped gear left the inventory - unequipped."); EquippedEquipmentId = null; }
+        int dmg = 0, hp = 0, sta = 0, def = 0;
+        float spd = 0f, crit = 0f;
+
+        foreach (var kv in _equipped)
+        {
+            var eq = kv.Value;
+            if (eq == null || eq.IsEmpty) continue;
+            var item = eq.ResolveItem();
+            if (item == null) continue;
+
+            int enh = eq.enhancementLevel;
+            dmg += item.GetEnhancedDamage(enh);
+            hp += item.GetEnhancedMaxHealth(enh);
+            sta += item.GetEnhancedMaxStamina(enh);
+            def += item.GetEnhancedDefense(enh);
+            spd += item.GetEnhancedMoveSpeed(enh);
+            crit += item.GetEnhancedCritChance(enh);
+        }
+
+        GearDamageBonus = dmg;
+        GearMaxHealthBonus = hp;
+        GearMaxStaminaBonus = sta;
+        GearDefenseBonus = def;
+        GearMoveSpeedBonus = spd;
+        GearCritChanceBonus = crit;
+
+        if (_combat != null)
+            _combat.ApplyEquipmentBonuses(dmg, hp, sta, def, spd, crit);
+
+        Debug.Log($"[Inventory] Gear Totals -> ATK +{dmg}, HP +{hp}, STA +{sta}, DEF +{def}, SPD +{spd:0.00}, CRIT +{crit * 100f:0}%.");
+    }
+
+    public void ClearSlotsForTest()
+    {
+        for (int i = 0; i < _slots.Count; i++) _slots[i].Clear();
+        foreach (var kv in _equipped) kv.Value.Clear();
         RecomputeBonus();
+        Changed?.Invoke();
     }
 
-    private bool Has(string itemId)
+    public void SetSlotDirectForTest(int index, ItemData item, int qty, int enhancement = 0)
     {
-        foreach (var s in _slots) if (!s.IsEmpty && s.item.itemId == itemId) return true;
-        return false;
-    }
-
-    private void RecomputeBonus()
-    {
-        int bonus = 0;
-        var w = ItemRegistry.Get(EquippedWeaponId);
-        var e = ItemRegistry.Get(EquippedEquipmentId);
-        if (w != null) bonus += w.damageBonus;
-        if (e != null) bonus += e.damageBonus;
-
-        if (_combat != null) _combat.WeaponDamageBonus = bonus;
-        Debug.Log($"[Inventory] Gear damage bonus is now +{bonus}.");
+        if (index < 0 || index >= _slots.Count) return;
+        _slots[index].Set(item, qty, enhancement);
+        Changed?.Invoke();
     }
 }

@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a50f769c8171e1d4ab1fb508bf69d8be, type: 3}
+  m_Name: ValkyrieGreaves
+  m_EditorClassIdentifier: Assembly-CSharp::ItemData
+  itemId: valkyrie_greaves
+  displayName: Valkyrie Vanguard Pants
+  description: Winged battle greaves. +60 Max HP, +35 Max Stamina, +0.55 Move Speed.
+  type: 7
+  tier: 2
+  icon: {fileID: 0}
+  worldColor: {r: 0.76, g: 0.3, b: 0.96, a: 1}
+  stackable: 0
+  maxStack: 1
+  healAmount: 0
+  staminaRestoreAmount: 0
+  attackBuffBonus: 0
+  attackBuffDuration: 0
+  damageBonus: 0
+  maxHealthBonus: 60
+  maxStaminaBonus: 35
+  defenseBonus: 0
+  moveSpeedBonus: 0.55
+  critChanceBonus: 0
+  droppable: 1

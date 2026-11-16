@@ -13,13 +13,22 @@ MonoBehaviour:
   m_Name: HunterVest
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: hunter_vest
-  displayName: Hunter's Vest
-  description: Light leather armour. +3 damage when equipped.
-  type: 2
+  displayName: Hunter Chestplate
+  description: Light reinforced chest armor. +25 Max HP, +2 Defense.
+  type: 6
+  tier: 0
   icon: {fileID: 0}
-  worldColor: {r: 0.3, g: 0.5, b: 1, a: 1}
+  worldColor: {r: 0.8, g: 0.83, b: 0.86, a: 1}
   stackable: 0
   maxStack: 1
   healAmount: 0
-  damageBonus: 3
+  staminaRestoreAmount: 0
+  attackBuffBonus: 0
+  attackBuffDuration: 0
+  damageBonus: 0
+  maxHealthBonus: 25
+  maxStaminaBonus: 0
+  defenseBonus: 2
+  moveSpeedBonus: 0
+  critChanceBonus: 0
   droppable: 1
