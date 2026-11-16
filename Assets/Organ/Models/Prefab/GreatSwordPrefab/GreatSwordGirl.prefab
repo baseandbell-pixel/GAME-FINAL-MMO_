@@ -165,7 +165,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.5
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
       propertyPath: m_LocalPosition.z
@@ -388,12 +388,12 @@ CharacterController:
   m_Enabled: 1
   serializedVersion: 3
   m_Height: 1.8
-  m_Radius: 0.5
+  m_Radius: 0.35
   m_SlopeLimit: 45
   m_StepOffset: 0.3
-  m_SkinWidth: 0.08
+  m_SkinWidth: 0.02
   m_MinMoveDistance: 0.001
-  m_Center: {x: 0, y: 0.92, z: 0}
+  m_Center: {x: 0, y: 0.95, z: 0}
 --- !u!114 &1841609193645111454
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -536,7 +536,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::IdleVariationController
   minIdleWait: 8
   maxIdleWait: 15
-  variationCount: 4
+  unarmedVariationCount: 5
+  combatVariationCount: 4
   idleVariantParameter: IdleVariant
   idleVariationTrigger: IdleVariation
   movingParameter: Moving
@@ -585,11 +586,15 @@ MonoBehaviour:
   nameLabel: {fileID: 0}
   detachNameLabel: 1
   labelOffset: {x: 0, y: 2.2, z: 0}
+  remotePosLerpSpeed: 18
+  remoteRotLerpSpeed: 20
   _AvatarIndex: 0
   _Nick:
     _length: 0
     _data:
       Data: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  _NetPosition: {x: 0, y: 0, z: 0}
+  _NetRotation: {x: 0, y: 0, z: 0, w: 0}
   _AnimState: 0
   _NetMoving:
     RawValue: 0
