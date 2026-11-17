@@ -36,6 +36,10 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
 
     [Networked] public NetworkBool NetworkDead { get; set; }
 
+    [Networked] public int NetworkWeaponRarity { get; set; }
+
+    [Networked] public int NetworkWeaponUpgrade { get; set; }
+
     // ---------------------------------------------------------
     // NETWORKED PLAYER IDENTITY
     // ---------------------------------------------------------
@@ -72,6 +76,8 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
     private MMOPlayerController playerController;
 
     private MMOPlayerCombat playerCombat;
+
+    private MMOPlayerInventory playerInventory;
 
     private Transform nameLabelTransform;
 
@@ -191,6 +197,8 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
             NetworkMaxHealth = 1200;
             NetworkLevel = 5;
             NetworkDead = false;
+            NetworkWeaponRarity = -1;
+            NetworkWeaponUpgrade = 0;
         }
 
         ApplyPlayerName();
@@ -284,6 +292,18 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
             NetworkLevel = playerCombat.playerLevel;
             NetworkDead = playerCombat.IsDead;
         }
+
+        if (playerInventory == null)
+        {
+            playerInventory = GetComponent<MMOPlayerInventory>();
+        }
+
+        if (playerInventory != null)
+        {
+            MMOItemInstance wpn = playerInventory.GetEquipped(EquipSlot.Weapon);
+            NetworkWeaponRarity = wpn != null ? (int)wpn.rarity : -1;
+            NetworkWeaponUpgrade = wpn != null ? wpn.upgradeLevel : 0;
+        }
     }
 
     // ---------------------------------------------------------
@@ -299,6 +319,12 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
         {
             return;
         }
+
+        if (playerInventory == null)
+        {
+            playerInventory = GetComponent<MMOPlayerInventory>();
+        }
+        playerInventory?.ApplyWeaponVisualState(NetworkWeaponRarity, NetworkWeaponUpgrade);
 
         if (playerController == null)
         {

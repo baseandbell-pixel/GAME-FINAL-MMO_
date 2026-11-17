@@ -335,6 +335,10 @@ public sealed class MMOPlayerController : MonoBehaviour
     public float DodgeCooldownRemaining =>
         Mathf.Max(0f, _nextDodgeAllowedTime - Time.time);
 
+    public float ExternalSpeedMultiplier { get; set; } = 1f;
+
+    public float ExternalCooldownMultiplier { get; set; } = 1f;
+
     public int CurrentAttackStep =>
         _attackStep;
 
@@ -700,7 +704,7 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         float desiredMoveSpeed =
             hasMoveInput
-                ? (shouldRun ? runSpeed : walkSpeed)
+                ? (shouldRun ? runSpeed : walkSpeed) * Mathf.Clamp(ExternalSpeedMultiplier, 0.5f, 2.0f)
                 : 0f;
 
         // =====================================================
@@ -1704,7 +1708,7 @@ public sealed class MMOPlayerController : MonoBehaviour
         _isDodging = true;
         _dodgeStartedAt = Time.time;
         _invulnerableUntil = Time.time + dodgeInvulnerabilityDuration;
-        _nextDodgeAllowedTime = Time.time + dodgeCooldown;
+        _nextDodgeAllowedTime = Time.time + dodgeCooldown * Mathf.Clamp(ExternalCooldownMultiplier, 0.45f, 1.5f);
 
         _networkActionCode = 6;
         _networkActionSequence++;

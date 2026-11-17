@@ -63,7 +63,10 @@ public sealed class MMOGameplayHUD : MonoBehaviour
         public TMP_Text statusLabel;
     }
 
-    private readonly SkillSlotUI[] _skillSlots = new SkillSlotUI[4];
+    private readonly SkillSlotUI[] _skillSlots = new SkillSlotUI[3];
+    private readonly SkillSlotUI[] _hotbarSlots = new SkillSlotUI[MMOPlayerInventory.HotbarSlotCount];
+    private GameObject _lootPromptBar;
+    private TMP_Text _lootPromptText;
 
     // Chat Box
     private GameObject _chatLogBg;
@@ -88,11 +91,7 @@ public sealed class MMOGameplayHUD : MonoBehaviour
     private TMP_Text _questDetailText;
     private TMP_Text _goldHudText;
     private TMP_Text _buffHudText;
-    private GameObject _inventoryOverlay;
-    private TMP_Text _invSummaryText;
-    private TMP_Text _invWeaponBtnText;
-    private TMP_Text _invArmorBtnText;
-    private TMP_Text _invPotionBtnText;
+    private MMOInventoryPanelUI _inventoryUI;
 
     private bool _suppressUiEvents;
 
@@ -374,71 +373,97 @@ public sealed class MMOGameplayHUD : MonoBehaviour
             34, FontStyles.Bold, TextAlignmentOptions.Center, new Color(1f, 0.30f, 0.30f));
         _defeatedText.gameObject.SetActive(false);
 
+        _lootPromptBar = CreateBox("LootPromptBar", transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
+            new Vector2(0f, 260f), new Vector2(460f, 36f), new Color(0.06f, 0.09f, 0.14f, 0.92f));
+        AddOutline(_lootPromptBar, new Color(1f, 0.82f, 0.25f, 0.85f));
+        _lootPromptText = CreateText("LootPromptText", _lootPromptBar.transform,
+            Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero,
+            15, FontStyles.Bold, TextAlignmentOptions.Center, Color.white);
+        _lootPromptBar.SetActive(false);
+
         _bannerText = CreateText("CombatBanner", transform,
-            new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 188f), new Vector2(760f, 36f),
+            new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 198f), new Vector2(780f, 36f),
             24, FontStyles.Bold, TextAlignmentOptions.Center, new Color(1f, 0.88f, 0.2f));
         _bannerText.gameObject.SetActive(false);
 
         GameObject root = CreateBox("PlayerActionBar", transform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-            new Vector2(0f, 20f), new Vector2(680f, 152f), new Color(0.06f, 0.07f, 0.11f, 0.90f));
+            new Vector2(0f, 20f), new Vector2(780f, 160f), new Color(0.06f, 0.07f, 0.11f, 0.90f));
         AddOutline(root, new Color(0.32f, 0.58f, 0.95f, 0.55f));
 
-        // Skill slots row at top of bar
-        string[] keys = { "L-Click", "R-Click/Ctrl", "E", "R" };
-        string[] names = { "Combo", "Dodge", "Stun", "Heal" };
-        float slotWidth = 152f;
-        float startX = 16f;
-        for (int i = 0; i < 4; i++)
+        // 3 Combat Skill slots on left
+        string[] keys = { "L-Click", "R-Click/Ctrl", "E" };
+        string[] names = { "Combo", "Dodge", "Stun" };
+        float combatSlotWidth = 114f;
+        float xCursor = 14f;
+        for (int i = 0; i < 3; i++)
         {
             GameObject slotGo = CreateBox($"SkillSlot_{i}", root.transform,
                 new Vector2(0f, 1f), new Vector2(0f, 1f),
-                new Vector2(startX + i * (slotWidth + 12f), -12f), new Vector2(slotWidth, 48f),
+                new Vector2(xCursor, -12f), new Vector2(combatSlotWidth, 52f),
                 new Color(0.11f, 0.14f, 0.21f, 1f));
-
-            Outline ol = slotGo.AddComponent<Outline>();
-            ol.effectColor = new Color(0.28f, 0.72f, 0.95f, 0.7f);
-            ol.effectDistance = new Vector2(1.5f, 1.5f);
-
+            AddOutline(slotGo, new Color(0.28f, 0.72f, 0.95f, 0.7f));
             Image bgImg = slotGo.GetComponent<Image>();
 
             TMP_Text keyLabel = CreateText("Key", slotGo.transform,
                 new Vector2(0f, 0.5f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero,
-                13, FontStyles.Bold, TextAlignmentOptions.Center, new Color(0.85f, 0.93f, 1f));
+                12, FontStyles.Bold, TextAlignmentOptions.Center, new Color(0.85f, 0.93f, 1f));
             keyLabel.text = $"[{keys[i]}] {names[i]}";
 
             TMP_Text statusLabel = CreateText("Status", slotGo.transform,
                 new Vector2(0f, 0f), new Vector2(1f, 0.5f), Vector2.zero, Vector2.zero,
-                13, FontStyles.Bold, TextAlignmentOptions.Center, new Color(0.35f, 1f, 0.55f));
+                12, FontStyles.Bold, TextAlignmentOptions.Center, new Color(0.35f, 1f, 0.55f));
             statusLabel.text = "READY";
 
-            _skillSlots[i] = new SkillSlotUI
-            {
-                border = bgImg,
-                fill = bgImg,
-                keyLabel = keyLabel,
-                statusLabel = statusLabel
-            };
+            _skillSlots[i] = new SkillSlotUI { border = bgImg, fill = bgImg, keyLabel = keyLabel, statusLabel = statusLabel };
+            xCursor += combatSlotWidth + 8f;
+        }
+
+        xCursor += 6f;
+
+        // 5 Quick Hotbar Slots [1]..[5]
+        float hbWidth = 72f;
+        for (int h = 0; h < MMOPlayerInventory.HotbarSlotCount; h++)
+        {
+            int idx = h;
+            GameObject hbGo = CreateBox($"HotbarSlot_{h}", root.transform,
+                new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(xCursor, -12f), new Vector2(hbWidth, 52f),
+                new Color(0.12f, 0.15f, 0.22f, 1f));
+            AddOutline(hbGo, new Color(0.45f, 0.56f, 0.72f, 0.75f));
+            Image hbImg = hbGo.GetComponent<Image>();
+            Button hbBtn = hbGo.AddComponent<Button>();
+            hbBtn.onClick.AddListener(() => _combat?.Inventory?.UseHotbarSlot(idx));
+
+            TMP_Text keyLabel = CreateText("Key", hbGo.transform,
+                new Vector2(0f, 0.52f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero,
+                12, FontStyles.Bold, TextAlignmentOptions.Center, Color.white);
+            TMP_Text statusLabel = CreateText("Status", hbGo.transform,
+                new Vector2(0f, 0f), new Vector2(1f, 0.52f), Vector2.zero, Vector2.zero,
+                11, FontStyles.Bold, TextAlignmentOptions.Center, new Color(0.85f, 0.92f, 1f));
+
+            _hotbarSlots[h] = new SkillSlotUI { border = hbImg, fill = hbImg, keyLabel = keyLabel, statusLabel = statusLabel };
+            xCursor += hbWidth + 6f;
         }
 
         // Player HP Bar
         Image hpBg = CreateBar("PlayerHpBar", root.transform,
-            new Vector2(16f, 52f), new Vector2(648f, 28f), Vector2.zero, Vector2.zero,
+            new Vector2(14f, 54f), new Vector2(752f, 28f), Vector2.zero, Vector2.zero,
             new Color(0.08f, 0.20f, 0.10f, 1f), new Color(0.18f, 0.80f, 0.34f, 1f), out _playerHpFill);
 
         _playerStatsText = CreateText("PlayerHpLabel", hpBg.transform,
             Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero,
-            16, FontStyles.Bold, TextAlignmentOptions.Center, Color.white);
+            15, FontStyles.Bold, TextAlignmentOptions.Center, Color.white);
 
         // Player EXP Bar
         CreateBar("PlayerExpBar", root.transform,
-            new Vector2(16f, 32f), new Vector2(648f, 12f), Vector2.zero, Vector2.zero,
+            new Vector2(14f, 34f), new Vector2(752f, 12f), Vector2.zero, Vector2.zero,
             new Color(0.12f, 0.13f, 0.24f, 1f), new Color(0.40f, 0.60f, 1f, 1f), out _playerExpFill);
 
         _playerControlsText = CreateText("ControlsHint", root.transform,
             new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 6f), new Vector2(0f, 22f),
-            13, FontStyles.Normal, TextAlignmentOptions.Center, new Color(0.78f, 0.85f, 0.94f));
+            12, FontStyles.Normal, TextAlignmentOptions.Center, new Color(0.78f, 0.85f, 0.94f));
         _playerControlsText.rectTransform.pivot = new Vector2(0.5f, 0f);
-        _playerControlsText.text = "[WASD+Shift] Move | [Space] Jump | [Caps] Lock | [I] Bag/Forge | [V] Cam | [ESC] Menu";
+        _playerControlsText.text = "[WASD+Shift] Move | [1-5 / R] Hotbar | [F] Loot | [I] Bag/Forge | [Caps] Lock | [V] Cam | [ESC] Menu";
     }
 
     private void BuildChatPanel()
@@ -539,56 +564,8 @@ public sealed class MMOGameplayHUD : MonoBehaviour
 
     private void BuildInventoryPanel()
     {
-        _inventoryOverlay = CreateBox("InventoryOverlay", transform,
-            Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero, new Color(0f, 0f, 0f, 0.55f));
-        RectTransform overlayRt = _inventoryOverlay.GetComponent<RectTransform>();
-        overlayRt.anchorMin = Vector2.zero;
-        overlayRt.anchorMax = Vector2.one;
-        overlayRt.pivot = new Vector2(0.5f, 0.5f);
-        overlayRt.anchoredPosition = Vector2.zero;
-        overlayRt.sizeDelta = Vector2.zero;
-
-        GameObject panel = CreateBox("InventoryPanel", _inventoryOverlay.transform,
-            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(460f, 380f),
-            new Color(0.08f, 0.10f, 0.15f, 0.97f));
-        AddOutline(panel, new Color(0.95f, 0.78f, 0.25f, 0.85f));
-
-        TMP_Text header = CreateText("InvHeader", panel.transform,
-            new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, -16f), new Vector2(0f, 34f),
-            22, FontStyles.Bold, TextAlignmentOptions.Center, new Color(1f, 0.88f, 0.30f));
-        header.rectTransform.pivot = new Vector2(0.5f, 1f);
-        header.text = "ADVENTURER BAG & CAMP FORGE";
-
-        _invSummaryText = CreateText("InvSummary", panel.transform,
-            new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -62f), new Vector2(-48f, 76f),
-            15, FontStyles.Normal, TextAlignmentOptions.TopLeft, Color.white);
-        _invSummaryText.rectTransform.pivot = new Vector2(0f, 1f);
-        _invSummaryText.textWrappingMode = TextWrappingModes.Normal;
-
-        Button potionBtn = CreateButton("BuyPotionButton", panel.transform,
-            new Vector2(24f, 184f), new Vector2(412f, 44f),
-            new Color(0.62f, 0.22f, 0.30f, 1f), "Buy Health Potion", 16);
-        _invPotionBtnText = potionBtn.GetComponentInChildren<TMP_Text>();
-        potionBtn.onClick.AddListener(() => _combat?.TryBuyPotionFromUI());
-
-        Button weaponBtn = CreateButton("UpgradeWeaponButton", panel.transform,
-            new Vector2(24f, 130f), new Vector2(412f, 44f),
-            new Color(0.24f, 0.44f, 0.74f, 1f), "Forge Weapon Upgrade", 16);
-        _invWeaponBtnText = weaponBtn.GetComponentInChildren<TMP_Text>();
-        weaponBtn.onClick.AddListener(() => _combat?.TryUpgradeWeaponFromUI());
-
-        Button armorBtn = CreateButton("UpgradeArmorButton", panel.transform,
-            new Vector2(24f, 76f), new Vector2(412f, 44f),
-            new Color(0.22f, 0.56f, 0.38f, 1f), "Forge Armor Upgrade", 16);
-        _invArmorBtnText = armorBtn.GetComponentInChildren<TMP_Text>();
-        armorBtn.onClick.AddListener(() => _combat?.TryUpgradeArmorFromUI());
-
-        Button closeBtn = CreateButton("CloseInvButton", panel.transform,
-            new Vector2(24f, 20f), new Vector2(412f, 40f),
-            new Color(0.26f, 0.28f, 0.34f, 1f), "Close Bag ([I] / ESC)", 15);
-        closeBtn.onClick.AddListener(() => _combat?.ToggleInventoryPanel());
-
-        _inventoryOverlay.SetActive(false);
+        _inventoryUI = gameObject.AddComponent<MMOInventoryPanelUI>();
+        _inventoryUI.Build(transform, _combat, _combat != null ? _combat.Inventory : null, _rectSprite);
     }
 
     private void BuildPauseMenu()
@@ -722,15 +699,14 @@ public sealed class MMOGameplayHUD : MonoBehaviour
         float critMult,
         float dodgeCd,
         float stunCd,
-        float healCd,
-        int potions,
         int gold,
-        int weaponTier,
-        int armorTier,
         int bossKills,
         float powerBuffRemaining,
+        float hasteBuffRemaining,
         string questTitle,
         string questDetail,
+        string lootPrompt,
+        MMOPlayerInventory inventory,
         bool inventoryOpen,
         bool chatOpen,
         string visibleChatText,
@@ -739,8 +715,8 @@ public sealed class MMOGameplayHUD : MonoBehaviour
         UpdateTargetFrame(target);
         UpdatePartyFrame();
         UpdateMinimap();
-        UpdateQuestAndEconomyVisual(potions, gold, weaponTier, armorTier, bossKills, powerBuffRemaining, questTitle, questDetail, inventoryOpen);
-        UpdatePlayerBars(isDead, respawnCountdown, combatBanner, showBanner, level, hp, maxHp, exp, expToNext, critChance, critMult, dodgeCd, stunCd, healCd, potions);
+        UpdateQuestAndEconomyVisual(gold, powerBuffRemaining, hasteBuffRemaining, questTitle, questDetail, lootPrompt, inventory, inventoryOpen);
+        UpdatePlayerBars(isDead, respawnCountdown, combatBanner, showBanner, level, hp, maxHp, exp, expToNext, critChance, critMult, dodgeCd, stunCd, inventory);
         UpdateChatVisual(chatOpen, visibleChatText);
         UpdatePauseVisual(pauseMenuOpen);
     }
@@ -869,62 +845,50 @@ public sealed class MMOGameplayHUD : MonoBehaviour
     }
 
     private void UpdateQuestAndEconomyVisual(
-        int potions,
         int gold,
-        int weaponTier,
-        int armorTier,
-        int bossKills,
         float powerBuffRemaining,
+        float hasteBuffRemaining,
         string questTitle,
         string questDetail,
+        string lootPrompt,
+        MMOPlayerInventory inventory,
         bool inventoryOpen)
     {
         if (_questTitleText != null) _questTitleText.text = questTitle;
         if (_questDetailText != null) _questDetailText.text = questDetail;
-        if (_goldHudText != null) _goldHudText.text = $"GOLD: {gold}G   |   POTIONS: {potions}   |   [I] BAG";
+        if (_goldHudText != null)
+        {
+            int stones = inventory != null ? inventory.GetItemCount("enhance_stone") : 0;
+            _goldHudText.text = $"GOLD: {gold}G  |  STN: {stones}  |  [I] BAG";
+        }
+
+        if (_lootPromptBar != null)
+        {
+            bool hasPrompt = !string.IsNullOrEmpty(lootPrompt) && !inventoryOpen;
+            if (_lootPromptBar.activeSelf != hasPrompt) _lootPromptBar.SetActive(hasPrompt);
+            if (hasPrompt && _lootPromptText != null) _lootPromptText.text = lootPrompt;
+        }
 
         if (_buffHudText != null)
         {
-            bool hasBuff = powerBuffRemaining > 0.05f;
-            if (_buffHudText.gameObject.activeSelf != hasBuff)
+            bool hasPower = powerBuffRemaining > 0.05f;
+            bool hasHaste = hasteBuffRemaining > 0.05f;
+            bool hasAny = hasPower || hasHaste;
+            if (_buffHudText.gameObject.activeSelf != hasAny)
             {
-                _buffHudText.gameObject.SetActive(hasBuff);
+                _buffHudText.gameObject.SetActive(hasAny);
             }
-            if (hasBuff)
+            if (hasAny)
             {
-                _buffHudText.text = $"POWER SURGE ACTIVE: +25% DMG / +15% CRIT ({powerBuffRemaining:0.0}s)";
+                string pStr = hasPower ? $"BERSERK +30% ATK ({powerBuffRemaining:0.0}s)" : "";
+                string hStr = hasHaste ? $"HASTE +35% SPD ({hasteBuffRemaining:0.0}s)" : "";
+                _buffHudText.text = (hasPower && hasHaste) ? $"{pStr}   |   {hStr}" : (pStr + hStr);
             }
         }
 
-        if (_inventoryOverlay != null)
+        if (_inventoryUI != null)
         {
-            if (_inventoryOverlay.activeSelf != inventoryOpen)
-            {
-                _inventoryOverlay.SetActive(inventoryOpen);
-            }
-
-            if (inventoryOpen && _combat != null)
-            {
-                if (_invSummaryText != null)
-                {
-                    _invSummaryText.text =
-                        $"Gold Balance: <color=#FFD94D>{gold} G</color>    |    Health Potions: <color=#FF7788>{potions}</color>\n" +
-                        $"Weapon Mastery: <color=#66BBFF>+{weaponTier}</color> (+{weaponTier * 22} ATK)   |   Armor: <color=#66EE88>+{armorTier}</color> (+{armorTier * 150} HP)\n" +
-                        $"Boss Warlords Slain: <color=#FFCC44>{bossKills}</color>";
-                }
-                if (_invPotionBtnText != null)
-                {
-                    _invPotionBtnText.text = $"Buy +1 Health Potion ({_combat.PotionBuyCost}G)";
-                }
-                if (_invWeaponBtnText != null)
-                {
-                    _invWeaponBtnText.text = $"Upgrade Weapon to +{weaponTier + 1} (+22/+28 ATK) — {_combat.WeaponUpgradeCost}G";
-                }
-                if (_invArmorBtnText != null)
-                {
-                    _invArmorBtnText.text = $"Upgrade Armor to +{armorTier + 1} (+150 MaxHP) — {_combat.ArmorUpgradeCost}G";
-                }
-            }
+            _inventoryUI.SetVisible(inventoryOpen);
         }
     }
 
@@ -942,8 +906,7 @@ public sealed class MMOGameplayHUD : MonoBehaviour
         float critMult,
         float dodgeCd,
         float stunCd,
-        float healCd,
-        int potions)
+        MMOPlayerInventory inventory)
     {
         if (_defeatedText != null)
         {
@@ -976,11 +939,27 @@ public sealed class MMOGameplayHUD : MonoBehaviour
             _playerStatsText.text = $"PLAYER Lv.{level}   |   HP: {hp}/{maxHp}   |   EXP: {exp}/{expToNext}   |   CRIT: {Mathf.RoundToInt(critChance * 100f)}% (x{critMult:0.0})";
         }
 
-        UpdateSkillSlot(0, 0f, _playerController != null && _playerController.IsAttacking ? "SWINGING" : "READY");
+        UpdateSkillSlot(0, 0f, _playerController != null && _playerController.IsAttacking ? "SWING" : "READY");
         UpdateSkillSlot(1, dodgeCd, dodgeCd > 0.05f ? $"{dodgeCd:0.0}s" : "READY");
         UpdateSkillSlot(2, stunCd, stunCd > 0.05f ? $"{stunCd:0.0}s" : "READY");
-        string healText = potions <= 0 ? "EMPTY (0)" : (healCd > 0.05f ? $"{healCd:0.0}s (x{potions})" : $"READY (x{potions})");
-        UpdateSkillSlot(3, potions <= 0 ? 1f : healCd, healText);
+
+        for (int h = 0; h < MMOPlayerInventory.HotbarSlotCount; h++)
+        {
+            SkillSlotUI hb = _hotbarSlots[h];
+            string itemId = inventory != null ? inventory.GetHotbarItemId(h) : string.Empty;
+            MMOItemTemplate tpl = MMOItemCatalog.Get(itemId);
+            int qty = inventory != null ? inventory.GetItemCount(itemId) : 0;
+            float cd = inventory != null ? inventory.GetHotbarCooldownRemaining(h) : 0f;
+
+            string keyPrefix = h == 0 ? "[1/R]" : $"[{h + 1}]";
+            hb.keyLabel.text = tpl != null ? $"{keyPrefix} {tpl.shortCode}" : $"{keyPrefix} ---";
+            hb.statusLabel.text = tpl == null ? "EMPTY" : (cd > 0.05f ? $"{cd:0.0}s (x{qty})" : $"x{qty}");
+            hb.statusLabel.color = qty <= 0 ? new Color(0.65f, 0.45f, 0.45f)
+                : (cd > 0.05f ? new Color(1f, 0.72f, 0.30f) : new Color(0.38f, 1f, 0.56f));
+            hb.fill.color = qty > 0 && cd <= 0.05f
+                ? new Color(0.12f, 0.17f, 0.26f, 0.96f)
+                : new Color(0.08f, 0.09f, 0.12f, 0.85f);
+        }
     }
 
     private void UpdateSkillSlot(int index, float cooldown, string label)

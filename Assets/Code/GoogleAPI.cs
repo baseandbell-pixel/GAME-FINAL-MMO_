@@ -21,6 +21,7 @@ public class PlayerData
     [FirestoreProperty] public int questStage { get; set; }
     [FirestoreProperty] public int questKills { get; set; }
     [FirestoreProperty] public int bossKills { get; set; }
+    [FirestoreProperty] public string inventoryJson { get; set; }
 }
 
 public class GoogleAPI : MonoBehaviour
@@ -44,6 +45,7 @@ public class GoogleAPI : MonoBehaviour
     public int questStage = 0;
     public int questKills = 0;
     public int bossKills = 0;
+    public string inventoryJson = "";
 
 
     public bool profileLoaded;
@@ -117,6 +119,7 @@ public class GoogleAPI : MonoBehaviour
                         questStage = Mathf.Max(0, saved.questStage);
                         questKills = Mathf.Max(0, saved.questKills);
                         bossKills = Mathf.Max(0, saved.bossKills);
+                        inventoryJson = saved.inventoryJson ?? "";
                         loaded = true;
                     }
                 }
@@ -140,6 +143,7 @@ public class GoogleAPI : MonoBehaviour
             questStage = 0;
             questKills = 0;
             bossKills = 0;
+            inventoryJson = "";
             await SaveProfileAsync();
         }
 
@@ -165,6 +169,7 @@ public class GoogleAPI : MonoBehaviour
                 questStage = questStage,
                 questKills = questKills,
                 bossKills = bossKills,
+                inventoryJson = inventoryJson ?? "",
             };
             await Doc.SetAsync(toSave, SetOptions.MergeAll);
             return true;
@@ -207,6 +212,15 @@ public class GoogleAPI : MonoBehaviour
         questKills = Mathf.Max(0, newQuestKills);
         bossKills = Mathf.Max(0, newBossKills);
 
+        if (!string.IsNullOrEmpty(uuid))
+        {
+            _ = SaveProfileAsync();
+        }
+    }
+
+    public void SaveInventorySnapshot(string json)
+    {
+        inventoryJson = json ?? "";
         if (!string.IsNullOrEmpty(uuid))
         {
             _ = SaveProfileAsync();

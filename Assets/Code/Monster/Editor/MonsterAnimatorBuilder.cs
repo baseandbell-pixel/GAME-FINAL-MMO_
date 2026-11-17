@@ -26,7 +26,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
     public const string LobbyScenePath = "Assets/Scenes/Lobby.unity";
     public const string PlayerPrefabPath = "Assets/Prefabs/Player.prefab";
     public const string PlayerControllerPath = "Assets/Characters/AC_Player.controller";
-    private const string PipelineVersionStampPath = "Temp/MonsterPipelineV7_Ready.stamp";
+    private const string PipelineVersionStampPath = "Temp/MonsterPipelineV8_Ready.stamp";
 
     public const string SlotSpawn = "Placeholder_Spawn";
     public const string SlotIdle = "Placeholder_Idle";
@@ -999,7 +999,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
                     so.ApplyModifiedPropertiesWithoutUndo();
                 }
 
-                RemoveSwordFromPlayer(playerRoot);
+                SetupToggleableEquippedSword(playerRoot);
                 PrefabUtility.SaveAsPrefabAsset(playerRoot, PlayerPrefabPath);
             }
             finally
@@ -1011,15 +1011,43 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         AssetDatabase.SaveAssets();
     }
 
-    private static void RemoveSwordFromPlayer(GameObject playerRoot)
+    private static void SetupToggleableEquippedSword(GameObject playerRoot)
     {
         if (playerRoot == null) return;
 
-        Transform existingSword = FindBoneRecursive(playerRoot.transform, "Player_Sword_Equipped");
-        if (existingSword != null)
+        Transform oldSword = FindBoneRecursive(playerRoot.transform, "Player_Sword_Equipped");
+        if (oldSword != null) DestroyImmediate(oldSword.gameObject);
+
+        Transform existingVisual = FindBoneRecursive(playerRoot.transform, "EquippedWeaponVisual");
+        if (existingVisual != null) DestroyImmediate(existingVisual.gameObject);
+
+        Transform rightHand = FindBoneRecursive(playerRoot.transform, "mixamorig:RightHand");
+        GameObject swordModel = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/All Model/sword/source/Sword_Low_Done.FBX");
+        if (rightHand == null || swordModel == null) return;
+
+        GameObject swordInstance = (GameObject)PrefabUtility.InstantiatePrefab(swordModel);
+        swordInstance.name = "EquippedWeaponVisual";
+        swordInstance.transform.SetParent(rightHand, false);
+        swordInstance.transform.localPosition = new Vector3(0.02f, 0.08f, 0.03f);
+        swordInstance.transform.localRotation = Quaternion.Euler(-82f, 0f, 90f);
+        swordInstance.transform.localScale = Vector3.one * 0.42f;
+
+        Collider[] cols = swordInstance.GetComponentsInChildren<Collider>(true);
+        for (int i = 0; i < cols.Length; i++) DestroyImmediate(cols[i]);
+
+        Material swordMat = AssetDatabase.LoadAssetAtPath<Material>("Assets/All Model/sword/MAT_Sword_URP.mat");
+        if (swordMat != null)
         {
-            DestroyImmediate(existingSword.gameObject);
+            Renderer[] rends = swordInstance.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < rends.Length; i++)
+            {
+                rends[i].sharedMaterial = swordMat;
+                rends[i].shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            }
         }
+
+        // Hidden by default until the player equips a Weapon inside the Inventory Bag!
+        swordInstance.SetActive(false);
     }
 
     private static AnimatorState FindStateByName(AnimatorStateMachine sm, string stateName)
@@ -1566,9 +1594,11 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         bool phaseSystemsReady =
             typeof(MMOGameplayHUD) != null &&
             typeof(MMOLootPickup) != null &&
+            typeof(MMOPlayerInventory) != null &&
+            typeof(MMOInventoryPanelUI) != null &&
             typeof(MMOAudioManager) != null &&
             !string.IsNullOrEmpty(LobbyNetwork.CustomLobbyName);
-        AssertTest("Phase 3-5 Systems Ready (uGUI HUD, Loot, BGM, Isolated Lobby)", phaseSystemsReady, LobbyNetwork.CustomLobbyName);
+        AssertTest("Phase 3-6 Systems Ready (uGUI HUD, Loot, Bag/Forge, BGM, Isolated Lobby)", phaseSystemsReady, LobbyNetwork.CustomLobbyName);
 
         bool lobbyLinksToMap1 = File.Exists(LobbyScenePath) &&
                                 File.ReadAllText(LobbyScenePath).Contains("gameSceneName: Map1");

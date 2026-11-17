@@ -42,6 +42,15 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
     private MMOPlayerController _playerController;
     private MMOCameraController _cameraController;
+    private MMOPlayerInventory _inventory;
+
+    private int _baseMaxHealth;
+    private int _baseAtk1Min;
+    private int _baseAtk1Max;
+    private int _baseAtk2Min;
+    private int _baseAtk2Max;
+    private float _baseCritChance;
+    private float _baseCritMult;
 
     private int _currentHealth;
     private int _currentExp;
@@ -63,13 +72,14 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
     // Economy, Equipment, & Quest Loop
     private int _gold;
-    private int _potions = 3;
-    private int _weaponTier;
-    private int _armorTier;
     private int _questStage;
     private int _questKills;
     private int _bossKills;
     private float _powerBuffUntil;
+    private float _hasteBuffUntil;
+    private float _lifeStealPct;
+    private float _cooldownReductionPct;
+    private int _warlordSetPieces;
 
     private struct ChatEntry
     {
@@ -84,19 +94,28 @@ public sealed class MMOPlayerCombat : MonoBehaviour
     public int MaxHealth => maxHealth;
     public bool IsDead => _isDead;
     public int Gold => _gold;
-    public int Potions => _potions;
-    public int WeaponTier => _weaponTier;
-    public int ArmorTier => _armorTier;
+    public int Potions => _inventory != null ? _inventory.GetTotalPotionCount() : 0;
     public int BossKills => _bossKills;
+    public int WarlordSetPieces => _warlordSetPieces;
+    public float LifeStealPct => _lifeStealPct;
+    public float CooldownReductionPct => _cooldownReductionPct;
     public float PowerBuffRemaining => Mathf.Max(0f, _powerBuffUntil - Time.time);
-    public int PotionBuyCost => 50;
-    public int WeaponUpgradeCost => 120 + _weaponTier * 140;
-    public int ArmorUpgradeCost => 100 + _armorTier * 130;
+    public float HasteBuffRemaining => Mathf.Max(0f, _hasteBuffUntil - Time.time);
+    public MMOPlayerInventory Inventory => _inventory;
 
     private void Awake()
     {
         _playerController = GetComponent<MMOPlayerController>();
         _playerFusion = GetComponent<MMOPlayerFusion>();
+        _inventory = GetComponent<MMOPlayerInventory>() ?? gameObject.AddComponent<MMOPlayerInventory>();
+
+        _baseMaxHealth = maxHealth;
+        _baseAtk1Min = attack1MinDamage;
+        _baseAtk1Max = attack1MaxDamage;
+        _baseAtk2Min = attack2MinDamage;
+        _baseAtk2Max = attack2MaxDamage;
+        _baseCritChance = baseCritChance;
+        _baseCritMult = critDamageMultiplier;
         _currentHealth = maxHealth;
     }
 
@@ -145,33 +164,21 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
         if (GoogleAPI.instance != null && GoogleAPI.instance.profileLoaded)
         {
-            int savedLv = Mathf.Max(5, GoogleAPI.instance.level);
-            int extraLevels = savedLv - playerLevel;
-            if (extraLevels > 0)
-            {
-                playerLevel = savedLv;
-                maxHealth += extraLevels * 150;
-                attack1MinDamage += extraLevels * 15;
-                attack1MaxDamage += extraLevels * 20;
-                attack2MinDamage += extraLevels * 25;
-                attack2MaxDamage += extraLevels * 30;
-            }
+            playerLevel = Mathf.Max(5, GoogleAPI.instance.level);
             _currentExp = Mathf.Clamp(GoogleAPI.instance.exp, 0, _expToNextLevel - 1);
             _gold = Mathf.Max(0, GoogleAPI.instance.gold);
-            _potions = Mathf.Max(0, GoogleAPI.instance.potions);
-            _weaponTier = Mathf.Max(0, GoogleAPI.instance.weaponTier);
-            _armorTier = Mathf.Max(0, GoogleAPI.instance.armorTier);
             _questStage = Mathf.Max(0, GoogleAPI.instance.questStage);
             _questKills = Mathf.Max(0, GoogleAPI.instance.questKills);
             _bossKills = Mathf.Max(0, GoogleAPI.instance.bossKills);
-
-            maxHealth += _armorTier * 150;
-            attack1MinDamage += _weaponTier * 22;
-            attack1MaxDamage += _weaponTier * 22;
-            attack2MinDamage += _weaponTier * 28;
-            attack2MaxDamage += _weaponTier * 28;
-            _currentHealth = maxHealth;
         }
+
+        if (_inventory != null)
+        {
+            _inventory.OnInventoryChanged += RecalculateTotalCombatStats;
+            _inventory.Initialize(this, _playerController);
+        }
+        RecalculateTotalCombatStats();
+        _currentHealth = maxHealth;
 
         _cameraController = MMOCameraController.Instance;
         if (_cameraController == null)
@@ -182,6 +189,10 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (_inventory != null)
+        {
+            _inventory.OnInventoryChanged -= RecalculateTotalCombatStats;
+        }
         if (_hud != null)
         {
             Destroy(_hud.gameObject);
@@ -258,16 +269,48 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             _currentHealth = Mathf.Min(maxHealth, _currentHealth + 8);
         }
 
+        // Refresh dynamic buff speeds each frame
+        if (_playerController != null)
+        {
+            ComputedGearStats gs = _inventory != null ? _inventory.GetTotalEquippedStats(out _) : default;
+            float speedBonus = 1f + (gs.moveSpeedPct * 0.01f) + (Time.time < _hasteBuffUntil ? 0.35f : 0f);
+            float cdFactor = 1f - Mathf.Clamp((_cooldownReductionPct * 0.01f) + (Time.time < _hasteBuffUntil ? 0.25f : 0f), 0f, 0.55f);
+            _playerController.ExternalSpeedMultiplier = speedBonus;
+            _playerController.ExternalCooldownMultiplier = cdFactor;
+        }
+
         // Skill [E]: Heavy Critical Stun Strike
         if (Input.GetKeyDown(KeyCode.E) && Time.time >= _nextStunSkillTime && !_playerController.IsAttacking && !_playerController.IsDodging)
         {
             ExecuteStunStrikeSkill();
         }
 
-        // Potion [R]: Self Heal
-        if (Input.GetKeyDown(KeyCode.R) && Time.time >= _nextHealTime && _currentHealth < maxHealth)
+        // Ground Loot [F]
+        if (Input.GetKeyDown(KeyCode.F))
         {
-            ExecuteHealPotion();
+            MMOLootPickup.TryPickupNearest(transform.position);
+        }
+
+        // Quick Hotbar [1]..[5] (and [R] triggers Slot 1)
+        if (Input.GetKeyDown(KeyCode.Alpha1) || Input.GetKeyDown(KeyCode.R))
+        {
+            _inventory?.UseHotbarSlot(0);
+        }
+        else if (Input.GetKeyDown(KeyCode.Alpha2))
+        {
+            _inventory?.UseHotbarSlot(1);
+        }
+        else if (Input.GetKeyDown(KeyCode.Alpha3))
+        {
+            _inventory?.UseHotbarSlot(2);
+        }
+        else if (Input.GetKeyDown(KeyCode.Alpha4))
+        {
+            _inventory?.UseHotbarSlot(3);
+        }
+        else if (Input.GetKeyDown(KeyCode.Alpha5))
+        {
+            _inventory?.UseHotbarSlot(4);
         }
     }
 
@@ -290,6 +333,8 @@ public sealed class MMOPlayerCombat : MonoBehaviour
         }
 
         GetQuestSummary(out string questTitle, out string questDetail);
+        MMOLootPickup nearestDrop = MMOLootPickup.FindNearestInteractable(transform.position);
+        string lootPrompt = nearestDrop != null ? $"[F] Pick Up: {nearestDrop.DisplayPromptText}" : string.Empty;
 
         _hud.RefreshHUD(
             GetActiveTargetMonster(),
@@ -306,15 +351,14 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             critDamageMultiplier,
             _playerController.DodgeCooldownRemaining,
             Mathf.Max(0f, _nextStunSkillTime - Time.time),
-            Mathf.Max(0f, _nextHealTime - Time.time),
-            _potions,
             _gold,
-            _weaponTier,
-            _armorTier,
             _bossKills,
             PowerBuffRemaining,
+            HasteBuffRemaining,
             questTitle,
             questDetail,
+            lootPrompt,
+            _inventory,
             _inventoryOpen,
             _chatOpen,
             chatLines.ToString(),
@@ -443,7 +487,8 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
         bool isHeavyComboFinisher = attackStep >= 2;
         float effectiveCritChance = GetEffectiveCritChance(isHeavyComboFinisher);
-        float buffMultiplier = Time.time < _powerBuffUntil ? 1.25f : 1.0f;
+        float buffMultiplier = Time.time < _powerBuffUntil ? 1.30f : 1.0f;
+        int totalDealtForLifeSteal = 0;
 
         for (int i = 0; i < targets.Count; i++)
         {
@@ -467,6 +512,7 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             {
                 monster.RequestDamage(finalDamage, isCrit, transform, hitPoint);
                 _lastHitMonster = monster;
+                totalDealtForLifeSteal += finalDamage;
 
                 if (isCrit)
                 {
@@ -483,11 +529,18 @@ public sealed class MMOPlayerCombat : MonoBehaviour
                 }
             }
         }
+
+        if (totalDealtForLifeSteal > 0 && _lifeStealPct > 0.1f && _currentHealth < maxHealth)
+        {
+            int leech = Mathf.Max(1, Mathf.RoundToInt(totalDealtForLifeSteal * (_lifeStealPct * 0.01f)));
+            _currentHealth = Mathf.Min(maxHealth, _currentHealth + leech);
+        }
     }
 
     private void ExecuteStunStrikeSkill()
     {
-        _nextStunSkillTime = Time.time + stunSkillCooldown;
+        float cdrFactor = 1f - Mathf.Clamp(_cooldownReductionPct * 0.01f, 0f, 0.45f);
+        _nextStunSkillTime = Time.time + stunSkillCooldown * cdrFactor;
         _playerController.TriggerSkillAction(4);
 
         Vector3 burstCenter = transform.position + Vector3.up * 1.0f + transform.forward * 1.5f;
@@ -504,7 +557,7 @@ public sealed class MMOPlayerCombat : MonoBehaviour
                 continue;
             }
 
-            float buffMult = Time.time < _powerBuffUntil ? 1.25f : 1.0f;
+            float buffMult = Time.time < _powerBuffUntil ? 1.30f : 1.0f;
             int critDmg = Mathf.RoundToInt(Random.Range(attack2MinDamage, attack2MaxDamage + 1) * critDamageMultiplier * buffMult);
             Vector3 hitPoint = monster.transform.position + Vector3.up * 1.25f;
 
@@ -521,32 +574,6 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
         _lastCombatBanner = "[STUN] THUNDER STUN STRIKE! (CRITICAL + STUN)";
         _lastCombatBannerUntil = Time.time + 2.2f;
-    }
-
-    private void ExecuteHealPotion()
-    {
-        if (_potions <= 0)
-        {
-            _nextHealTime = Time.time + 0.6f;
-            _lastCombatBanner = "NO POTIONS! Defeat monsters or press [I] to buy (50G)";
-            _lastCombatBannerUntil = Time.time + 2.2f;
-            return;
-        }
-
-        _potions--;
-        _nextHealTime = Time.time + healPotionCooldown;
-        _playerController.TriggerSkillAction(5);
-        int healAmount = Mathf.RoundToInt(maxHealth * 0.50f);
-        _currentHealth = Mathf.Min(maxHealth, _currentHealth + healAmount);
-
-        MMOCombatVFX.SpawnRespawnEffect(transform.position);
-        MMOAudioManager.PlayHeal(transform.position);
-        MMOCombatVFX.SpawnStatusPopup(
-            transform.position + Vector3.up * 2.2f,
-            $"+{healAmount} HP",
-            new Color(0.25f, 1f, 0.45f, 1f),
-            1.1f);
-        SaveProgressionToCloud();
     }
 
     public void TakeDamageFromMonster(int damage, bool isCrit, MMOMonsterAI attacker)
@@ -637,17 +664,43 @@ public sealed class MMOPlayerCombat : MonoBehaviour
                           defeatedMonster.Bridge.Config.isBossOrElite;
             Vector3 dropCenter = defeatedMonster.transform.position;
 
-            int goldDrop = isBoss ? Random.Range(180, 261) : Random.Range(45, 86);
-            MMOLootPickup.SpawnDrop(dropCenter, MMOLootPickup.LootType.Gold, goldDrop, this);
+            int goldDrop = isBoss ? Random.Range(220, 320) : Random.Range(55, 95);
+            MMOLootPickup.SpawnGoldDrop(dropCenter, goldDrop, this, _inventory);
+
+            int stoneDrop = isBoss ? Random.Range(3, 6) : (Random.value < 0.65f ? 1 : 0);
+            if (stoneDrop > 0)
+            {
+                MMOLootPickup.SpawnItemDrop(
+                    dropCenter,
+                    MMOItemCatalog.CreateInstance("enhance_stone", ItemRarity.Common, stoneDrop, false),
+                    this,
+                    _inventory);
+            }
 
             if (isBoss || Random.value < 0.60f)
             {
-                MMOLootPickup.SpawnDrop(dropCenter, MMOLootPickup.LootType.HealthPotion, isBoss ? 2 : 1, this);
+                string potId = isBoss ? "potion_greater" : (Random.value < 0.25f ? "elixir_berserk" : "potion_minor");
+                ItemRarity potRarity = potId == "potion_minor" ? ItemRarity.Common : ItemRarity.Uncommon;
+                MMOLootPickup.SpawnItemDrop(
+                    dropCenter,
+                    MMOItemCatalog.CreateInstance(potId, potRarity, isBoss ? 2 : 1, false),
+                    this,
+                    _inventory);
             }
 
-            if (isBoss || Random.value < 0.30f)
+            if (isBoss)
             {
-                MMOLootPickup.SpawnDrop(dropCenter, MMOLootPickup.LootType.PowerRelic, 1, this);
+                MMOLootPickup.SpawnItemDrop(
+                    dropCenter,
+                    MMOItemCatalog.CreateInstance("warlord_core", ItemRarity.Epic, Random.Range(1, 3), false),
+                    this,
+                    _inventory);
+            }
+
+            if (isBoss || Random.value < 0.70f)
+            {
+                MMOItemInstance gearDrop = MMOItemCatalog.RollMonsterGearDrop(isBoss);
+                MMOLootPickup.SpawnItemDrop(dropCenter, gearDrop, this, _inventory);
             }
 
             AdvanceQuestProgress(isBoss);
@@ -656,90 +709,173 @@ public sealed class MMOPlayerCombat : MonoBehaviour
         SaveProgressionToCloud();
     }
 
-    public void CollectLoot(MMOLootPickup.LootType type, int amount)
+    public void CollectGoldDrop(int amount)
     {
-        switch (type)
+        _gold += Mathf.Max(1, amount);
+        MMOCombatVFX.SpawnStatusPopup(
+            transform.position + Vector3.up * 2.15f - transform.right * 0.5f,
+            $"+{amount} GOLD",
+            new Color(1f, 0.85f, 0.2f, 1f),
+            1.05f);
+        if (Time.time >= _lastCombatBannerUntil)
         {
-            case MMOLootPickup.LootType.Gold:
-                _gold += Mathf.Max(1, amount);
-                MMOCombatVFX.SpawnStatusPopup(
-                    transform.position + Vector3.up * 2.15f - transform.right * 0.5f,
-                    $"+{amount} GOLD",
-                    new Color(1f, 0.85f, 0.2f, 1f),
-                    1.05f);
-                if (Time.time >= _lastCombatBannerUntil)
-                {
-                    _lastCombatBanner = $"LOOT: +{amount} GOLD";
-                    _lastCombatBannerUntil = Time.time + 1.8f;
-                }
-                break;
+            ShowBanner($"LOOT: +{amount} GOLD", 1.8f);
+        }
+        SaveProgressionToCloud();
+    }
 
-            case MMOLootPickup.LootType.HealthPotion:
-                _potions += Mathf.Max(1, amount);
-                MMOCombatVFX.SpawnStatusPopup(
-                    transform.position + Vector3.up * 2.45f + transform.right * 0.5f,
-                    $"+{amount} POTION",
-                    new Color(1f, 0.35f, 0.45f, 1f),
-                    1.1f);
-                _lastCombatBanner = $"LOOT: +{amount} HEALTH POTION";
-                _lastCombatBannerUntil = Time.time + 2.0f;
-                break;
+    public void CollectItemDrop(MMOItemInstance item)
+    {
+        if (item == null || _inventory == null) return;
+        MMOItemTemplate tpl = MMOItemCatalog.Get(item.itemId);
+        if (tpl == null) return;
 
-            case MMOLootPickup.LootType.PowerRelic:
-                _powerBuffUntil = Time.time + 12f;
-                MMOCombatVFX.SpawnStatusPopup(
-                    transform.position + Vector3.up * 2.75f,
-                    "POWER SURGE (+25% DMG)",
-                    new Color(0.3f, 0.95f, 1f, 1f),
-                    1.15f);
-                _lastCombatBanner = "POWER SURGE! (+25% DMG / +15% CRIT for 12s)";
-                _lastCombatBannerUntil = Time.time + 2.4f;
-                break;
+        bool added = _inventory.AddItem(item);
+        if (!added)
+        {
+            ShowBanner("BAG IS FULL! Salvage or sell junk in [I]", 2.4f);
+            return;
+        }
+
+        Color col = MMOItemCatalog.GetRarityColor(item.rarity);
+        string qty = item.stackCount > 1 ? $" x{item.stackCount}" : "";
+        MMOCombatVFX.SpawnStatusPopup(
+            transform.position + Vector3.up * 2.45f + transform.right * 0.5f,
+            $"+[{item.rarity}] {tpl.displayName}{qty}",
+            col,
+            1.15f);
+        ShowBanner($"LOOTED: [{item.rarity}] {tpl.displayName}{qty}", 2.2f);
+
+        if (item.rarity >= ItemRarity.Epic)
+        {
+            if (_playerFusion == null) _playerFusion = GetComponent<MMOPlayerFusion>();
+            string msg = $"obtained [{item.rarity}] {tpl.displayName}!";
+            if (_playerFusion != null)
+            {
+                _playerFusion.SendChatMessage(msg);
+            }
         }
 
         SaveProgressionToCloud();
     }
 
-    public bool TryBuyPotionFromUI()
+    public void ApplyConsumableEffect(MMOItemTemplate tpl)
     {
-        if (_gold < PotionBuyCost) return false;
-        _gold -= PotionBuyCost;
-        _potions++;
+        if (tpl == null) return;
+
+        if (tpl.healPercent > 0f)
+        {
+            _playerController.TriggerSkillAction(5);
+            int healAmount = Mathf.RoundToInt(maxHealth * tpl.healPercent);
+            _currentHealth = Mathf.Min(maxHealth, _currentHealth + healAmount);
+            MMOCombatVFX.SpawnRespawnEffect(transform.position);
+            MMOAudioManager.PlayHeal(transform.position);
+            MMOCombatVFX.SpawnStatusPopup(
+                transform.position + Vector3.up * 2.2f,
+                $"+{healAmount} HP",
+                new Color(0.25f, 1f, 0.45f, 1f),
+                1.1f);
+            return;
+        }
+
+        if (tpl.itemId == "elixir_berserk")
+        {
+            _powerBuffUntil = Time.time + tpl.buffDuration;
+            MMOCombatVFX.SpawnRespawnEffect(transform.position);
+            MMOAudioManager.PlayLevelUp(transform.position);
+            ShowBanner("BERSERK ELIXIR! (+30% ATK / +15% CRIT for 20s)", 2.4f);
+        }
+        else if (tpl.itemId == "scroll_haste")
+        {
+            _hasteBuffUntil = Time.time + tpl.buffDuration;
+            MMOCombatVFX.SpawnDodgeBurst(transform.position, transform.forward);
+            MMOAudioManager.PlayDodgeDash(transform.position);
+            ShowBanner("WIND HASTE SCROLL! (+35% SPEED / FAST DODGE for 15s)", 2.4f);
+        }
+        else if (tpl.itemId == "thunder_bomb")
+        {
+            Vector3 center = transform.position + transform.forward * 1.4f;
+            MMOCombatVFX.SpawnHitEffect(center + Vector3.up * 0.5f, true, new Color(0.4f, 0.85f, 1f, 1f));
+            MMOAudioManager.PlayStunStrike(center);
+            List<MMOMonsterAI> targets = FindMonstersInMeleeArc(attackRange + 3.5f, 360f);
+            for (int i = 0; i < targets.Count; i++)
+            {
+                if (targets[i] == null || targets[i].IsDead) continue;
+                int dmg = Mathf.RoundToInt(attack2MaxDamage * 1.8f);
+                targets[i].RequestDamage(dmg, true, transform, targets[i].transform.position + Vector3.up * 1.1f);
+                targets[i].RequestStun(3.2f);
+            }
+            ShowBanner("THUNDER BOMB! (AOE CRIT + 3.2s STUN)", 2.2f);
+        }
+    }
+
+    public void GrantGoldFromSalvage(int amount)
+    {
+        _gold += Mathf.Max(0, amount);
+        SaveProgressionToCloud();
+    }
+
+    public void SpendGold(int amount)
+    {
+        _gold = Mathf.Max(0, _gold - Mathf.Max(0, amount));
+        SaveProgressionToCloud();
+    }
+
+    public void ShowBanner(string text, float duration)
+    {
+        _lastCombatBanner = text;
+        _lastCombatBannerUntil = Time.time + duration;
+    }
+
+    public bool TryBuyShopItem(string itemId, int cost)
+    {
+        if (_gold < cost || _inventory == null) return false;
+        MMOItemTemplate tpl = MMOItemCatalog.Get(itemId);
+        if (tpl == null) return false;
+
+        MMOItemInstance item = MMOItemCatalog.CreateInstance(itemId, itemId == "potion_minor" ? ItemRarity.Common : ItemRarity.Uncommon, 1, false);
+        if (!_inventory.AddItem(item))
+        {
+            ShowBanner("BAG IS FULL!", 1.8f);
+            return false;
+        }
+
+        _gold -= cost;
         MMOAudioManager.PlayLootPickup(transform.position);
+        ShowBanner($"BOUGHT: {tpl.displayName}", 1.8f);
         SaveProgressionToCloud();
         return true;
     }
 
-    public bool TryUpgradeWeaponFromUI()
+    public void RecalculateTotalCombatStats()
     {
-        int cost = WeaponUpgradeCost;
-        if (_gold < cost) return false;
-        _gold -= cost;
-        _weaponTier++;
-        attack1MinDamage += 22;
-        attack1MaxDamage += 22;
-        attack2MinDamage += 28;
-        attack2MaxDamage += 28;
-        MMOAudioManager.PlayLevelUp(transform.position);
-        _lastCombatBanner = $"WEAPON UPGRADED TO +{ _weaponTier }!";
-        _lastCombatBannerUntil = Time.time + 2.2f;
-        SaveProgressionToCloud();
-        return true;
-    }
+        int extraLv = Mathf.Max(0, playerLevel - 5);
+        int lvHp = extraLv * 150;
+        int lvAtk1Min = extraLv * 15;
+        int lvAtk1Max = extraLv * 20;
+        int lvAtk2Min = extraLv * 25;
+        int lvAtk2Max = extraLv * 30;
 
-    public bool TryUpgradeArmorFromUI()
-    {
-        int cost = ArmorUpgradeCost;
-        if (_gold < cost) return false;
-        _gold -= cost;
-        _armorTier++;
-        maxHealth += 150;
-        _currentHealth = maxHealth;
-        MMOAudioManager.PlayLevelUp(transform.position);
-        _lastCombatBanner = $"ARMOR UPGRADED TO +{ _armorTier } (+150 HP)!";
-        _lastCombatBannerUntil = Time.time + 2.2f;
-        SaveProgressionToCloud();
-        return true;
+        ComputedGearStats gear = _inventory != null
+            ? _inventory.GetTotalEquippedStats(out _warlordSetPieces)
+            : default;
+
+        int prevMax = maxHealth;
+        maxHealth = Mathf.Max(100, _baseMaxHealth + lvHp + gear.maxHp);
+        if (maxHealth > prevMax)
+        {
+            _currentHealth += (maxHealth - prevMax);
+        }
+        _currentHealth = Mathf.Clamp(_currentHealth, 0, maxHealth);
+
+        attack1MinDamage = _baseAtk1Min + lvAtk1Min + gear.attack;
+        attack1MaxDamage = _baseAtk1Max + lvAtk1Max + gear.attack;
+        attack2MinDamage = _baseAtk2Min + lvAtk2Min + Mathf.RoundToInt(gear.attack * 1.25f);
+        attack2MaxDamage = _baseAtk2Max + lvAtk2Max + Mathf.RoundToInt(gear.attack * 1.25f);
+        baseCritChance = Mathf.Clamp01(_baseCritChance + gear.critChancePct * 0.01f);
+        critDamageMultiplier = _baseCritMult + gear.critDamagePct * 0.01f;
+        _lifeStealPct = gear.lifeStealPct;
+        _cooldownReductionPct = gear.cooldownReductionPct;
     }
 
     private float GetEffectiveCritChance(bool isFinisher)
@@ -756,12 +892,6 @@ public sealed class MMOPlayerCombat : MonoBehaviour
         {
             _currentExp -= _expToNextLevel;
             playerLevel++;
-            maxHealth += 150;
-            _currentHealth = maxHealth;
-            attack1MinDamage += 15;
-            attack1MaxDamage += 20;
-            attack2MinDamage += 25;
-            attack2MaxDamage += 30;
             leveledUp = true;
 
             MMOCombatVFX.SpawnRespawnEffect(transform.position);
@@ -774,6 +904,8 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
         if (leveledUp)
         {
+            RecalculateTotalCombatStats();
+            _currentHealth = maxHealth;
             MMOAudioManager.PlayLevelUp(transform.position);
         }
     }
@@ -830,9 +962,11 @@ public sealed class MMOPlayerCombat : MonoBehaviour
     {
         GrantExpAmount(rewardExp);
         _gold += rewardGold;
-        _potions += rewardPotions;
-        _lastCombatBanner = $"{banner} (+{rewardGold}G, +{rewardExp} EXP)";
-        _lastCombatBannerUntil = Time.time + 3.2f;
+        if (rewardPotions > 0 && _inventory != null)
+        {
+            _inventory.AddItem(MMOItemCatalog.CreateInstance("potion_minor", ItemRarity.Common, rewardPotions, false));
+        }
+        ShowBanner($"{banner} (+{rewardGold}G, +{rewardExp} EXP)", 3.2f);
         MMOAudioManager.PlayLevelUp(transform.position);
         MMOCombatVFX.SpawnStatusPopup(
             transform.position + Vector3.up * 2.85f,
@@ -870,9 +1004,9 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             playerLevel,
             _currentExp,
             _gold,
-            _potions,
-            _weaponTier,
-            _armorTier,
+            Potions,
+            0,
+            0,
             _questStage,
             _questKills,
             _bossKills);
