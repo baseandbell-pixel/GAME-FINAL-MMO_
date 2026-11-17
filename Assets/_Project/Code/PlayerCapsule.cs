@@ -3,64 +3,95 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+/// <summary>
+/// ระบบควบคุมการเคลื่อนที่ของตัวละครผู้เล่นหลัก (GreatSword Character Controller) สำหรับ Photon Fusion Shared Mode:
+///   - รองรับการทำงานกับ CharacterController โดยตรงบน GreatSwordGirl.prefab (และรองรับโหมด Rigidbody สำรอง)
+///   - ปรับจูนความเร็วเดิน ย่อง วิ่ง และการออกตัว/เบรกให้มีน้ำหนักสมจริงสไตล์เกมกำลังภายใน (Where Winds Meet) ไม่ลื่นไถล
+///   - รองรับการเดิน 8 ทิศทาง (8-Directional Locomotion), การก้มย่องลอบสังหาร (Crouch ปุ่ม C), การกระโดด (ปุ่ม F) และการกลิ้งหลบ
+///   - ซิงก์ AvatarIndex จากหน้า Lobby และระบบเซฟ เพื่อแสดงรูปโปรไฟล์มุมขวาบนและสีชื่อผู้เล่นตรงกันทุกเครื่อง
+/// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerCapsule : NetworkBehaviour
 {
+    // เรนเดอเรอร์สำรอง (ปิดอัตโนมัติเมื่อใช้โมเดล GreatSword)
     public Renderer bodyRenderer;
+    // ป้ายชื่อและเลเวลที่ลอยเหนือศีรษะตัวละคร
     public TMP_Text nameLabel;
-    [Header("Character visual")]
-    [Tooltip("Optional rigged model child (e.g. CharacterVisual). When set, the legacy capsule renderer stays hidden and the model is shown instead.")]
+
+    [Header("Character visual (โมเดลตัวละครหลัก GreatSword)")]
+    [Tooltip("Rigged character transform (root itself for GreatSwordGirl.prefab, or child visual).")]
     [SerializeField] private Transform characterVisual;
-    [Header("Optional animation")]
+
+    [Header("Optional animation & network sync")]
     [SerializeField] private Animator animator;
+    [SerializeField] private NetworkMecanimAnimator networkAnimator;
     [SerializeField] private string moveXParameter = "MoveX";
     [SerializeField] private string moveYParameter = "MoveY";
     [SerializeField] private string sprintParameter = "IsSprinting";
 
-    [Header("Overhead nameplate")]
-    [SerializeField] private float overheadNameFontSize = 3.0f;
-    [SerializeField] private float overheadNameScale = 0.75f;
-    [SerializeField] private Vector3 overheadNameOffset = new Vector3(0f, 1.42f, 0f);
+    [Header("Overhead nameplate (ป้ายชื่อเหนือศีรษะ)")]
+    [SerializeField] private float overheadNameFontSize = 2.6f;
+    [SerializeField] private float overheadNameScale = 0.70f;
+    [SerializeField] private Vector3 overheadNameOffset = new Vector3(0f, 2.05f, 0f);
 
-    public float moveSpeed = 6f;
-    public float runSpeed = 1.6f;
-    public float acceleration = 40f;
-    public float rotationSpeed = 12f;
+    [Header("Where Winds Meet Grounded Martial-Arts Movement (ความเร็วและน้ำหนักการเคลื่อนที่)")]
+    // ความเร็วเดินย่องลอบเร้น / เดินช้า (m/s)
+    public float walkSpeed = 2.2f;
+    // ความเร็วเคลื่อนที่มาตรฐานขณะสำรวจและต่อสู้ (m/s) - สมดุลกับจังหวะก้าวเท้า
+    public float moveSpeed = 3.8f;
+    // ตัวคูณความเร็วขณะกดวิ่ง Sprint (Shift) -> ~5.89 m/s สมจริงมีน้ำหนัก
+    public float runSpeed = 1.55f;
+    // อัตราเร่งตอนออกตัว (ให้ความรู้สึกถ่ายน้ำหนักก่อนพุ่งตัว)
+    public float acceleration = 18f;
+    // อัตราหน่วงตอนหยุดเดิน (หยุดเท้ามั่นคง ไม่ลื่นไถล)
+    public float deceleration = 22f;
+    // ความเร็วในการหมุนตัวละคร
+    public float rotationSpeed = 11f;
+
+    [Header("Jump & Crouch Settings (การกระโดดปุ่ม F และก้มย่องปุ่ม C)")]
+    public Key jumpKey = Key.F;
+    public Key crouchKey = Key.C;
+    public float jumpVelocity = 5.8f;
+    public float gravity = -20f;
 
     public bool detachNameLabel = true;
     public bool rotateTowardsMovement = true;
-    [Tooltip("When true and an action camera (MovementReference) is active, the character faces the camera yaw while moving so WASD drives full 8-directional strafing/locomotion.")]
+    [Tooltip("When true and an action camera (MovementReference) is active, the character faces the camera yaw while moving.")]
     public bool strafeInActionCamera = true;
 
-    /// <summary>Which of the 4 avatars this player picked - drives the capsule colour.</summary>
+    // ---- ข้อมูลซิงก์ผ่าน Photon Fusion Shared Mode ----
     [Networked] public int AvatarIndex { get; set; }
     [Networked] public NetworkString<_16> Nick { get; set; }
-    /// <summary>Replicated locomotion values for an 8-direction animator on every peer.</summary>
     [Networked] public Vector2 NetworkMove { get; set; }
     [Networked] public NetworkBool NetworkSprinting { get; set; }
+    [Networked] public NetworkBool NetworkGrounded { get; set; } = true;
+    [Networked] public NetworkBool NetworkCrouching { get; set; }
 
-    /// <summary>The capsule the local player is allowed to move.</summary>
+    // ตัวละครของผู้เล่นเครื่องนี้ (Local Player)
     public static PlayerCapsule Local { get; private set; }
 
-    /// <summary>When true the capsule ignores movement input (set by PlayerCombat while dead).</summary>
+    // ล็อกการเคลื่อนที่ชั่วคราว (เช่น ขณะตาย)
     public bool MovementLocked { get; set; }
 
-    /// <summary>Optional. When set (action camera), WASD is interpreted relative to this transform's yaw. Null = world axes (legacy).</summary>
+    // แกนอ้างอิงทิศทางจากกล้อง (PlayerFollowCamera)
     public Transform MovementReference { get; set; }
 
-    /// <summary>Optional. When set (target lock), the capsule faces this point instead of its movement direction, so movement becomes strafing.</summary>
+    // เป้าหมายที่กำลังล็อกเป้าอยู่ (TargetLockSystem)
     public Transform FacingTarget { get; set; }
 
-    /// <summary>Scales walk/run speed (e.g. PlayerCombat slows the player while blocking). 1 = normal.</summary>
+    // ตัวคูณความเร็วเคลื่อนที่ (เช่น ลดความเร็วขณะตั้งการ์ดบล็อก)
     public float SpeedMultiplier { get; set; } = 1f;
 
-    /// <summary>The rigged model child, or null when the player is still a plain capsule.</summary>
+    // ทรานส์ฟอร์มของโมเดลตัวละคร
     public Transform CharacterVisual => characterVisual;
 
-    /// <summary>True while a dodge dash overrides normal movement.</summary>
+    // สถานะพุ่งกลิ้งหลบ, แตะพื้น, ก้มย่อง, วิ่งเร็ว
     public bool IsDashing => Time.time < _dashUntil;
+    public bool IsGrounded => Object != null && Object.IsValid ? (bool)NetworkGrounded : _localGrounded;
+    public bool IsCrouching => Object != null && Object.IsValid ? (bool)NetworkCrouching : _crouchToggle;
+    public bool IsSprinting => Object != null && Object.IsValid ? (bool)NetworkSprinting : false;
 
-    // ---- Mirrored Stamina, Level & Stat Allocation API ----
+    // ---- คุณสมบัติเชื่อมต่อระบบ Stamina, Level & Stat Allocation ----
     public float CurrentStamina => _combat != null ? _combat.NetworkStamina : 100f;
     public float MaxStamina => _combat != null ? _combat.MaxStamina : 100f;
     public int Level => _combat != null && _combat.IsSpawned ? _combat.NetworkLevel : 1;
@@ -76,38 +107,72 @@ public class PlayerCapsule : NetworkBehaviour
     public void AddExperience(int amount) => _combat?.AddExperience(amount);
     public bool AllocateStatPoint(PlayerStatType stat) => _combat != null && _combat.AllocateStatPoint(stat);
 
-    Rigidbody rb;
-    PlayerCombat _combat;
-    PlayerAnimationDriver _animationDriver;
-    Vector3 _dashVelocity;
-    float _dashUntil;
-    CapsuleCollider collider;
+    private Rigidbody rb;
+    private CharacterController _cc;
+    private CapsuleCollider collider;
+    private PlayerCombat _combat;
+    private PlayerAnimationDriver _animationDriver;
+    private NetworkTransform _networkTransform;
 
-    Vector2 moveInput;
-    bool sprintHeld;
-    float _overrideMoveUntil;
+    private Vector3 _dashVelocity;
+    private float _dashUntil;
+    private Vector3 _ccHorizontalVel;
+    private float _ccVerticalVel;
+    private bool _localGrounded = true;
+    private float _lastJumpTime = -10f;
+    private bool _crouchToggle;
 
-    bool isOwner;
-    MaterialPropertyBlock _mpb;
-    Transform _labelTransform;
-    Vector3 _labelOffset = new Vector3(0f, 1.42f, 0f);
-    int _appliedAvatar = -1;
-    int _appliedLevel = -1;
-    string _appliedNick;
+    private Vector2 moveInput;
+    private bool sprintHeld;
+    private bool _jumpQueued;
+    private float _overrideMoveUntil;
 
-    void Awake()
+    private bool isOwner;
+    private MaterialPropertyBlock _mpb;
+    private Transform _labelTransform;
+    private Vector3 _labelOffset = new Vector3(0f, 2.05f, 0f);
+    private int _appliedAvatar = -1;
+    private int _appliedLevel = -1;
+    private string _appliedNick;
+
+    private void Awake()
     {
         rb = GetComponent<Rigidbody>();
+        _cc = GetComponent<CharacterController>();
         collider = GetComponent<CapsuleCollider>();
         _combat = GetComponent<PlayerCombat>();
+        _networkTransform = GetComponent<NetworkTransform>();
 
-        if (bodyRenderer == null && characterVisual == null) bodyRenderer = GetComponentInChildren<Renderer>();
-        if (animator == null) animator = characterVisual != null ? characterVisual.GetComponentInChildren<Animator>() : GetComponentInChildren<Animator>();
+        if (characterVisual == null)
+        {
+            var cv = transform.Find("CharacterVisual");
+            characterVisual = cv != null ? cv : transform;
+        }
+
+        if (animator == null)
+        {
+            animator = characterVisual != null
+                ? characterVisual.GetComponentInChildren<Animator>()
+                : GetComponentInChildren<Animator>();
+        }
+        if (networkAnimator == null)
+            networkAnimator = GetComponentInChildren<NetworkMecanimAnimator>();
+
         _animationDriver = GetComponent<PlayerAnimationDriver>();
 
-        if (characterVisual != null && bodyRenderer != null) bodyRenderer.enabled = false;
+        // ซ่อน Capsule Mesh ชั่วคราวเสมอ หากติดอยู่บน Root
+        var rootMeshRenderer = GetComponent<MeshRenderer>();
+        if (rootMeshRenderer != null) rootMeshRenderer.enabled = false;
+        if (bodyRenderer != null && bodyRenderer.gameObject == gameObject)
+            bodyRenderer.enabled = false;
 
-        rb.freezeRotation = true;
+        // หากมี CharacterController ให้ใช้โหมด Kinematic Rigidbody เพื่อป้องกันการชนซ้อนกันใน PhysX
+        if (_cc != null && rb != null)
+        {
+            rb.isKinematic = true;
+            rb.useGravity = false;
+        }
+        if (rb != null) rb.freezeRotation = true;
     }
 
     public override void Spawned()
@@ -125,18 +190,87 @@ public class PlayerCapsule : NetworkBehaviour
                 avatar = GoogleAPI.instance.avatarId;
                 nick = GoogleAPI.ClampName(GoogleAPI.instance.username);
             }
+            else if (PlayerSaveManager.Instance != null)
+            {
+                var saved = PlayerSaveManager.Instance.LoadFromDisk();
+                if (saved != null)
+                {
+                    avatar = saved.avatarId;
+                    if (!string.IsNullOrEmpty(saved.playerName))
+                        nick = GoogleAPI.ClampName(saved.playerName);
+                }
+            }
 
             AvatarIndex = Mathf.Clamp(avatar, 0, LobbyNetwork.AvatarCount - 1);
             Nick = nick;
+            NetworkGrounded = true;
+            NetworkCrouching = false;
 
             Runner.SetPlayerObject(Runner.LocalPlayer, Object);
         }
-        rb.isKinematic = !isOwner;
-        rb.interpolation = isOwner ? RigidbodyInterpolation.Interpolate : RigidbodyInterpolation.None;
-        Debug.Log($"[PlayerCapsule] Spawned {name}; local={isOwner}, stateAuthority={Object.HasStateAuthority}, inputAuthority={Object.HasInputAuthority}, mode={Runner.GameMode}.");
+
+        if (_cc != null)
+        {
+            // เปิด CharacterController บนเครื่องเจ้าของ และใช้เป็น Collider สำหรับตรวจ Hit ฝั่ง Remote
+            _cc.enabled = isOwner;
+            if (rb != null)
+            {
+                rb.isKinematic = true;
+                rb.useGravity = false;
+            }
+        }
+        else if (rb != null)
+        {
+            rb.isKinematic = !isOwner;
+            rb.interpolation = isOwner ? RigidbodyInterpolation.Interpolate : RigidbodyInterpolation.None;
+        }
+
+        Debug.Log($"[PlayerCapsule] Spawned {name}; local={isOwner}, useCC={_cc != null}, avatar={AvatarIndex}, moveSpeed={moveSpeed}, runMult={runSpeed}.");
 
         SetUpNameLabel();
         ApplyLook(force: true);
+    }
+
+    /// <summary>
+    /// อัปเดตรหัสโปรไฟล์ Avatar จากระบบเซฟหรือหน้า Lobby
+    /// </summary>
+    public void SetAvatarIndex(int index)
+    {
+        int clamped = Mathf.Clamp(index, 0, LobbyNetwork.AvatarCount - 1);
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
+            AvatarIndex = clamped;
+        if (GoogleAPI.instance != null)
+            GoogleAPI.instance.avatarId = clamped;
+        ApplyLook(force: true);
+    }
+
+    /// <summary>
+    /// วาร์ปตัวละครไปยังตำแหน่งเป้าหมายอย่างปลอดภัย (รองรับทั้ง CharacterController และ Rigidbody)
+    /// </summary>
+    public void TeleportCharacter(Vector3 targetPosition)
+    {
+        bool ccWasEnabled = _cc != null && _cc.enabled;
+        if (ccWasEnabled) _cc.enabled = false;
+
+        if (rb != null)
+        {
+            rb.position = targetPosition;
+            if (!rb.isKinematic)
+            {
+                rb.linearVelocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+            }
+        }
+
+        _ccHorizontalVel = Vector3.zero;
+        _ccVerticalVel = 0f;
+        transform.position = targetPosition;
+        Physics.SyncTransforms();
+
+        if (_networkTransform != null)
+            _networkTransform.Teleport(targetPosition, transform.rotation);
+
+        if (ccWasEnabled) _cc.enabled = true;
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
@@ -145,12 +279,12 @@ public class PlayerCapsule : NetworkBehaviour
         DestroyDetachedLabel();
     }
 
-    void OnDestroy()
+    private void OnDestroy()
     {
         DestroyDetachedLabel();
     }
 
-    // ---------------------------------------------------------------- input
+    // ---------------------------------------------------------------- การรับค่า Input
 
     public void OnMove(InputValue value)
     {
@@ -162,6 +296,9 @@ public class PlayerCapsule : NetworkBehaviour
         sprintHeld = value.isPressed;
     }
 
+    /// <summary>
+    /// จำลองการส่งคำสั่งเดิน/วิ่ง (ใช้สำหรับระบบทดสอบอัตโนมัติหรือ AI)
+    /// </summary>
     public void SetMoveInput(Vector2 move, bool sprint = false, float holdSeconds = 0.25f)
     {
         moveInput = Vector2.ClampMagnitude(move, 1f);
@@ -169,11 +306,27 @@ public class PlayerCapsule : NetworkBehaviour
         _overrideMoveUntil = holdSeconds > 0f ? Time.time + holdSeconds : 0f;
     }
 
+    public void SetCrouch(bool crouching)
+    {
+        _crouchToggle = crouching;
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
+            NetworkCrouching = crouching;
+    }
+
     public bool IsLocallyControlled => Object != null && (Object.HasInputAuthority || (Runner != null && Runner.GameMode == GameMode.Shared && Object.HasStateAuthority));
 
     private void Update()
     {
-        if (!isOwner || !Application.isFocused || GameplayInput.IsBlocked || Time.time < _overrideMoveUntil) return;
+        if (!isOwner) return;
+
+        if (Time.time < _overrideMoveUntil) return;
+        if (!Application.isFocused || GameplayInput.IsBlocked)
+        {
+            // รีเซ็ตอินพุตการเดินทันทีเมื่อหลุดโฟกัสหรือเปิดเมนู เพื่อไม่ให้ตัวละครเดินค้าง
+            moveInput = Vector2.zero;
+            sprintHeld = false;
+            return;
+        }
 
         var keyboard = Keyboard.current;
         if (keyboard != null)
@@ -183,6 +336,17 @@ public class PlayerCapsule : NetworkBehaviour
                 (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed ? 1f : 0f) - (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed ? 1f : 0f));
             moveInput = direct;
             sprintHeld = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
+
+            if (sprintHeld && _crouchToggle)
+                SetCrouch(false);
+
+            // กด C เพื่อสลับท่าย่อง (Crouch / Stealth)
+            if (keyboard[crouchKey].wasPressedThisFrame && !MovementLocked && !IsDashing)
+                SetCrouch(!_crouchToggle);
+
+            // กด F เพื่อกระโดด (คิวไว้ประมวลผลใน FixedUpdateNetwork เพื่อไม่ให้เฟรมตกแล้วกดไม่ติด)
+            if (keyboard[jumpKey].wasPressedThisFrame && !MovementLocked && !IsDashing)
+                _jumpQueued = true;
         }
 
         var gamepad = Gamepad.current;
@@ -190,16 +354,113 @@ public class PlayerCapsule : NetworkBehaviour
             moveInput = gamepad.leftStick.ReadValue();
     }
 
-    // ------------------------------------------------------------- movement
-
-    void FixedUpdate()
+    /// <summary>
+    /// ประมวลผลการเคลื่อนที่หลักภายใน FixedUpdateNetwork ของ Photon Fusion เพื่อซิงก์กับ NetworkTransform อย่างสมบูรณ์ (ไม่โดนดึงกลับ)
+    /// </summary>
+    public override void FixedUpdateNetwork()
     {
         if (!isOwner) return;
+
+        if (_cc != null && _cc.enabled)
+        {
+            if (_jumpQueued)
+            {
+                _jumpQueued = false;
+                TryJump();
+            }
+            TickCharacterControllerStep(Runner != null ? Runner.DeltaTime : Time.fixedDeltaTime);
+        }
+    }
+
+    /// <summary>
+    /// สั่งให้ตัวละครกระโดดขึ้นจากพื้น พร้อมส่งทิศทางเข้าสู่ Animator และ Network
+    /// </summary>
+    public bool TryJump()
+    {
+        if (!isOwner || MovementLocked || IsDashing) return false;
+        if (Time.time - _lastJumpTime < 0.55f || !_localGrounded) return false;
+
+        _lastJumpTime = Time.time;
+        _localGrounded = false;
+        SetCrouch(false);
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
+            NetworkGrounded = false;
+
+        if (_cc != null && _cc.enabled)
+        {
+            _ccVerticalVel = jumpVelocity;
+        }
+        else if (rb != null)
+        {
+            Vector3 v = rb.linearVelocity;
+            rb.linearVelocity = new Vector3(v.x, jumpVelocity, v.z);
+        }
+
+        Vector2 jDir = moveInput.sqrMagnitude > 0.01f ? moveInput.normalized : Vector2.zero;
+        _animationDriver?.PlayJump(jDir.x, jDir.y);
+        return true;
+    }
+
+    // ------------------------------------------------------------- การคำนวณการเคลื่อนที่ (CharacterController & Rigidbody)
+
+    private void TickCharacterControllerStep(float dt)
+    {
+        if (dt <= 0f) return;
+
+        bool wasGrounded = _cc.isGrounded && (Time.time - _lastJumpTime >= 0.16f);
+        if (wasGrounded && _ccVerticalVel < 0f)
+            _ccVerticalVel = -2.2f;
+        else
+            _ccVerticalVel += gravity * dt;
+
+        var wanted = MovementLocked ? Vector3.zero : DesiredMoveWorld();
+        bool isMoving = wanted.sqrMagnitude > 0.001f;
+
+        bool canSprint = _combat == null || (_combat.CanSprint && !_combat.IsBlocking);
+        bool effectiveSprint = sprintHeld && isMoving && canSprint && !_crouchToggle;
+        if (effectiveSprint && _combat != null)
+            effectiveSprint = _combat.ConsumeSprintStamina(dt);
+
+        if (IsDashing)
+        {
+            Vector3 dashStep = (_dashVelocity + Vector3.up * _ccVerticalVel) * dt;
+            _cc.Move(dashStep);
+            if (rb != null) rb.position = transform.position;
+            _localGrounded = _cc.isGrounded && (Time.time - _lastJumpTime >= 0.16f);
+            if (Object != null && Object.IsValid && Object.HasStateAuthority)
+                NetworkGrounded = _localGrounded;
+            return;
+        }
+
+        // ความเร็วสไตล์ Where Winds Meet: ย่อง (2.2) / เดินสำรวจ (3.8) / วิ่งเต็มสปีด (~5.9)
+        float basePlusGearSpeed = Mathf.Min(TotalMoveSpeed, 5.2f);
+        float sprintFactor = Mathf.Clamp(runSpeed, 1.35f, 1.75f);
+        float stanceMult = _crouchToggle ? (walkSpeed / Mathf.Max(0.1f, moveSpeed)) : (effectiveSprint ? sprintFactor : 1f);
+        float speed = basePlusGearSpeed * stanceMult * Mathf.Max(0f, SpeedMultiplier);
+
+        Vector3 wantedHorizontal = wanted * speed;
+        float accelRate = isMoving ? acceleration : deceleration;
+        _ccHorizontalVel = Vector3.MoveTowards(_ccHorizontalVel, wantedHorizontal, accelRate * dt);
+
+        _cc.Move((_ccHorizontalVel + Vector3.up * _ccVerticalVel) * dt);
+        if (rb != null) rb.position = transform.position;
+        _localGrounded = CheckGrounded();
+
+        UpdateFacingAndNetworkParams(wanted, effectiveSprint, dt);
+    }
+
+    private void FixedUpdate()
+    {
+        // หากใช้ CharacterController การเคลื่อนที่ทำงานใน FixedUpdateNetwork แล้ว
+        if (!isOwner || (_cc != null && _cc.enabled)) return;
+
+        _localGrounded = CheckGrounded();
 
         if (IsDashing)
         {
             Vector3 v = rb.linearVelocity;
             rb.linearVelocity = new Vector3(_dashVelocity.x, v.y, _dashVelocity.z);
+            if (Object.HasStateAuthority) NetworkGrounded = _localGrounded;
             return;
         }
 
@@ -207,50 +468,91 @@ public class PlayerCapsule : NetworkBehaviour
         bool isMoving = wanted.sqrMagnitude > 0.001f;
 
         bool canSprint = _combat == null || (_combat.CanSprint && !_combat.IsBlocking);
-        bool effectiveSprint = sprintHeld && isMoving && canSprint;
+        bool effectiveSprint = sprintHeld && isMoving && canSprint && !_crouchToggle;
         if (effectiveSprint && _combat != null)
-        {
             effectiveSprint = _combat.ConsumeSprintStamina(Time.fixedDeltaTime);
-        }
 
-        float basePlusGearSpeed = TotalMoveSpeed;
-        float speed = basePlusGearSpeed * (effectiveSprint ? 2.65f : 1f) * Mathf.Max(0f, SpeedMultiplier);
+        float basePlusGearSpeed = Mathf.Min(TotalMoveSpeed, 5.2f);
+        float sprintFactor = Mathf.Clamp(runSpeed, 1.35f, 1.75f);
+        float stanceMult = _crouchToggle ? (walkSpeed / Mathf.Max(0.1f, moveSpeed)) : (effectiveSprint ? sprintFactor : 1f);
+        float speed = basePlusGearSpeed * stanceMult * Mathf.Max(0f, SpeedMultiplier);
+
         Vector3 wantedVelocity = wanted * speed;
         Vector3 velocity = rb.linearVelocity;
         Vector3 horizontal = new Vector3(velocity.x, 0f, velocity.z);
-        horizontal = Vector3.MoveTowards(horizontal, wantedVelocity, acceleration * Time.fixedDeltaTime);
+
+        float accelRate = isMoving ? acceleration : deceleration;
+        horizontal = Vector3.MoveTowards(horizontal, wantedVelocity, accelRate * Time.fixedDeltaTime);
         rb.linearVelocity = new Vector3(horizontal.x, velocity.y, horizontal.z);
 
-        Quaternion targetRotation = rb.rotation;
+        UpdateFacingAndNetworkParams(wanted, effectiveSprint, Time.fixedDeltaTime);
+    }
+
+    private void UpdateFacingAndNetworkParams(Vector3 wanted, bool effectiveSprint, float dt)
+    {
+        Quaternion targetRotation = transform.rotation;
+        bool rotateApplied = false;
+
         if (FacingTarget != null && !MovementLocked)
         {
-            Vector3 toTarget = FacingTarget.position - rb.position;
+            Vector3 toTarget = FacingTarget.position - transform.position;
             toTarget.y = 0f;
             if (toTarget.sqrMagnitude > 0.0001f)
             {
                 targetRotation = Quaternion.LookRotation(toTarget, Vector3.up);
-                rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
+                rotateApplied = true;
             }
         }
         else if (MovementReference != null && strafeInActionCamera && wanted.sqrMagnitude > 0.0001f)
         {
             targetRotation = Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f);
-            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
+            rotateApplied = true;
         }
         else if (rotateTowardsMovement && wanted.sqrMagnitude > 0.0001f)
         {
             targetRotation = Quaternion.LookRotation(wanted, Vector3.up);
-            rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
+            rotateApplied = true;
         }
 
-        if (Object.HasStateAuthority)
+        if (rotateApplied)
+        {
+            Quaternion slerped = Quaternion.Slerp(transform.rotation, targetRotation, rotationSpeed * dt);
+            if (_cc != null && _cc.enabled)
+            {
+                transform.rotation = slerped;
+                if (rb != null) rb.rotation = slerped;
+            }
+            else if (rb != null)
+            {
+                rb.MoveRotation(slerped);
+            }
+        }
+
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
         {
             Vector3 refSpace = (MovementReference != null && strafeInActionCamera && FacingTarget == null)
                 ? Quaternion.Inverse(Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f)) * wanted
                 : Quaternion.Inverse(transform.rotation) * wanted;
             NetworkMove = new Vector2(refSpace.x, refSpace.z);
             NetworkSprinting = effectiveSprint;
+            NetworkGrounded = _localGrounded;
+            NetworkCrouching = _crouchToggle;
         }
+    }
+
+    private bool CheckGrounded()
+    {
+        if (Time.time - _lastJumpTime < 0.18f) return false;
+        if (_cc != null && _cc.enabled)
+        {
+            if (_cc.isGrounded) return true;
+            Vector3 origin = transform.position + Vector3.up * 0.25f;
+            return Physics.Raycast(origin, Vector3.down, 0.42f, ~0, QueryTriggerInteraction.Ignore);
+        }
+
+        Vector3 legacyOrigin = transform.position + Vector3.up * 0.2f;
+        float dist = collider != null ? (collider.height * 0.5f + 0.22f) : 1.25f;
+        return Physics.Raycast(legacyOrigin, Vector3.down, dist, ~0, QueryTriggerInteraction.Ignore);
     }
 
     public Vector3 DesiredMoveWorld()
@@ -261,6 +563,9 @@ public class PlayerCapsule : NetworkBehaviour
         return wanted;
     }
 
+    /// <summary>
+    /// สั่งพุ่งตัวเมื่อกดกลิ้งหลบ (Dodge Roll)
+    /// </summary>
     public void StartDash(Vector3 worldDirection, float distance, float duration)
     {
         if (!isOwner || duration <= 0f) return;
@@ -272,36 +577,39 @@ public class PlayerCapsule : NetworkBehaviour
 
     public void SetBodyVisible(bool visible)
     {
-        if (characterVisual != null) return;
-        if (bodyRenderer != null) bodyRenderer.enabled = visible;
+        if (characterVisual != null && characterVisual != transform) return;
+        if (bodyRenderer != null && bodyRenderer.gameObject == gameObject) bodyRenderer.enabled = visible;
     }
 
     public override void Render()
     {
         ApplyLook(force: false);
-        if (_animationDriver == null) ApplyAnimator(NetworkMove, NetworkSprinting);
+        if (_animationDriver == null && networkAnimator == null)
+            ApplyAnimator(NetworkMove, NetworkSprinting);
     }
 
     private void ApplyAnimator(Vector2 move, bool sprint)
     {
         if (animator == null || animator.runtimeAnimatorController == null) return;
-        animator.SetFloat(moveXParameter, move.x, 0.08f, Time.deltaTime);
-        animator.SetFloat(moveYParameter, move.y, 0.08f, Time.deltaTime);
+        animator.SetFloat(moveXParameter, move.x, 0.1f, Time.deltaTime);
+        animator.SetFloat(moveYParameter, move.y, 0.1f, Time.deltaTime);
         animator.SetBool(sprintParameter, sprint);
     }
 
-    void SetUpNameLabel()
+    private void SetUpNameLabel()
     {
         if (nameLabel == null) return;
 
         nameLabel.fontSize = overheadNameFontSize;
         _labelTransform = nameLabel.transform;
         _labelTransform.localScale = Vector3.one * overheadNameScale;
-        _labelOffset = overheadNameOffset;
+        _labelOffset = characterVisual != null && characterVisual == transform
+            ? new Vector3(0f, 2.15f, 0f)
+            : overheadNameOffset;
         if (detachNameLabel) _labelTransform.SetParent(null, worldPositionStays: true);
     }
 
-    void LateUpdate()
+    private void LateUpdate()
     {
         if (_labelTransform == null) return;
         _labelTransform.position = transform.position + _labelOffset;
@@ -309,26 +617,29 @@ public class PlayerCapsule : NetworkBehaviour
         if (cam != null) _labelTransform.rotation = cam.transform.rotation;
     }
 
-    void DestroyDetachedLabel()
+    private void DestroyDetachedLabel()
     {
         if (detachNameLabel && _labelTransform != null) Destroy(_labelTransform.gameObject);
         _labelTransform = null;
     }
 
-    void ApplyLook(bool force)
+    private void ApplyLook(bool force)
     {
         if (force || _appliedAvatar != AvatarIndex)
         {
             _appliedAvatar = AvatarIndex;
             var color = AvatarPalette.Get(AvatarIndex);
 
-            if (bodyRenderer != null)
+            if (bodyRenderer != null && (characterVisual == null || characterVisual == transform))
             {
-                _mpb ??= new MaterialPropertyBlock();
-                bodyRenderer.GetPropertyBlock(_mpb);
-                _mpb.SetColor("_BaseColor", color);
-                _mpb.SetColor("_Color", color);
-                bodyRenderer.SetPropertyBlock(_mpb);
+                if (bodyRenderer is MeshRenderer)
+                {
+                    _mpb ??= new MaterialPropertyBlock();
+                    bodyRenderer.GetPropertyBlock(_mpb);
+                    _mpb.SetColor("_BaseColor", color);
+                    _mpb.SetColor("_Color", color);
+                    bodyRenderer.SetPropertyBlock(_mpb);
+                }
             }
             if (nameLabel != null) nameLabel.color = color;
         }
@@ -340,7 +651,7 @@ public class PlayerCapsule : NetworkBehaviour
             _appliedNick = nick;
             _appliedLevel = lvl;
             nameLabel.fontSize = overheadNameFontSize;
-            nameLabel.text = Object.HasStateAuthority ? $"Lv.{lvl} {nick}" : $"Lv.{lvl} {nick}";
+            nameLabel.text = $"Lv.{lvl} {nick}";
         }
     }
 }

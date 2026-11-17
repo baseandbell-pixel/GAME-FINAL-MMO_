@@ -1,39 +1,52 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using UnityEngine;
 
+// โครงสร้างข้อมูลช่องกระเป๋าแต่ละช่องสำหรับบันทึกลงไฟล์ JSON
 [Serializable]
 public class SavedInventorySlotData
 {
-    public int slotIndex;
-    public string instanceId;
-    public string itemId;
-    public int quantity;
-    public int enhancementLevel;
+    public int slotIndex;        // ตำแหน่งช่องกระเป๋าที่แน่นอน (0..23)
+    public string instanceId;    // รหัสอ้างอิงเฉพาะชิ้น
+    public string itemId;        // รหัสไอเทม
+    public int quantity;         // จำนวนในช่อง
+    public int enhancementLevel; // ระดับการตีบวก (+0..+10)
 }
 
+// โครงสร้างข้อมูลอุปกรณ์ที่สวมใส่อยู่ใน 4 ช่องหลัก (Sword, Shield, Armor, Pants)
 [Serializable]
 public class SavedEquippedSlotData
 {
-    public int slotType; // (int)EquipmentSlotType
-    public string instanceId;
-    public string itemId;
-    public int enhancementLevel;
+    public int slotType;         // ประเภทช่องอุปกรณ์ ((int)EquipmentSlotType)
+    public string instanceId;    // รหัสอ้างอิงเฉพาะชิ้น
+    public string itemId;        // รหัสไอเทม
+    public int enhancementLevel; // ระดับการตีบวก (+0..+10)
 }
 
+// โครงสร้างข้อมูลการผูกปุ่มลัด Hotbar (ช่อง 1 ถึง 6) สำหรับบันทึกลงไฟล์ JSON
+[Serializable]
+public class SavedHotbarBindingData
+{
+    public int hotbarIndex;        // ตำแหน่งปุ่มลัด 0..5 (ตรงกับปุ่ม 1..6)
+    public int inventorySlotIndex; // ตำแหน่งช่องกระเป๋าที่ผูกไว้
+    public string instanceId;      // รหัสอ้างอิงเฉพาะชิ้น
+    public string itemId;          // รหัสไอเทม
+}
+
+// โครงสร้างข้อมูลเซฟผู้เล่นทั้งหมด (Player Save Data Schema)
 [Serializable]
 public class PlayerSaveData
 {
     public int schemaVersion = 1;
     public string playerKey;
     public string playerName;
+    public int avatarId = 0; // รหัสรูปโปรไฟล์จากหน้า Lobby (0..3)
     public long lastSavedUtcTicks;
     public bool hasInitializedOnce;
 
-    // Progression & Economy
+    // ข้อมูลเลเวล ค่าประสบการณ์ แต้มสเตตัส และเงิน Gold
     public int level = 1;
     public int experience = 0;
     public int unspentStatPoints = 0;
@@ -45,17 +58,17 @@ public class PlayerSaveData
     public int currentHealth = 100;
     public float currentStamina = 100f;
 
-    // Exact Inventory Layout & Equipped Gear
+    // รายการไอเทมในกระเป๋า, อุปกรณ์ที่สวมใส่ และปุ่มลัด Hotbar 1-6
     public List<SavedInventorySlotData> inventorySlots = new List<SavedInventorySlotData>();
     public List<SavedEquippedSlotData> equippedSlots = new List<SavedEquippedSlotData>();
+    public List<SavedHotbarBindingData> hotbarBindings = new List<SavedHotbarBindingData>();
 }
 
 /// <summary>
-/// Crash-safe, zero-data-loss Player Persistence System (JSON with atomic temp-replace writes &amp; .bak recovery).
-/// Keyed by unique Player ID / Account Name.
-///   - First-Time Player (no save): spawns at New Player Start Point and creates starter profile.
-///   - Returning Player / Crash Recovery: loads exact stats, Gold, Inventory slots (with +Level &amp; instanceId),
-///     and Equipped Gear, and spawns strictly inside the Comfort Zone (Safe Haven).
+/// ระบบบันทึกและกู้คืนข้อมูลผู้เล่นแบบป้องกันข้อมูลสูญหาย 100% (Crash-Safe Atomic JSON Player Persistence System)
+///   - บันทึกแบบ Atomic (.tmp -> .json พร้อมสำรอง .bak) ป้องกันไฟล์เสียเมื่อเกมหลุดหรือปิดกะทันหัน
+///   - บันทึกข้อมูลครบถ้วน: เลเวล, EXP, สเตตัส, Gold, รูปโปรไฟล์ Lobby Avatar, ช่องกระเป๋า และอุปกรณ์สวมใส่ 4 ชิ้น
+///   - ผู้เล่นที่กลับเข้าเกมใหม่หลังหลุด (Returning Player) จะถูกส่งไปเกิดใน Safe / Comfort Zone เสมอ
 /// </summary>
 [DisallowMultipleComponent]
 public class PlayerSaveManager : MonoBehaviour
@@ -64,6 +77,7 @@ public class PlayerSaveManager : MonoBehaviour
 
     public const float PeriodicAutoSaveSeconds = 15f;
 
+    // ตัวแปรสำหรับสลับคีย์ผู้เล่นในการจำลองทดสอบ
     public static string OverridePlayerKeyForTesting { get; set; }
 
     public bool HasLoadedOrInitialized { get; private set; }
@@ -141,7 +155,7 @@ public class PlayerSaveManager : MonoBehaviour
         }
     }
 
-    // ------------------------------------------------------------------ Key & File Paths
+    // ------------------------------------------------------------------ การระบุตัวตนผู้เล่นและที่อยู่ไฟล์เซฟ
 
     public static string ResolveActivePlayerKey()
     {
@@ -183,7 +197,7 @@ public class PlayerSaveManager : MonoBehaviour
         return sb.Length > 0 ? sb.ToString() : "LocalSandboxPlayer";
     }
 
-    // ------------------------------------------------------------------ Initialization & Restore
+    // ------------------------------------------------------------------ การโหลดและกู้คืนข้อมูลผู้เล่น
 
     public void InitializeOrRestorePlayer(PlayerCombat combat, InventoryManager inv)
     {
@@ -199,11 +213,18 @@ public class PlayerSaveManager : MonoBehaviour
             _restoringNow = true;
             try
             {
+                // ซิงก์รหัสโปรไฟล์ Avatar จากเซฟ (หากไม่ได้เข้าผ่านหน้า Lobby ใหม่)
+                var capsule = combat.GetComponent<PlayerCapsule>();
+                if (capsule != null && GoogleAPI.instance == null)
+                {
+                    capsule.SetAvatarIndex(loaded.avatarId);
+                }
+
                 combat.ApplySaveData(loaded);
                 inv.RestoreSaveData(loaded);
                 combat.ApplySaveHealthAndStamina(loaded.currentHealth, loaded.currentStamina);
 
-                // Returning player / reconnect / crash recovery: ALWAYS spawn inside the Safe / Comfort Zone
+                // ส่งผู้เล่นที่กลับเข้ามาเกิดในเขตปลอดภัย (Comfort Safe Zone) เสมอ
                 SafeZone safe = SafeZone.Instance ?? SafeZone.EnsureAt(new Vector3(-14f, 0f, 8f), 7.5f);
                 Vector3 safePos = safe.ReconnectSpawnPosition;
                 combat.TeleportTo(safePos);
@@ -213,7 +234,7 @@ public class PlayerSaveManager : MonoBehaviour
                 _restoringNow = false;
             }
 
-            Debug.Log($"[PlayerSaveManager] RETURNING PLAYER restored from '{GetSavePath(key)}' -> Lv.{loaded.level}, Gold={loaded.gold}, Slots={loaded.inventorySlots.Count}, Equipped={loaded.equippedSlots.Count}. Spawned in Comfort Zone {combat.transform.position}.");
+            Debug.Log($"[PlayerSaveManager] RETURNING PLAYER restored from '{GetSavePath(key)}' -> Lv.{loaded.level}, Gold={loaded.gold}, Avatar={loaded.avatarId}, Slots={loaded.inventorySlots.Count}, Equipped={loaded.equippedSlots.Count}. Spawned in Comfort Zone {combat.transform.position}.");
         }
         else
         {
@@ -223,7 +244,7 @@ public class PlayerSaveManager : MonoBehaviour
         }
     }
 
-    // ------------------------------------------------------------------ Auto-Save & Atomic Write
+    // ------------------------------------------------------------------ การบันทึกไฟล์แบบ Atomic Write
 
     public static void RequestAutoSave(string reason)
     {
@@ -241,6 +262,11 @@ public class PlayerSaveManager : MonoBehaviour
 
         if (_restoringNow) return false;
 
+        var capsule = combat.GetComponent<PlayerCapsule>();
+        int currentAvatar = GoogleAPI.instance != null
+            ? GoogleAPI.instance.avatarId
+            : (capsule != null ? capsule.AvatarIndex : 0);
+
         string key = ResolveActivePlayerKey();
         var data = new PlayerSaveData
         {
@@ -248,7 +274,8 @@ public class PlayerSaveManager : MonoBehaviour
             playerKey = key,
             playerName = GoogleAPI.instance != null && !string.IsNullOrEmpty(GoogleAPI.instance.username)
                 ? GoogleAPI.instance.username
-                : "Player",
+                : (capsule != null && !string.IsNullOrEmpty(capsule.Nick.Value) ? capsule.Nick.Value : "Player"),
+            avatarId = Mathf.Clamp(currentAvatar, 0, 3),
             lastSavedUtcTicks = DateTime.UtcNow.Ticks,
             hasInitializedOnce = true
         };
@@ -264,7 +291,7 @@ public class PlayerSaveManager : MonoBehaviour
             _dirty = false;
             LastSaveReason = reason;
             _nextPeriodicSaveTime = Time.unscaledTime + PeriodicAutoSaveSeconds;
-            Debug.Log($"[PlayerSaveManager] Saved ({reason}) -> {path} [Lv.{data.level}, Gold={data.gold}, Items={data.inventorySlots.Count}]");
+            Debug.Log($"[PlayerSaveManager] Saved ({reason}) -> {path} [Lv.{data.level}, Gold={data.gold}, Avatar={data.avatarId}, Items={data.inventorySlots.Count}]");
             return true;
         }
         return false;

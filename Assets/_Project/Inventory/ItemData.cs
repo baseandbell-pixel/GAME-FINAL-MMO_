@@ -1,62 +1,84 @@
 using UnityEngine;
 
+// ประเภทของไอเทมในเกมทั้งหมด
 public enum ItemType
 {
-    Consumable = 0,
-    Weapon = 1,
-    Equipment = 2,
-    QuestItem = 3,
-    CraftingMaterial = 4,
-    Shield = 5,
-    Armor = 6,
-    Pants = 7
+    Consumable = 0,       // ไอเทมกดใช้ฟื้นฟู/บัฟ
+    Weapon = 1,           // อาวุธ (ช่อง Sword)
+    Equipment = 2,        // อุปกรณ์เกราะ (Legacy mapping -> Armor)
+    QuestItem = 3,        // ไอเทมเควสต์
+    CraftingMaterial = 4, // วัตถุดิบ
+    Shield = 5,           // โล่ป้องกัน (ช่อง Shield)
+    Armor = 6,            // เกราะลำตัว (ช่อง Armor)
+    Pants = 7             // กางเกง/เกราะขา (ช่อง Pants)
 }
 
+// ช่องสวมใส่อุปกรณ์หลักทั้ง 4 ช่องของตัวละคร
 public enum EquipmentSlotType
 {
-    None = 0,
-    Sword = 1,
-    Shield = 2,
-    Armor = 3,
-    Pants = 4
+    None = 0,   // ไม่ใช่อุปกรณ์สวมใส่
+    Sword = 1,  // ช่องอาวุธดาบใหญ่
+    Shield = 2, // ช่องโล่
+    Armor = 3,  // ช่องเกราะลำตัว
+    Pants = 4   // ช่องกางเกง/เกราะขา
 }
 
+// ระดับความหายากของไอเทม 4 ระดับ
 public enum ItemTier
 {
-    Normal = 0,
-    Common = 0,
-    Rare = 1,
-    Epic = 2,
-    Legendary = 3
+    Normal = 0,    // ระดับทั่วไป (สีเทา/ขาว)
+    Common = 0,    // ชื่อรองสำหรับ Normal
+    Rare = 1,      // ระดับหายาก (สีฟ้า)
+    Epic = 2,      // ระดับมหากาพย์ (สีม่วง)
+    Legendary = 3  // ระดับตำนาน (สีทอง)
 }
 
 /// <summary>
-/// Data-driven item definition supporting Consumables, Crafting Materials, and 4 Equippable Gear Slots
-/// (Sword, Shield, Armor, Pants) across 4 Rarity Tiers (Normal, Rare, Epic, Legendary) and +0..+10 Enhancement scaling.
+/// ข้อมูลไอเทมแบบ ScriptableObject รองรับทั้งยาฟื้นฟูและอุปกรณ์สวมใส่ 4 ช่อง (Sword, Shield, Armor, Pants)
+/// พร้อมระดับความหายาก 4 Tier, ระบบตีบวก +0 ถึง +10 และข้อมูลสำหรับหน้าคู่มือไอเทม (Item Compendium)
 /// </summary>
 [CreateAssetMenu(fileName = "NewItem", menuName = "Hunter/Item Data")]
 public class ItemData : ScriptableObject
 {
+    // รหัสไอเทมที่ไม่ซ้ำกัน ใช้สำหรับส่งผ่าน Network และบันทึกลงไฟล์ Save
     [Tooltip("Unique, stable id. This string (not the asset) is what travels over the network.")]
     public string itemId = "item_new";
+
+    // ชื่อไอเทมที่แสดงบนหน้าจอ UI
     public string displayName = "New Item";
+
+    // คำอธิบายคุณสมบัติของไอเทม
     [TextArea] public string description = "";
-    public ItemType type = ItemType.CraftingMaterial;
+
+    // คำแนะนำวิธีหาและวิธีใช้งานสำหรับหน้า Item Guide / Tutorial Compendium
+    [TextArea] public string obtainAndUseGuide = "";
+
+    // ประเภทไอเทมและระดับความหายาก
+    public ItemType type = ItemType.Consumable;
     public ItemTier tier = ItemTier.Normal;
+
+    // คลาสและประเภทอาวุธที่รองรับ (เตรียมพร้อมสำหรับคลาส Magic ในอนาคต)
+    public CombatClassType requiredClass = CombatClassType.GreatSword;
+    public WeaponArchetype weaponArchetype = WeaponArchetype.GreatSword;
+
+    // ไอคอนและสีประจำตัวเมื่อดรอปลงพื้นโลก
     public Sprite icon;
     [Tooltip("World pickup colour (no icon needed for the dev visuals).")]
     public Color worldColor = Color.white;
 
+    // การซ้อนทับของไอเทมในกระเป๋า (Stacking)
     [Header("Stacking")]
     public bool stackable = true;
     [Min(1)] public int maxStack = 20;
 
+    // ค่าฟื้นฟูและบัฟสำหรับไอเทมประเภทกดใช้ (Consumable)
     [Header("Consumable")]
     [Min(0)] public int healAmount = 0;
     [Min(0)] public int staminaRestoreAmount = 0;
     [Min(0)] public int attackBuffBonus = 0;
     [Min(0f)] public float attackBuffDuration = 0f;
 
+    // ค่าสเตตัสโบนัสเมื่อสวมใส่อุปกรณ์ (Equipment Stat Bonuses)
     [Header("Equipment Stat Bonuses")]
     public int damageBonus = 0;
     public int maxHealthBonus = 0;
@@ -65,13 +87,22 @@ public class ItemData : ScriptableObject
     public float moveSpeedBonus = 0f;
     [Range(0f, 1f)] public float critChanceBonus = 0f;
 
+    // กฎการทิ้งไอเทมลงพื้น
     [Header("Rules")]
     public bool droppable = true;
 
+    // จำนวนสูงสุดต่อช่อง
     public int MaxStackSize => stackable ? Mathf.Max(1, maxStack) : 1;
+
+    // ตรวจสอบว่าเป็นไอเทมกดใช้หรือไม่
     public bool IsUsable => type == ItemType.Consumable;
+
+    // ตรวจสอบว่าเป็นอุปกรณ์ที่สวมใส่ได้หรือไม่
     public bool IsEquippable => GetEquipmentSlot() != EquipmentSlotType.None;
 
+    /// <summary>
+    /// คืนค่าช่องสวมใส่อุปกรณ์ (Sword, Shield, Armor, Pants) ตามประเภทของไอเทม
+    /// </summary>
     public EquipmentSlotType GetEquipmentSlot()
     {
         return type switch
@@ -85,6 +116,24 @@ public class ItemData : ScriptableObject
         };
     }
 
+    /// <summary>
+    /// คืนค่าหมวดหมู่ไอเทมเป็นข้อความสำหรับแสดงในหน้า Item Compendium / Tutorial Guide
+    /// </summary>
+    public string GetCategoryDisplayName()
+    {
+        return type switch
+        {
+            ItemType.Weapon => "Weapons (Sword)",
+            ItemType.Shield => "Shields",
+            ItemType.Armor => "Armor (Chestplate)",
+            ItemType.Equipment => "Armor (Chestplate)",
+            ItemType.Pants => "Pants (Greaves)",
+            ItemType.Consumable => "Consumables",
+            _ => "Other"
+        };
+    }
+
+    // คำนวณค่าสเตตัสที่เพิ่มขึ้นตามระดับการตีบวก (+0 ถึง +10)
     public int GetEnhancedDamage(int enhancementLevel) => EnhancementSystem.ScaleIntStat(damageBonus, enhancementLevel);
     public int GetEnhancedMaxHealth(int enhancementLevel) => EnhancementSystem.ScaleIntStat(maxHealthBonus, enhancementLevel);
     public int GetEnhancedMaxStamina(int enhancementLevel) => EnhancementSystem.ScaleIntStat(maxStaminaBonus, enhancementLevel);
@@ -92,6 +141,40 @@ public class ItemData : ScriptableObject
     public float GetEnhancedMoveSpeed(int enhancementLevel) => EnhancementSystem.ScaleFloatStat(moveSpeedBonus, enhancementLevel);
     public float GetEnhancedCritChance(int enhancementLevel) => Mathf.Clamp01(EnhancementSystem.ScaleFloatStat(critChanceBonus, enhancementLevel));
 
+    /// <summary>
+    /// สรุปค่าสเตตัสทั้งหมดของไอเทมเป็นข้อความบรรทัดเดียวสำหรับแสดงใน UI และหน้าคู่มือ
+    /// </summary>
+    public string GetFormattedStatsSummary(int enhancementLevel = 0)
+    {
+        var parts = new System.Collections.Generic.List<string>();
+        if (IsUsable)
+        {
+            if (healAmount > 0) parts.Add($"+{healAmount} HP");
+            if (staminaRestoreAmount > 0) parts.Add($"+{staminaRestoreAmount} Stamina");
+            if (attackBuffBonus > 0) parts.Add($"+{attackBuffBonus} ATK ({attackBuffDuration:0}s)");
+        }
+        else
+        {
+            int dmg = GetEnhancedDamage(enhancementLevel);
+            int hp = GetEnhancedMaxHealth(enhancementLevel);
+            int sta = GetEnhancedMaxStamina(enhancementLevel);
+            int def = GetEnhancedDefense(enhancementLevel);
+            float spd = GetEnhancedMoveSpeed(enhancementLevel);
+            float crit = GetEnhancedCritChance(enhancementLevel);
+
+            if (dmg > 0) parts.Add($"+{dmg} ATK");
+            if (hp > 0) parts.Add($"+{hp} Max HP");
+            if (sta > 0) parts.Add($"+{sta} Max STA");
+            if (def > 0) parts.Add($"+{def} DEF");
+            if (spd > 0.001f) parts.Add($"+{spd:0.00} Move SPD");
+            if (crit > 0.001f) parts.Add($"+{crit * 100f:0}% CRIT");
+        }
+        return parts.Count > 0 ? string.Join("  |  ", parts) : "No stat bonuses";
+    }
+
+    /// <summary>
+    /// แปลงระดับความหายากเป็นชื่อภาษาอังกฤษมาตรฐาน
+    /// </summary>
     public static string GetTierDisplayName(ItemTier tier)
     {
         return tier switch
@@ -104,6 +187,9 @@ public class ItemData : ScriptableObject
         };
     }
 
+    /// <summary>
+    /// คืนค่าสีประจำระดับความหายาก (Normal=เทาเงิน, Rare=ฟ้า, Epic=ม่วง, Legendary=ทอง)
+    /// </summary>
     public static Color GetTierColor(ItemTier tier)
     {
         return tier switch

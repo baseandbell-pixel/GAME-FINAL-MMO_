@@ -46,11 +46,17 @@ public class MapManager : MonoBehaviour
     [Header("Waypoint")]
     [SerializeField] private float waypointAutoClearRadius = 2.5f;
 
+    public const float MinWorldZoom = 0.40f;
+    public const float MaxWorldZoom = 2.40f;
+
     public bool IsWorldMapOpen { get; private set; }
     public RenderTexture MapTexture => _texture;
-    public float CurrentRadius => IsWorldMapOpen ? worldMapRadius : minimapRadius;
+    // รัศมีแผนที่โลกจริงคำนวณร่วมกับระดับการซูม (WorldMapZoom)
+    public float CurrentRadius => IsWorldMapOpen ? worldMapRadius * WorldMapZoom : minimapRadius;
     public float MinimapRadius => minimapRadius;
     public float WorldMapRadius => worldMapRadius;
+    public float WorldMapZoom { get; private set; } = 1.0f;
+    public Vector2 WorldMapPanOffset { get; private set; }
 
     // ---- Waypoint Backend ----
     public bool HasActiveWaypoint { get; private set; }
@@ -261,6 +267,7 @@ public class MapManager : MonoBehaviour
             _cam.transform.position = new Vector3(_focus.x, cameraHeight, _focus.z);
         }
         _nextRender = 0f;
+        MinimapUI.Instance?.SyncWorldModeImmediate(IsWorldMapOpen);
         Debug.Log($"[MapManager] World map {(IsWorldMapOpen ? "opened" : "closed")} (radius {CurrentRadius}m).");
     }
 
@@ -274,11 +281,52 @@ public class MapManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// ปรับระดับการซูมของ World Map (ค่าบวก = ซูมออกเห็นกว้างขึ้น, ค่าลบ = ซูมเข้าเห็นละเอียดขึ้น)
+    /// </summary>
+    public void AdjustWorldMapZoom(float delta)
+    {
+        SetWorldMapZoom(WorldMapZoom + delta);
+    }
+
+    /// <summary>
+    /// กำหนดระดับการซูมของ World Map ให้อยู่ในช่วงที่กำหนด
+    /// </summary>
+    public void SetWorldMapZoom(float zoom)
+    {
+        WorldMapZoom = Mathf.Clamp(zoom, MinWorldZoom, MaxWorldZoom);
+        _nextRender = 0f;
+    }
+
+    /// <summary>
+    /// เลื่อนมุมมอง World Map ตามระยะทางในโลก (เมตร) เมื่อผู้เล่นคลิกลาก
+    /// </summary>
+    public void PanWorldMap(Vector2 deltaWorldXZ)
+    {
+        Vector2 next = WorldMapPanOffset + deltaWorldXZ;
+        next.x = Mathf.Clamp(next.x, -85f, 85f);
+        next.y = Mathf.Clamp(next.y, -85f, 85f);
+        WorldMapPanOffset = next;
+        UpdateFocus();
+        _nextRender = 0f;
+    }
+
+    /// <summary>
+    /// รีเซ็ตมุมมองและการซูมของ World Map กลับสู่ค่าเริ่มต้น
+    /// </summary>
+    public void ResetWorldMapView()
+    {
+        WorldMapZoom = 1.0f;
+        WorldMapPanOffset = Vector2.zero;
+        UpdateFocus();
+        _nextRender = 0f;
+    }
+
     private void UpdateFocus()
     {
         if (IsWorldMapOpen)
         {
-            _focus = worldMapCenter;
+            _focus = new Vector3(worldMapCenter.x + WorldMapPanOffset.x, 0f, worldMapCenter.z + WorldMapPanOffset.y);
             return;
         }
         var local = PlayerCombat.Local;
@@ -382,7 +430,8 @@ public class MapManager : MonoBehaviour
         for (int i = 0; i < WorldItem.All.Count; i++)
         {
             var w = WorldItem.All[i];
-            if (w == null || !w.IsSpawned || w.Claimed) continue;
+            // แสดงจุดดรอปบนแผนที่เฉพาะไอเทมที่ผู้เล่นเครื่องนี้มีสิทธิ์เห็นและเก็บ (Personal Instanced Loot)
+            if (w == null || !w.IsVisibleAndLootableByLocalPlayer()) continue;
             into.Add(new MapMarker
             {
                 position = w.transform.position,

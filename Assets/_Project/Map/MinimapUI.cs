@@ -5,21 +5,22 @@ using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
 /// <summary>
-/// Phase 2 Upgraded Minimap &amp; Interactive World Map Hub:
-///   - Compact Top-Left Radar Minimap (avoids collision with Top-Right Player Status HUD).
-///   - Full World Map window featuring Top Navigation Tabs ([ World Map ] | [ Character &amp; Upgrade ]),
-///     clear icons &amp; labels for Player, Enemy Camps, Boss Arena, Loot Chests, and Waypoint,
-///     plus Click-to-Pin Waypoint (Left-Click = pin, Right-Click = clear).
+/// ระบบเรดาร์ Minimap มุมซ้ายบน และหน้าต่าง World Map ขนาดใหญ่แบบโต้ตอบได้:
+///   - สไตล์ Dark Obsidian + Brushed Gold + Jade Accent เข้าชุดกับ UI ทั้งหมด
+///   - World Map ขนาดใหญ่ (1080x840) รองรับการซูมเข้า-ออกด้วยลูกกลิ้งเมาส์ (Scroll Wheel Zoom) และคลิกลากเลื่อนแผนที่ (Drag Pan)
+///   - จัดเรียงป้ายชื่อหมุดบนแผนที่อัตโนมัติไม่ให้ซ้อนทับกัน (Non-Overlapping Label Decluttering)
+///   - คลิกซ้ายเพื่อปักหมุด Waypoint 3D และคลิกขวาเพื่อลบหมุด
 /// </summary>
-public class MinimapUI : MonoBehaviour, IPointerClickHandler
+public class MinimapUI : MonoBehaviour
 {
     public static MinimapUI Instance { get; private set; }
 
     private const float MiniSize = 196f;
-    private const float WorldWidth = 640f;
-    private const float WorldMapAreaSize = 620f;
-    private const float HeaderHeight = 46f;
-    private const float FooterHeight = 68f;
+    private const float WorldModalWidth = 1080f;
+    private const float WorldMapAreaSize = 720f;
+    private const float SideBarWidth = 324f;
+    private const float HeaderHeight = 52f;
+    private const float FooterHeight = 56f;
     private const float Border = 4f;
 
     public bool IsWorldMode => _worldMode;
@@ -28,17 +29,24 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
     private RectTransform _frameRect, _innerRect, _viewRect;
     private GameObject _topNavBar;
     private GameObject _footerBar;
+    private GameObject _sidePanel;
     private GameObject _miniFooter;
     private RawImage _view;
-    private Text _legendText;
     private Text _waypointText;
     private Text _miniFooterText;
+    private Text _zoomLabel;
     private Button _clearPinBtn;
     private bool _worldMode;
     private Font _font;
 
+    // สถานะการลากเลื่อนแผนที่
+    private bool _isDraggingMap;
+    private bool _dragMovedEnough;
+    private Vector2 _lastDragScreenPos;
+
     private readonly List<MapMarker> _markers = new List<MapMarker>(96);
     private readonly List<MarkerWidget> _pool = new List<MarkerWidget>(96);
+    private readonly List<Rect> _placedLabelRects = new List<Rect>(32);
 
     private class MarkerWidget
     {
@@ -55,7 +63,7 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         if (_map == null) { Debug.LogWarning("[MinimapUI] No MapManager - UI disabled."); enabled = false; return; }
 
         EnsureEventSystem();
-        _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        _font = UITheme.GetFont();
 
         var canvasGo = new GameObject("MapCanvas");
         canvasGo.transform.SetParent(transform, false);
@@ -68,13 +76,16 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         scaler.matchWidthOrHeight = 0.5f;
         canvasGo.AddComponent<GraphicRaycaster>();
 
-        // Outer border frame
-        var frame = NewImage(canvasGo.transform, "MapFrame", new Color(0.55f, 0.45f, 0.22f, 0.94f));
+        // กรอบหลักสี Brushed Gold + เงา
+        var frame = NewImage(canvasGo.transform, "MapFrame", UITheme.BrushedGold);
+        UITheme.ApplySlicedStyle(frame, UITheme.BrushedGold);
+        UITheme.AddShadow(frame.gameObject, 2.5f);
         frame.raycastTarget = false;
         _frameRect = frame.rectTransform;
 
-        // Inner obsidian backing
-        var inner = NewImage(frame.transform, "MapInner", new Color(0.05f, 0.06f, 0.09f, 0.96f));
+        // พื้นหลังด้านในสี Dark Obsidian
+        var inner = NewImage(frame.transform, "MapInner", UITheme.ObsidianDeep);
+        UITheme.ApplySlicedStyle(inner, UITheme.ObsidianDeep);
         inner.raycastTarget = false;
         _innerRect = inner.rectTransform;
         _innerRect.anchorMin = Vector2.zero;
@@ -83,11 +94,11 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         _innerRect.offsetMax = new Vector2(-Border, -Border);
 
         // ============================================================
-        // TOP NAVIGATION TAB BAR (Visible in World Map mode)
+        // แถบแท็บด้านบน (แสดงเฉพาะตอนเปิด World Map)
         // ============================================================
         _topNavBar = new GameObject("TopNavigationTabs", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
         _topNavBar.transform.SetParent(_innerRect, false);
-        _topNavBar.GetComponent<Image>().color = new Color(0.08f, 0.09f, 0.13f, 1f);
+        _topNavBar.GetComponent<Image>().color = UITheme.ObsidianHeader;
         var navRt = (RectTransform)_topNavBar.transform;
         navRt.anchorMin = new Vector2(0f, 1f);
         navRt.anchorMax = new Vector2(1f, 1f);
@@ -95,23 +106,28 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         navRt.anchoredPosition = Vector2.zero;
         navRt.sizeDelta = new Vector2(0f, HeaderHeight);
 
-        MakeTabButton(_topNavBar.transform, "TabWorldMap", "[ World Map ]", 10f, 132f, true, () => { });
-        MakeTabButton(_topNavBar.transform, "TabCharacter", "[ Character & Upgrade ]", 148f, 178f, false, () =>
+        MakeTabButton(_topNavBar.transform, "TabWorldMap", "[ World Map ]", 14f, 154f, true, () => { });
+        MakeTabButton(_topNavBar.transform, "TabCharacter", "[ Character & Bag ]", 176f, 184f, false, () =>
         {
             if (_map != null) _map.SwitchToCharacterTab();
         });
-        MakeTabButton(_topNavBar.transform, "TabBlacksmith", "[ Blacksmith (+Gear) ]", 332f, 164f, false, () =>
+        MakeTabButton(_topNavBar.transform, "TabBlacksmith", "[ Blacksmith (+Gear) ]", 368f, 190f, false, () =>
         {
             if (_map != null) _map.SwitchToCharacterTab();
             InventoryUI.Instance?.OpenToEnhancementTab();
         });
-        MakeTabButton(_topNavBar.transform, "CloseMapBtn", "Close [M / Esc]", 502f, 126f, false, () =>
+        MakeTabButton(_topNavBar.transform, "TabCompendium", "[ Item Guide ]", 566f, 154f, false, () =>
+        {
+            if (_map != null) _map.SwitchToCharacterTab();
+            InventoryUI.Instance?.OpenToCompendiumTab();
+        });
+        MakeTabButton(_topNavBar.transform, "CloseMapBtn", "Close [M / Esc]", 926f, 134f, false, () =>
         {
             if (_map != null) _map.SetWorldMapOpen(false);
         });
 
         // ============================================================
-        // INTERACTIVE MAP VIEWPORT
+        // ช่องแสดงแผนที่ (รองรับ Scroll Zoom + Drag Pan + Waypoint Click)
         // ============================================================
         var viewGo = new GameObject("MapView", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage), typeof(RectMask2D));
         viewGo.transform.SetParent(_innerRect, false);
@@ -120,20 +136,72 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         _view.texture = _map.MapTexture;
         _view.raycastTarget = false;
 
-        // Forward pointer clicks on MapView to this MinimapUI
         var relay = viewGo.AddComponent<MapClickRelay>();
         relay.owner = this;
 
-        // Compass N
-        MakeText(_viewRect, "North", "N", 15, FontStyle.Bold, TextAnchor.UpperCenter,
-            new Color(1f, 0.84f, 0.25f, 0.95f), new Vector2(0.5f, 1f), new Vector2(0f, -4f), new Vector2(30f, 22f));
+        MakeText(_viewRect, "North", "N", 16, FontStyle.Bold, TextAnchor.UpperCenter,
+            UITheme.BrushedGoldBright, new Vector2(0.5f, 1f), new Vector2(0f, -6f), new Vector2(36f, 24f));
 
         // ============================================================
-        // COMPACT MINIMAP FOOTER (Waypoint distance / hotkey hint)
+        // แผงด้านขวาในโหมด World Map (ปุ่มซูม +/-, Reset View, คำอธิบายหมุด)
+        // ============================================================
+        _sidePanel = NewImage(_innerRect, "WorldSidePanel", UITheme.ObsidianPanel).gameObject;
+        UITheme.ApplySlicedStyle(_sidePanel.GetComponent<Image>(), UITheme.ObsidianPanel);
+        var srt = (RectTransform)_sidePanel.transform;
+        srt.anchorMin = new Vector2(1f, 0f);
+        srt.anchorMax = new Vector2(1f, 1f);
+        srt.pivot = new Vector2(1f, 0.5f);
+        srt.offsetMin = new Vector2(-(SideBarWidth + 12f), FooterHeight + 8f);
+        srt.offsetMax = new Vector2(-12f, -(HeaderHeight + 8f));
+
+        MakeText(_sidePanel.transform, "ControlsHeader", "MAP CONTROLS & ZOOM", 14, FontStyle.Bold, TextAnchor.UpperLeft,
+            UITheme.BrushedGoldBright, new Vector2(0f, 1f), new Vector2(16f, -14f), new Vector2(290f, 24f));
+
+        _zoomLabel = MakeText(_sidePanel.transform, "ZoomLabel", "Zoom: 1.0x", 14, FontStyle.Bold, TextAnchor.UpperLeft,
+            UITheme.JadeAccent, new Vector2(0f, 1f), new Vector2(16f, -44f), new Vector2(290f, 24f));
+
+        var zoomInBtn = MakeTabButton(_sidePanel.transform, "ZoomInBtn", "Zoom In (+)", 16f, 138f, false, () => _map?.AdjustWorldMapZoom(-0.18f));
+        ((RectTransform)zoomInBtn.transform).anchoredPosition = new Vector2(16f, -74f);
+
+        var zoomOutBtn = MakeTabButton(_sidePanel.transform, "ZoomOutBtn", "Zoom Out (-)", 164f, 138f, false, () => _map?.AdjustWorldMapZoom(0.18f));
+        ((RectTransform)zoomOutBtn.transform).anchoredPosition = new Vector2(164f, -74f);
+
+        var resetBtn = MakeTabButton(_sidePanel.transform, "ResetViewBtn", "Reset Center & Zoom", 16f, 286f, false, () => _map?.ResetWorldMapView());
+        ((RectTransform)resetBtn.transform).anchoredPosition = new Vector2(16f, -112f);
+
+        var clearGo = MakeTabButton(_sidePanel.transform, "ClearPinBtn", "Clear Waypoint Pin", 16f, 286f, false, () => _map?.ClearWaypoint());
+        ((RectTransform)clearGo.transform).anchoredPosition = new Vector2(16f, -150f);
+        _clearPinBtn = clearGo.GetComponent<Button>();
+
+        MakeText(_sidePanel.transform, "UsageTips",
+            "• Mouse Wheel: Zoom In / Out\n" +
+            "• Left-Click & Drag: Pan Map\n" +
+            "• Left-Click: Pin 3D Waypoint\n" +
+            "• Right-Click: Clear Waypoint",
+            13, FontStyle.Normal, TextAnchor.UpperLeft, UITheme.TextSecondary,
+            new Vector2(0f, 1f), new Vector2(16f, -200f), new Vector2(290f, 96f));
+
+        MakeText(_sidePanel.transform, "LegendHeader", "MAP LEGEND", 14, FontStyle.Bold, TextAnchor.UpperLeft,
+            UITheme.BrushedGoldBright, new Vector2(0f, 1f), new Vector2(16f, -312f), new Vector2(290f, 24f));
+
+        MakeText(_sidePanel.transform, "LegendBody",
+            "White Arrow : You (Local Player)\n" +
+            "Cyan Circle : Other Players\n" +
+            "Emerald Shield : Comfort Safe Zone\n" +
+            "Orange Flame : Enemy Camps\n" +
+            "Crimson Crown : Boss Arena\n" +
+            "Gold Chest : Camp / Boss Rewards\n" +
+            "Gold Diamond : Your Personal Loot\n" +
+            "Mint Beacon : Active Waypoint",
+            13, FontStyle.Normal, TextAnchor.UpperLeft, UITheme.TextPrimary,
+            new Vector2(0f, 1f), new Vector2(16f, -342f), new Vector2(290f, 230f));
+
+        // ============================================================
+        // แถบด้านล่างของ Minimap (โหมดย่อ) และ World Map (โหมดเต็ม)
         // ============================================================
         _miniFooter = new GameObject("MiniFooter", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
         _miniFooter.transform.SetParent(_innerRect, false);
-        _miniFooter.GetComponent<Image>().color = new Color(0.06f, 0.08f, 0.11f, 0.92f);
+        _miniFooter.GetComponent<Image>().color = UITheme.ObsidianHeader;
         var mfrt = (RectTransform)_miniFooter.transform;
         mfrt.anchorMin = new Vector2(0f, 0f);
         mfrt.anchorMax = new Vector2(1f, 0f);
@@ -141,14 +209,11 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         mfrt.anchoredPosition = Vector2.zero;
         mfrt.sizeDelta = new Vector2(0f, 24f);
         _miniFooterText = MakeText(_miniFooter.transform, "MiniLabel", "[M] World Map", 11, FontStyle.Bold,
-            TextAnchor.MiddleCenter, new Color(0.75f, 0.82f, 0.90f, 1f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(MiniSize - 8f, 22f));
+            TextAnchor.MiddleCenter, UITheme.TextSecondary, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(MiniSize - 8f, 22f));
 
-        // ============================================================
-        // WORLD MAP BOTTOM BAR (Waypoint Controls & Icon Legend)
-        // ============================================================
         _footerBar = new GameObject("WorldFooter", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
         _footerBar.transform.SetParent(_innerRect, false);
-        _footerBar.GetComponent<Image>().color = new Color(0.07f, 0.08f, 0.12f, 1f);
+        _footerBar.GetComponent<Image>().color = UITheme.ObsidianHeader;
         var frt = (RectTransform)_footerBar.transform;
         frt.anchorMin = new Vector2(0f, 0f);
         frt.anchorMax = new Vector2(1f, 0f);
@@ -157,25 +222,12 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         frt.sizeDelta = new Vector2(0f, FooterHeight);
 
         _waypointText = MakeText(_footerBar.transform, "WaypointInfo",
-            "Left-Click anywhere on the map to pin a Waypoint  |  Right-Click to clear",
-            13, FontStyle.Bold, TextAnchor.MiddleLeft, new Color(0.30f, 0.95f, 0.72f, 1f),
-            new Vector2(0f, 1f), new Vector2(14f, -18f), new Vector2(520f, 24f));
-
-        var clearGo = MakeTabButton(_footerBar.transform, "ClearPinBtn", "Clear Pin", 516f, 110f, false, () =>
-        {
-            if (_map != null) _map.ClearWaypoint();
-        });
-        ((RectTransform)clearGo.transform).anchoredPosition = new Vector2(516f, -6f);
-        ((RectTransform)clearGo.transform).sizeDelta = new Vector2(110f, 26f);
-        _clearPinBtn = clearGo.GetComponent<Button>();
-
-        _legendText = MakeText(_footerBar.transform, "Legend",
-            "White: You  |  Emerald: Safe Zone  |  Orange: Camps  |  Crown: Boss  |  Gold: Chests  |  Mint: Pin",
-            11, FontStyle.Normal, TextAnchor.MiddleLeft, new Color(0.82f, 0.85f, 0.90f, 1f),
-            new Vector2(0f, 0f), new Vector2(14f, 16f), new Vector2(612f, 22f));
+            "Left-Click on map to pin Waypoint  |  Drag to Pan  |  Scroll Wheel to Zoom",
+            14, FontStyle.Bold, TextAnchor.MiddleLeft, UITheme.JadeAccent,
+            new Vector2(0f, 0.5f), new Vector2(16f, 0f), new Vector2(1020f, 30f));
 
         ApplyMode(false);
-        Debug.Log("[MinimapUI] Phase 2 Upgraded Map Hub built.");
+        Debug.Log("[MinimapUI] Upgraded Large Interactive Zoom & Pan World Map built.");
     }
 
     private static void EnsureEventSystem()
@@ -187,9 +239,50 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         module.AssignDefaultActions();
     }
 
+    // ------------------------------------------------------------------ การโต้ตอบ Zoom / Pan / Pin บนแผนที่
+
+    public void OnMapScroll(PointerEventData eventData)
+    {
+        if (!_worldMode || _map == null) return;
+        float delta = -Mathf.Sign(eventData.scrollDelta.y) * 0.14f;
+        _map.AdjustWorldMapZoom(delta);
+    }
+
+    public void OnMapBeginDrag(PointerEventData eventData)
+    {
+        if (!_worldMode || eventData.button != PointerEventData.InputButton.Left) return;
+        _isDraggingMap = true;
+        _dragMovedEnough = false;
+        _lastDragScreenPos = eventData.position;
+    }
+
+    public void OnMapDrag(PointerEventData eventData)
+    {
+        if (!_worldMode || !_isDraggingMap || _map == null || _viewRect == null) return;
+
+        Vector2 screenDelta = eventData.position - _lastDragScreenPos;
+        _lastDragScreenPos = eventData.position;
+        if (screenDelta.sqrMagnitude > 2f) _dragMovedEnough = true;
+
+        float halfSize = Mathf.Max(1f, Mathf.Min(_viewRect.rect.width, _viewRect.rect.height) * 0.5f);
+        float scale = halfSize / Mathf.Max(1f, _map.CurrentRadius);
+        Vector2 worldDelta = new Vector2(-screenDelta.x / scale, -screenDelta.y / scale);
+        _map.PanWorldMap(worldDelta);
+    }
+
+    public void OnMapEndDrag()
+    {
+        _isDraggingMap = false;
+    }
+
     public void OnPointerClick(PointerEventData eventData)
     {
         if (!_worldMode || _map == null || _viewRect == null) return;
+        if (_dragMovedEnough)
+        {
+            _dragMovedEnough = false;
+            return;
+        }
 
         if (eventData.button == PointerEventData.InputButton.Right)
         {
@@ -216,19 +309,24 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         if (_worldMode != _map.IsWorldMapOpen) ApplyMode(_map.IsWorldMapOpen);
         if (_view != null && _view.texture != _map.MapTexture) _view.texture = _map.MapTexture;
 
-        // Update Waypoint labels
+        if (_zoomLabel != null && _worldMode)
+        {
+            float displayZoom = 1f / Mathf.Max(0.1f, _map.WorldMapZoom);
+            _zoomLabel.text = $"Zoom: {displayZoom:0.00}x  (Radius {_map.CurrentRadius:0}m)";
+        }
+
         if (_map.HasActiveWaypoint)
         {
             float dist = _map.GetLocalPlayerDistanceToWaypoint();
             if (_miniFooterText != null)
             {
                 _miniFooterText.text = $"PIN: {dist:0}m  |  [M] Map";
-                _miniFooterText.color = new Color(0.25f, 0.96f, 0.68f, 1f);
+                _miniFooterText.color = UITheme.JadeAccent;
             }
             if (_waypointText != null)
             {
                 _waypointText.text = $"Waypoint Pinned: ({_map.ActiveWaypointPosition.x:0}, {_map.ActiveWaypointPosition.z:0}) — {dist:0.0}m away  (Right-Click to Clear)";
-                _waypointText.color = new Color(0.25f, 0.96f, 0.68f, 1f);
+                _waypointText.color = UITheme.JadeAccent;
             }
             if (_clearPinBtn != null) _clearPinBtn.interactable = true;
         }
@@ -237,12 +335,12 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
             if (_miniFooterText != null)
             {
                 _miniFooterText.text = "[M] World Map";
-                _miniFooterText.color = new Color(0.75f, 0.82f, 0.90f, 1f);
+                _miniFooterText.color = UITheme.TextSecondary;
             }
             if (_waypointText != null)
             {
-                _waypointText.text = "Left-Click anywhere on the map to pin a Waypoint  |  Right-Click to clear";
-                _waypointText.color = new Color(0.76f, 0.82f, 0.90f, 1f);
+                _waypointText.text = "Left-Click to Pin Waypoint  •  Drag to Pan  •  Scroll Wheel to Zoom";
+                _waypointText.color = UITheme.TextSecondary;
             }
             if (_clearPinBtn != null) _clearPinBtn.interactable = false;
         }
@@ -254,10 +352,12 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         float radius = Mathf.Max(1f, _map.CurrentRadius);
         float scale = Mathf.Min(halfW, halfH) / radius;
         Vector3 focus = _map.Focus;
-        float limitX = halfW - 10f;
-        float limitY = halfH - 10f;
+        float limitX = halfW - 12f;
+        float limitY = halfH - 12f;
 
+        _placedLabelRects.Clear();
         int used = 0;
+
         for (int i = 0; i < _markers.Count; i++)
         {
             var m = _markers[i];
@@ -267,7 +367,6 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
             bool outside = Mathf.Abs(x) > limitX || Mathf.Abs(y) > limitY;
             if (outside)
             {
-                // Clamp Waypoint, Boss, Camps, and Remote Players to edge so players can navigate towards them
                 if (m.kind == MarkerKind.Enemy || m.kind == MarkerKind.Loot) continue;
                 x = Mathf.Clamp(x, -limitX, limitX);
                 y = Mathf.Clamp(y, -limitY, limitY);
@@ -276,6 +375,37 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
             var widget = GetWidget(used++);
             Style(widget, m, _worldMode);
             widget.rect.anchoredPosition = new Vector2(x, y);
+
+            // ป้องกันป้ายข้อความบนแผนที่ซ้อนทับกันในโหมด World Map
+            if (_worldMode && widget.label.gameObject.activeSelf)
+            {
+                var lrt = widget.label.rectTransform;
+                Vector2 center = new Vector2(x, y) + lrt.anchoredPosition;
+                Rect candidate = new Rect(center.x - 58f, center.y - 10f, 116f, 20f);
+                if (OverlapsAnyLabel(candidate))
+                {
+                    // ลองเลื่อนขึ้นด้านบนหนึ่งจังหวะก่อน หากยังทับอยู่ให้ซ่อนป้ายที่มีความสำคัญรองลงมา
+                    Vector2 nudgedPos = lrt.anchoredPosition + new Vector2(0f, 22f);
+                    Rect nudgedRect = new Rect((new Vector2(x, y) + nudgedPos).x - 58f, (new Vector2(x, y) + nudgedPos).y - 10f, 116f, 20f);
+                    if (!OverlapsAnyLabel(nudgedRect))
+                    {
+                        lrt.anchoredPosition = nudgedPos;
+                        _placedLabelRects.Add(nudgedRect);
+                    }
+                    else if (m.kind != MarkerKind.LocalPlayer && m.kind != MarkerKind.Boss && m.kind != MarkerKind.Waypoint)
+                    {
+                        widget.label.gameObject.SetActive(false);
+                    }
+                    else
+                    {
+                        _placedLabelRects.Add(candidate);
+                    }
+                }
+                else
+                {
+                    _placedLabelRects.Add(candidate);
+                }
+            }
         }
 
         for (int i = used; i < _pool.Count; i++)
@@ -284,29 +414,46 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         }
     }
 
+    private bool OverlapsAnyLabel(Rect candidate)
+    {
+        for (int i = 0; i < _placedLabelRects.Count; i++)
+        {
+            if (_placedLabelRects[i].Overlaps(candidate)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// ซิงก์โหมดการแสดงผล World Map / Minimap ทันทีเมื่อ MapManager สั่งเปิดปิด
+    /// </summary>
+    public void SyncWorldModeImmediate(bool world)
+    {
+        if (_worldMode != world) ApplyMode(world);
+    }
+
     private void ApplyMode(bool world)
     {
         _worldMode = world;
         if (_topNavBar != null) _topNavBar.SetActive(world);
         if (_footerBar != null) _footerBar.SetActive(world);
+        if (_sidePanel != null) _sidePanel.SetActive(world);
         if (_miniFooter != null) _miniFooter.SetActive(!world);
         if (_view != null) _view.raycastTarget = world;
 
         if (world)
         {
             _frameRect.anchorMin = _frameRect.anchorMax = _frameRect.pivot = new Vector2(0.5f, 0.5f);
-            _frameRect.anchoredPosition = Vector2.zero;
+            _frameRect.anchoredPosition = new Vector2(0f, 18f);
             float totalH = HeaderHeight + WorldMapAreaSize + FooterHeight + Border * 2f;
-            _frameRect.sizeDelta = new Vector2(WorldWidth + Border * 2f, totalH);
+            _frameRect.sizeDelta = new Vector2(WorldModalWidth + Border * 2f, totalH);
 
             _viewRect.anchorMin = Vector2.zero;
             _viewRect.anchorMax = Vector2.one;
-            _viewRect.offsetMin = new Vector2(10f, FooterHeight);
-            _viewRect.offsetMax = new Vector2(-10f, -HeaderHeight);
+            _viewRect.offsetMin = new Vector2(12f, FooterHeight + 8f);
+            _viewRect.offsetMax = new Vector2(-(SideBarWidth + 24f), -(HeaderHeight + 8f));
         }
         else
         {
-            // Compact Radar at Top-Left (avoids collision with Top-Right Player Status HUD)
             _frameRect.anchorMin = _frameRect.anchorMax = _frameRect.pivot = new Vector2(0f, 1f);
             _frameRect.anchoredPosition = new Vector2(18f, -18f);
             _frameRect.sizeDelta = new Vector2(MiniSize + Border * 2f, MiniSize + 24f + Border * 2f);
@@ -318,7 +465,7 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         }
     }
 
-    // ------------------------------------------------------------------ pooled markers
+    // ------------------------------------------------------------------ พูลของหมุดแผนที่
 
     private MarkerWidget GetWidget(int index)
     {
@@ -337,8 +484,9 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
             irt.anchorMin = irt.anchorMax = irt.pivot = new Vector2(0.5f, 0.5f);
             irt.anchoredPosition = Vector2.zero;
 
-            var lbl = MakeText(go.transform, "Label", "", 11, FontStyle.Bold, TextAnchor.UpperCenter,
-                Color.white, new Vector2(0.5f, 0.5f), new Vector2(0f, -16f), new Vector2(120f, 20f));
+            var lbl = MakeText(go.transform, "Label", "", 12, FontStyle.Bold, TextAnchor.UpperCenter,
+                Color.white, new Vector2(0.5f, 0.5f), new Vector2(0f, -16f), new Vector2(140f, 20f));
+            UITheme.AddShadow(lbl.gameObject, 1f);
 
             _pool.Add(new MarkerWidget { root = go, rect = rt, icon = img, label = lbl });
         }
@@ -353,7 +501,7 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         var irt = w.icon.rectTransform;
         var lrt = w.label.rectTransform;
         irt.localRotation = Quaternion.identity;
-        lrt.anchoredPosition = new Vector2(0f, -15f);
+        lrt.anchoredPosition = new Vector2(0f, -16f);
         bool showLabel = worldMode;
 
         switch (m.kind)
@@ -361,14 +509,14 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
             case MarkerKind.LocalPlayer:
                 w.icon.sprite = HudIcons.GetSprite("player_arrow");
                 w.icon.color = Color.white;
-                irt.sizeDelta = worldMode ? new Vector2(18f, 18f) : new Vector2(14f, 14f);
+                irt.sizeDelta = worldMode ? new Vector2(20f, 20f) : new Vector2(14f, 14f);
                 if (PlayerCombat.Local != null)
                 {
                     float yaw = PlayerCombat.Local.transform.eulerAngles.y;
                     irt.localRotation = Quaternion.Euler(0f, 0f, -yaw);
                 }
                 w.label.color = Color.white;
-                lrt.anchoredPosition = new Vector2(22f, 6f);
+                lrt.anchoredPosition = new Vector2(24f, 6f);
                 break;
 
             case MarkerKind.RemotePlayer:
@@ -381,9 +529,9 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
             case MarkerKind.Boss:
                 w.icon.sprite = HudIcons.GetSprite("boss");
                 w.icon.color = new Color(1f, 0.35f, 0.18f);
-                irt.sizeDelta = worldMode ? new Vector2(24f, 24f) : new Vector2(18f, 18f);
+                irt.sizeDelta = worldMode ? new Vector2(26f, 26f) : new Vector2(18f, 18f);
                 w.label.color = new Color(1f, 0.72f, 0.25f);
-                lrt.anchoredPosition = new Vector2(0f, -16f);
+                lrt.anchoredPosition = new Vector2(0f, -18f);
                 break;
 
             case MarkerKind.EnemyCamp:
@@ -391,23 +539,23 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
                 w.icon.color = new Color(1f, 0.58f, 0.15f, 0.92f);
                 irt.sizeDelta = worldMode ? new Vector2(20f, 20f) : new Vector2(14f, 14f);
                 w.label.color = new Color(1f, 0.78f, 0.40f);
-                lrt.anchoredPosition = new Vector2(0f, -15f);
+                lrt.anchoredPosition = new Vector2(0f, -16f);
                 break;
 
             case MarkerKind.LootChest:
                 w.icon.sprite = HudIcons.GetSprite("chest");
-                w.icon.color = new Color(1f, 0.86f, 0.22f);
+                w.icon.color = UITheme.BrushedGoldBright;
                 irt.sizeDelta = worldMode ? new Vector2(18f, 18f) : new Vector2(13f, 13f);
-                w.label.color = new Color(1f, 0.90f, 0.35f);
-                lrt.anchoredPosition = new Vector2(0f, 28f);
+                w.label.color = UITheme.BrushedGoldBright;
+                lrt.anchoredPosition = new Vector2(0f, 24f);
                 break;
 
             case MarkerKind.SafeZone:
                 w.icon.sprite = HudIcons.GetSprite("shield");
-                w.icon.color = new Color(0.18f, 0.96f, 0.65f, 1f);
-                irt.sizeDelta = worldMode ? new Vector2(22f, 22f) : new Vector2(15f, 15f);
-                w.label.color = new Color(0.32f, 0.98f, 0.72f, 1f);
-                lrt.anchoredPosition = new Vector2(0f, 30f);
+                w.icon.color = UITheme.JadeAccent;
+                irt.sizeDelta = worldMode ? new Vector2(24f, 24f) : new Vector2(15f, 15f);
+                w.label.color = UITheme.JadeAccent;
+                lrt.anchoredPosition = new Vector2(0f, 26f);
                 break;
 
             case MarkerKind.Waypoint:
@@ -415,7 +563,7 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
                 w.icon.color = new Color(0.20f, 1.0f, 0.68f);
                 irt.sizeDelta = worldMode ? new Vector2(24f, 24f) : new Vector2(18f, 18f);
                 w.label.color = new Color(0.35f, 1.0f, 0.75f);
-                lrt.anchoredPosition = new Vector2(0f, 28f);
+                lrt.anchoredPosition = new Vector2(0f, 26f);
                 showLabel = true;
                 break;
 
@@ -428,8 +576,8 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
 
             default:
                 w.icon.sprite = HudIcons.GetSprite("diamond");
-                w.icon.color = new Color(1f, 0.85f, 0.20f);
-                irt.sizeDelta = new Vector2(8f, 8f);
+                w.icon.color = UITheme.BrushedGoldBright;
+                irt.sizeDelta = new Vector2(9f, 9f);
                 showLabel = false;
                 break;
         }
@@ -438,23 +586,24 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         if (showLabel) w.label.text = m.label;
     }
 
-    // ------------------------------------------------------------------ UI builders
+    // ------------------------------------------------------------------ ฟังก์ชันสร้าง UI
 
     private GameObject MakeTabButton(Transform parent, string name, string label, float x, float w, bool active, UnityEngine.Events.UnityAction onClick)
     {
-        Color bg = active ? new Color(0.55f, 0.44f, 0.18f, 1f) : new Color(0.14f, 0.17f, 0.24f, 1f);
+        Color bg = active ? UITheme.BrushedGold : new Color(0.14f, 0.17f, 0.24f, 1f);
         var img = NewImage(parent, name, bg);
+        UITheme.ApplySlicedStyle(img, bg);
         var rt = img.rectTransform;
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0f, 1f);
-        rt.anchoredPosition = new Vector2(x, -8f);
-        rt.sizeDelta = new Vector2(w, 30f);
+        rt.anchoredPosition = new Vector2(x, -9f);
+        rt.sizeDelta = new Vector2(w, 34f);
 
         var btn = img.gameObject.AddComponent<Button>();
         btn.targetGraphic = img;
         btn.onClick.AddListener(onClick);
 
         MakeText(img.transform, "Text", label, 13, FontStyle.Bold, TextAnchor.MiddleCenter,
-            active ? new Color(1f, 0.94f, 0.72f) : Color.white, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(w - 8f, 26f));
+            active ? new Color(0.08f, 0.06f, 0.02f) : Color.white, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(w - 8f, 28f));
         return img.gameObject;
     }
 
@@ -486,12 +635,14 @@ public class MinimapUI : MonoBehaviour, IPointerClickHandler
         return t;
     }
 
-    private class MapClickRelay : MonoBehaviour, IPointerClickHandler
+    private class MapClickRelay : MonoBehaviour,
+        IPointerClickHandler, IScrollHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
     {
         public MinimapUI owner;
-        public void OnPointerClick(PointerEventData eventData)
-        {
-            if (owner != null) owner.OnPointerClick(eventData);
-        }
+        public void OnPointerClick(PointerEventData eventData) => owner?.OnPointerClick(eventData);
+        public void OnScroll(PointerEventData eventData) => owner?.OnMapScroll(eventData);
+        public void OnBeginDrag(PointerEventData eventData) => owner?.OnMapBeginDrag(eventData);
+        public void OnDrag(PointerEventData eventData) => owner?.OnMapDrag(eventData);
+        public void OnEndDrag(PointerEventData eventData) => owner?.OnMapEndDrag();
     }
 }

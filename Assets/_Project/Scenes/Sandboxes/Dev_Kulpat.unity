@@ -524,6 +524,8 @@ MonoBehaviour:
   bossArenaCenter: {x: -26, y: 0, z: -16}
   bossArenaProximityRadius: 18
   bossRespawnDelaySeconds: 240
+  safeZoneCenter: {x: -14, y: 0, z: 8}
+  safeZoneRadius: 7.5
   itemPrefab: {fileID: 6507998983499857821, guid: 1f3dda27c4c498b4fb91d3d916ec6506, type: 3}
   items:
   - item: {fileID: 11400000, guid: 7095152d0ac2312499adbb494ed45520, type: 2}
@@ -537,7 +539,7 @@ MonoBehaviour:
     point: {fileID: 1602823386}
   - item: {fileID: 11400000, guid: 196be1f3dcf2b11439597886398f4216, type: 2}
     quantity: 1
-    point: {fileID: 1251798103}
+    point: {fileID: 0}
   spawnRewardChestOnCampClear: 1
   settleSeconds: 0
   createTestObstacles: 1
@@ -735,37 +737,6 @@ Transform:
   - {fileID: 1540492912}
   - {fileID: 343042834}
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1251798102
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1251798103}
-  m_Layer: 0
-  m_Name: Item_Key
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1251798103
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1251798102}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -5, y: 0.3, z: -4}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 1683739644}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1323361264
 GameObject:
@@ -1019,7 +990,6 @@ Transform:
   - {fileID: 940724352}
   - {fileID: 2013702776}
   - {fileID: 1602823386}
-  - {fileID: 1251798103}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1718109886
@@ -1052,7 +1022,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameSceneController
   characterPrefab: {fileID: 0}
-  playerCapsulePrefab: {fileID: 7399417532795311998, guid: d5212105c00328d498c724b8a420fce1, type: 3}
+  playerCapsulePrefab: {fileID: 6264403946805659360, guid: 876cd4838a272b44cbff0f8a0789340c, type: 3}
   spawnPoints:
   - {fileID: 1002385414}
   - {fileID: 533121270}

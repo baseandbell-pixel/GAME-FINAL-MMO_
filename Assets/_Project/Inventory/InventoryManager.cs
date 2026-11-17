@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Fusion;
 using UnityEngine;
 
 /// <summary>
@@ -60,7 +61,13 @@ public class InventoryManager : MonoBehaviour
 
     private PlayerCombat _combat;
     private InventoryUI _ui;
+    private HotbarUI _hotbarUi;
     private bool _activated;
+
+    // จำนวนช่องปุ่มลัด Hotbar (1-6) และการผูกกับช่องกระเป๋าจริง
+    public const int HotbarCapacity = 6;
+    private readonly int[] _hotbarSlotIndices = { -1, -1, -1, -1, -1, -1 };
+    private readonly string[] _hotbarInstanceIds = new string[HotbarCapacity];
 
     public bool IsActivated => _activated;
     public IReadOnlyList<InventorySlot> Slots => _slots;
@@ -109,7 +116,11 @@ public class InventoryManager : MonoBehaviour
         _combat.ProgressionChanged += OnProgressionChanged;
         PlayerSaveManager.EnsureExists();
         Debug.Log($"[Inventory] Activated for local player '{name}' ({capacity} slots).");
-        if (createUi) _ui = InventoryUI.Create(this);
+        if (createUi)
+        {
+            _ui = InventoryUI.Create(this);
+            _hotbarUi = HotbarUI.Create(this);
+        }
     }
 
     private void OnDestroy()
@@ -117,6 +128,7 @@ public class InventoryManager : MonoBehaviour
         if (_combat != null) _combat.ProgressionChanged -= OnProgressionChanged;
         if (Local == this) Local = null;
         if (_ui != null) Destroy(_ui.gameObject);
+        if (_hotbarUi != null) Destroy(_hotbarUi.gameObject);
     }
 
     private void OnProgressionChanged()
@@ -217,6 +229,7 @@ public class InventoryManager : MonoBehaviour
             UnequipByInstanceId(consumedInstanceId);
         }
 
+        ValidateHotbarBindings();
         Debug.Log($"[Inventory] Slot {slotIndex}: consumed {take}x {itemName}.");
         RecomputeBonus();
         Changed?.Invoke();
@@ -242,13 +255,18 @@ public class InventoryManager : MonoBehaviour
         if (fromSlot == null || toSlot == null || fromSlot.IsEmpty) return false;
 
         // Merge un-enhanced identical stackables
+        bool mergedCompletely = false;
         if (!toSlot.IsEmpty && fromSlot.item == toSlot.item && fromSlot.item.stackable &&
             fromSlot.enhancementLevel == 0 && toSlot.enhancementLevel == 0 && toSlot.FreeSpace > 0)
         {
             int move = Mathf.Min(fromSlot.quantity, toSlot.FreeSpace);
             toSlot.quantity += move;
             fromSlot.quantity -= move;
-            if (fromSlot.quantity <= 0) fromSlot.Clear();
+            if (fromSlot.quantity <= 0)
+            {
+                fromSlot.Clear();
+                mergedCompletely = true;
+            }
         }
         else
         {
@@ -257,6 +275,22 @@ public class InventoryManager : MonoBehaviour
             toSlot.CopyFrom(fromSlot);
             fromSlot.CopyFrom(temp);
         }
+
+        // อัปเดตตำแหน่ง Hotbar ที่ผูกไว้ให้ตามช่องที่ย้ายหรือรวมกองอัตโนมัติ
+        for (int h = 0; h < HotbarCapacity; h++)
+        {
+            if (_hotbarSlotIndices[h] == fromIndex)
+            {
+                _hotbarSlotIndices[h] = toIndex;
+                _hotbarInstanceIds[h] = toSlot.instanceId;
+            }
+            else if (!mergedCompletely && _hotbarSlotIndices[h] == toIndex)
+            {
+                _hotbarSlotIndices[h] = fromIndex;
+                _hotbarInstanceIds[h] = fromSlot.instanceId;
+            }
+        }
+        ValidateHotbarBindings();
 
         Debug.Log($"[Inventory] Moved/Swapped slot {fromIndex} <-> slot {toIndex}.");
         Changed?.Invoke();
@@ -322,6 +356,9 @@ public class InventoryManager : MonoBehaviour
         }
 
         if (!appliedAny) return false;
+
+        // สั่งเล่นอนิเมชัน Buff บนโมเดล GreatSword และซิงก์ให้ทุกเครื่องเห็น
+        (_combat as PlayerCombat)?.PlayConsumableBuffEffect();
 
         Debug.Log($"[Inventory] Used item strictly at slot {slotIndex}: {item.displayName}.");
         ConsumeSlotAtExactIndex(slotIndex, 1);
@@ -454,7 +491,8 @@ public class InventoryManager : MonoBehaviour
 
         var item = s.item;
         int qty = s.quantity;
-        if (SpawnWorldItem(item, qty, pos) == null)
+        int enh = s.enhancementLevel;
+        if (SpawnWorldItem(item, qty, pos, enh, allowedLooter: default, isPlayerDropped: true) == null)
         {
             Debug.LogWarning("[Inventory] Drop failed - item kept.");
             return false;
@@ -465,14 +503,17 @@ public class InventoryManager : MonoBehaviour
         return true;
     }
 
-    public WorldItem SpawnWorldItem(ItemData item, int quantity, Vector3 position)
+    /// <summary>
+    /// สร้างไอเทมตกบนพื้นในโลก (รองรับระดับตีบวก, เจ้าของไอเทมส่วนตัว, และตัวนับถอยหลัง 30 วินาทีเมื่อผู้เล่นโยนทิ้ง)
+    /// </summary>
+    public WorldItem SpawnWorldItem(ItemData item, int quantity, Vector3 position, int enhancementLevel = 0, PlayerRef allowedLooter = default, bool isPlayerDropped = false)
     {
         if (worldItemPrefab == null)
         {
             Debug.LogWarning("[Inventory] worldItemPrefab is not assigned - cannot spawn world items.");
             return null;
         }
-        return WorldItem.Spawn(_combat != null ? _combat.Runner : null, worldItemPrefab, position, item, quantity);
+        return WorldItem.Spawn(_combat != null ? _combat.Runner : null, worldItemPrefab, position, item, quantity, allowedLooter, isPlayerDropped, enhancementLevel);
     }
 
     // ------------------------------------------------------------------ Equipment Enhancement (+0 to +10)
@@ -527,6 +568,16 @@ public class InventoryManager : MonoBehaviour
             };
         }
 
+        // รวบรวมข้อมูลวัตถุดิบก่อนหักออกจากช่อง เพื่อใช้คำนวณโอกาสตีบวกสำเร็จแบบไดนามิก (Normal..Legendary)
+        var fodderItems = new List<ItemData>(spec.requiredFodderCount);
+        for (int i = 0; i < spec.requiredFodderCount; i++)
+        {
+            var fs = GetSlot(uniqueFodder[i]);
+            if (fs != null && fs.item != null)
+                fodderItems.Add(fs.item);
+        }
+        float dynamicSuccessRate = EnhancementSystem.CalculateDynamicSuccessRate(targetSlot.item, targetSlot.enhancementLevel, fodderItems);
+
         // Spend Gold & Consume Exact Fodder Slots
         if (!_combat.TrySpendGold(spec.goldCost))
         {
@@ -541,7 +592,7 @@ public class InventoryManager : MonoBehaviour
         // Re-locate target slot in case anything changed (index stays identical because slots are fixed array)
         int prevLvl = targetSlot.enhancementLevel;
         float roll = forcedRoll01.HasValue ? Mathf.Clamp01(forcedRoll01.Value) : UnityEngine.Random.value;
-        bool success = roll <= spec.successRate;
+        bool success = roll <= dynamicSuccessRate;
 
         if (success)
         {
@@ -560,7 +611,7 @@ public class InventoryManager : MonoBehaviour
         string msg = success
             ? $"SUCCESS! {targetSlot.item.displayName} enhanced +{prevLvl} -> +{targetSlot.enhancementLevel}!"
             : $"FAILED! Fodder & {spec.goldCost} Gold consumed ({targetSlot.item.displayName} stays +{prevLvl}).";
-        Debug.Log($"[Enhancement] {msg} (rate={spec.successRate * 100f:0}%, roll={roll:0.00})");
+        Debug.Log($"[Enhancement] {msg} (rate={dynamicSuccessRate * 100f:0}%, roll={roll:0.00})");
 
         return new EnhanceResult
         {
@@ -633,6 +684,24 @@ public class InventoryManager : MonoBehaviour
                 enhancementLevel = kv.Value.enhancementLevel
             });
         }
+
+        // บันทึกการผูกปุ่มลัด Hotbar 1-6 ลงไฟล์เซฟ JSON
+        ValidateHotbarBindings();
+        data.hotbarBindings.Clear();
+        for (int h = 0; h < HotbarCapacity; h++)
+        {
+            int invIdx = _hotbarSlotIndices[h];
+            var bound = GetSlot(invIdx);
+            if (bound == null || bound.IsEmpty || bound.item == null) continue;
+            bound.EnsureInstanceId();
+            data.hotbarBindings.Add(new SavedHotbarBindingData
+            {
+                hotbarIndex = h,
+                inventorySlotIndex = invIdx,
+                instanceId = bound.instanceId,
+                itemId = bound.item.itemId
+            });
+        }
     }
 
     public void RestoreSaveData(PlayerSaveData data)
@@ -641,6 +710,11 @@ public class InventoryManager : MonoBehaviour
 
         for (int i = 0; i < _slots.Count; i++) _slots[i].Clear();
         foreach (var kv in _equipped) kv.Value.Clear();
+        for (int h = 0; h < HotbarCapacity; h++)
+        {
+            _hotbarSlotIndices[h] = -1;
+            _hotbarInstanceIds[h] = null;
+        }
 
         if (data.inventorySlots != null)
         {
@@ -670,8 +744,161 @@ public class InventoryManager : MonoBehaviour
             }
         }
 
+        // กู้คืนปุ่มลัด Hotbar 1-6 จากไฟล์เซฟ
+        if (data.hotbarBindings != null)
+        {
+            foreach (var hb in data.hotbarBindings)
+            {
+                if (hb == null || hb.hotbarIndex < 0 || hb.hotbarIndex >= HotbarCapacity) continue;
+                int targetIdx = hb.inventorySlotIndex;
+                if (!string.IsNullOrEmpty(hb.instanceId))
+                {
+                    int byId = FindSlotIndexByInstanceId(hb.instanceId);
+                    if (byId >= 0) targetIdx = byId;
+                }
+                var slot = GetSlot(targetIdx);
+                if (slot != null && !slot.IsEmpty && slot.item != null &&
+                    (string.IsNullOrEmpty(hb.itemId) || slot.item.itemId == hb.itemId))
+                {
+                    slot.EnsureInstanceId();
+                    _hotbarSlotIndices[hb.hotbarIndex] = targetIdx;
+                    _hotbarInstanceIds[hb.hotbarIndex] = slot.instanceId;
+                }
+            }
+        }
+
+        ValidateHotbarBindings();
         RecomputeBonus();
         Changed?.Invoke();
+    }
+
+    // ------------------------------------------------------------------ ระบบปุ่มลัด Hotbar (1-6) เชื่อมตรงกับ slotIndex / instanceId
+
+    /// <summary>
+    /// ผูกช่อง Hotbar (0..5) เข้ากับช่องกระเป๋าจริง (slotIndex) อย่างแม่นยำ
+    /// </summary>
+    public bool AssignHotbarSlot(int hotbarIndex, int inventorySlotIndex)
+    {
+        if (hotbarIndex < 0 || hotbarIndex >= HotbarCapacity) return false;
+        var slot = GetSlot(inventorySlotIndex);
+        if (slot == null || slot.IsEmpty || slot.item == null) return false;
+
+        slot.EnsureInstanceId();
+        _hotbarSlotIndices[hotbarIndex] = inventorySlotIndex;
+        _hotbarInstanceIds[hotbarIndex] = slot.instanceId;
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("AssignHotbar");
+        return true;
+    }
+
+    /// <summary>
+    /// สลับตำแหน่งไอเทมระหว่างช่อง Hotbar สองช่อง
+    /// </summary>
+    public bool SwapHotbarSlots(int hotbarA, int hotbarB)
+    {
+        if (hotbarA < 0 || hotbarA >= HotbarCapacity || hotbarB < 0 || hotbarB >= HotbarCapacity || hotbarA == hotbarB)
+            return false;
+
+        int tmpIdx = _hotbarSlotIndices[hotbarA];
+        string tmpId = _hotbarInstanceIds[hotbarA];
+        _hotbarSlotIndices[hotbarA] = _hotbarSlotIndices[hotbarB];
+        _hotbarInstanceIds[hotbarA] = _hotbarInstanceIds[hotbarB];
+        _hotbarSlotIndices[hotbarB] = tmpIdx;
+        _hotbarInstanceIds[hotbarB] = tmpId;
+
+        ValidateHotbarBindings();
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("SwapHotbar");
+        return true;
+    }
+
+    /// <summary>
+    /// ล้างการผูกปุ่มลัดออกจากช่อง Hotbar โดยไม่ลบไอเทมในกระเป๋า
+    /// </summary>
+    public void ClearHotbarSlot(int hotbarIndex)
+    {
+        if (hotbarIndex < 0 || hotbarIndex >= HotbarCapacity) return;
+        if (_hotbarSlotIndices[hotbarIndex] < 0 && string.IsNullOrEmpty(_hotbarInstanceIds[hotbarIndex])) return;
+
+        _hotbarSlotIndices[hotbarIndex] = -1;
+        _hotbarInstanceIds[hotbarIndex] = null;
+        Changed?.Invoke();
+        PlayerSaveManager.RequestAutoSave("ClearHotbar");
+    }
+
+    /// <summary>
+    /// คืนค่าตำแหน่งช่องกระเป๋าจริงที่ผูกกับปุ่มลัด Hotbar (หรือ -1 หากว่าง)
+    /// </summary>
+    public int GetHotbarBoundInventoryIndex(int hotbarIndex)
+    {
+        if (hotbarIndex < 0 || hotbarIndex >= HotbarCapacity) return -1;
+        ValidateHotbarBindings();
+        return _hotbarSlotIndices[hotbarIndex];
+    }
+
+    /// <summary>
+    /// คืนค่าข้อมูลช่องกระเป๋าที่ผูกอยู่กับปุ่มลัด Hotbar
+    /// </summary>
+    public InventorySlot GetHotbarBoundSlot(int hotbarIndex)
+    {
+        int idx = GetHotbarBoundInventoryIndex(hotbarIndex);
+        return idx >= 0 ? GetSlot(idx) : null;
+    }
+
+    /// <summary>
+    /// กดใช้งานไอเทมจากช่อง Hotbar (1-6): ใช้ยา/บัฟ หรือสวมใส่อุปกรณ์จากช่องที่ผูกไว้ทันที
+    /// </summary>
+    public bool UseHotbarSlot(int hotbarIndex)
+    {
+        int idx = GetHotbarBoundInventoryIndex(hotbarIndex);
+        var slot = GetSlot(idx);
+        if (slot == null || slot.IsEmpty || slot.item == null)
+        {
+            ClearHotbarSlot(hotbarIndex);
+            return false;
+        }
+
+        if (slot.item.IsUsable)
+            return UseItem(idx);
+
+        if (slot.item.IsEquippable)
+            return EquipItem(idx);
+
+        return false;
+    }
+
+    /// <summary>
+    /// ตรวจสอบความถูกต้องของปุ่มลัดทั้ง 6 ช่อง หากไอเทมถูกใช้จนหมดหรือย้ายช่องจะอัปเดต/เคลียร์ให้อัตโนมัติ
+    /// </summary>
+    public void ValidateHotbarBindings()
+    {
+        for (int h = 0; h < HotbarCapacity; h++)
+        {
+            int idx = _hotbarSlotIndices[h];
+            string instId = _hotbarInstanceIds[h];
+            if (idx < 0 && string.IsNullOrEmpty(instId)) continue;
+
+            var slot = GetSlot(idx);
+            if (slot != null && !slot.IsEmpty && (string.IsNullOrEmpty(instId) || slot.instanceId == instId))
+            {
+                slot.EnsureInstanceId();
+                _hotbarInstanceIds[h] = slot.instanceId;
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(instId))
+            {
+                int found = FindSlotIndexByInstanceId(instId);
+                if (found >= 0)
+                {
+                    _hotbarSlotIndices[h] = found;
+                    continue;
+                }
+            }
+
+            _hotbarSlotIndices[h] = -1;
+            _hotbarInstanceIds[h] = null;
+        }
     }
 
     // ------------------------------------------------------------------ helpers

@@ -220,6 +220,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::EnemyNPC
   MaxHealth: 120
   AttackDamage: 6
+  Defense: 0
   AttackCooldown: 2.2
   AttackRange: 2.4
   aggroRadius: 10
@@ -231,16 +232,18 @@ MonoBehaviour:
   returnSpeed: 3.8
   turnSpeed: 10
   despawnDelayAfterDeath: 4
+  visionConeAngle: 110
+  backHearingRadius: 1.15
+  stealthAssassinateRange: 3.3
+  obstacleCheckDistance: 2.4
+  obstacleProbeRadius: 0.55
+  allySeparationRadius: 1.55
   maxDamagePerHit: 120
   maxHitDistance: 6
   minSecondsBetweenHitsPerPlayer: 0.18
   experienceReward: 50
   lootPrefab: {fileID: 6507998983499857821, guid: 1f3dda27c4c498b4fb91d3d916ec6506, type: 3}
   lootTable:
-  - item: {fileID: 11400000, guid: abbbd3e72a26a5446b8395fb247238f3, type: 2}
-    minAmount: 1
-    maxAmount: 3
-    chance: 1
   - item: {fileID: 11400000, guid: 7095152d0ac2312499adbb494ed45520, type: 2}
     minAmount: 1
     maxAmount: 2
@@ -262,3 +265,7 @@ MonoBehaviour:
   _TargetId:
     Raw: 0
   _HomePosition: {x: 0, y: 0, z: 0}
+  _CampId: 0
+  _IsBoss:
+    RawValue: 0
+  _ScaledLevel: 1

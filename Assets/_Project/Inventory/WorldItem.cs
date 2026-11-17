@@ -4,30 +4,50 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// An item lying in the world (drop or chest stand-in). Shared Mode flow:
-///
-///  1. Local player is within pickupRadius and presses E (only the peer that controls a player reads input).
-///  2. That peer checks it has inventory room, then sends RPC_RequestPickup (any peer -> this item's State Authority).
-///  3. The State Authority verifies the sender (Fusion's RpcInfo, not a parameter), their distance and that the
-///     item is not already claimed, then sets the networked Claimed flag - first request wins.
-///  4. RPC_ConfirmPickup (SA -> All) tells everyone who won; ONLY the winner's peer adds the item to its inventory.
-///  5. The authority despawns the object shortly after (driven from FixedUpdateNetwork so it survives an authority hand-off).
-///
-/// What the item IS travels as a string id + quantity; each peer resolves the ItemData from Resources/Items.
+/// ไอเทมที่ดรอปอยู่บนพื้นโลก (World Item) สำหรับ Photon Fusion Shared Mode:
+///   1. รองรับระบบ Personal Instanced Loot (AllowedLooter):
+///      - เมื่อมอนสเตอร์/บอสตาย จะสร้างไอเทมที่ผูกสิทธิ์เฉพาะผู้เล่นคนนั้น (AllowedLooter = PlayerRef)
+///      - เครื่องของผู้เล่นคนอื่นจะมองไม่เห็นและไม่สามารถกดแย่งเก็บไอเทมชิ้นนี้ได้ (แก้ปัญหา Host/Client แย่งของ 100%)
+///   2. รองรับระบบลบไอเทมอัตโนมัติใน 30 วินาที (30-Second Dropped Item Despawn):
+///      - เมื่อผู้เล่นกดทิ้งไอเทมลงพื้น (IsPlayerDropped = true) จะเริ่มนับถอยหลัง 30 วินาที
+///      - ในช่วง 5 วินาทีสุดท้าย ไอเทมจะกะพริบเตือนก่อนสลายหายไปจากฉากอัตโนมัติ
 /// </summary>
 public class WorldItem : NetworkBehaviour
 {
+    // รายการไอเทมบนพื้นทั้งหมดที่กำลังทำงานอยู่ในฉาก
     public static readonly List<WorldItem> All = new List<WorldItem>();
 
+    // ค่าคงที่เวลาสลายตัวของไอเทมที่ผู้เล่นทิ้งลงพื้น (30 วินาที) และเวลาเริ่มกะพริบเตือน (5 วินาทีสุดท้าย)
+    public const float DefaultDroppedDespawnSeconds = 30f;
+    public const float BlinkWarningThresholdSeconds = 5f;
+
+    // รหัสไอเทมที่ซิงก์ผ่าน Network
     [Networked] public NetworkString<_32> ItemId { get; set; }
+
+    // จำนวนไอเทมในกองนี้
     [Networked] public int Quantity { get; set; } = 1;
+
+    // ระดับตีบวกของอุปกรณ์ที่ถูกทิ้งลงพื้น (+0..+10)
+    [Networked] public int EnhancementLevel { get; set; } = 0;
+
+    // สถานะว่าถูกเก็บไปแล้วหรือยัง
     [Networked, OnChangedRender(nameof(OnClaimedChanged))] public NetworkBool Claimed { get; set; }
 
+    // ผู้เล่นเจ้าของสิทธิ์เก็บไอเทมชิ้นนี้ (PlayerRef.None = เก็บได้ทุกคน, หากระบุ PlayerRef = เห็นและเก็บได้เฉพาะคนนั้น)
+    [Networked, OnChangedRender(nameof(OnOwnerChanged))] public PlayerRef AllowedLooter { get; set; }
+
+    // ระบุว่าเป็นไอเทมที่ผู้เล่นกดทิ้งลงพื้นเองหรือไม่ (ใช้เปิดระบบนับถอยหลัง 30 วินาที)
+    [Networked] public NetworkBool IsPlayerDropped { get; set; }
+
     [Header("Interaction")]
-    [Min(0.5f)] [SerializeField] private float pickupRadius = 2.5f;
-    [Tooltip("Extra distance the authority tolerates (proxy lag) when validating a request.")]
-    [SerializeField] private float validationSlack = 2f;
-    [SerializeField] private float despawnDelay = 0.75f;
+    // ระยะกดเก็บไอเทมด้วยปุ่ม E
+    [Min(0.5f)] [SerializeField] private float pickupRadius = 2.6f;
+    // ระยะเผื่อความหน่วงของเครือข่าย (Lag Compensation Slack)
+    [SerializeField] private float validationSlack = 2.5f;
+    // เวลาหน่วงก่อนลบ Object หลังเก็บสำเร็จ
+    [SerializeField] private float despawnDelay = 0.5f;
+    // เวลาสลายตัวอัตโนมัติเมื่อผู้เล่นทิ้งลงพื้น (30 วินาที)
+    [SerializeField] private float droppedDespawnSeconds = DefaultDroppedDespawnSeconds;
 
     [Header("Visuals")]
     [SerializeField] private Transform visual;
@@ -35,27 +55,48 @@ public class WorldItem : NetworkBehaviour
     [SerializeField] private float bobHeight = 0.15f;
     [SerializeField] private float spinSpeed = 90f;
 
+    // สถานะว่า Spawn ในระบบสมบูรณ์แล้วหรือยัง
     public bool IsSpawned { get; private set; }
+
+    // ข้อมูล ItemData ที่อ้างอิงจาก ItemRegistry
     public ItemData Data => ItemRegistry.Get(ItemId.ToString());
 
+    // เวลาที่เหลือก่อนไอเทมที่ทิ้งลงพื้นจะสลายไป (วินาที)
+    public float DespawnRemainingSeconds => Mathf.Max(0f, _despawnTimerRemaining);
+
+    // ตรวจสอบว่าอยู่ในช่วง 5 วินาทีสุดท้ายที่กำลังกะพริบเตือนหรือไม่
+    public bool IsBlinkingWarning => IsPlayerDropped && !Claimed && _despawnTimerRemaining > 0f && _despawnTimerRemaining <= BlinkWarningThresholdSeconds;
+
     private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+    private static readonly int ColorId = Shader.PropertyToID("_Color");
     private MaterialPropertyBlock _mpb;
     private Vector3 _visualBase;
     private float _claimedAt = -1f;
     private float _lastRequestTime = -10f;
+    private float _despawnTimerRemaining = DefaultDroppedDespawnSeconds;
 
-    // one "nearest item" computation per frame, shared by all instances
+    // ตัวแปรคำนวณหาไอเทมที่อยู่ใกล้ผู้เล่นที่สุดต่อเฟรม
     private static int s_frame = -1;
     private static WorldItem s_promptItem;
 
-    // ------------------------------------------------------------------ spawn helper
+    // ------------------------------------------------------------------ ฟังก์ชันสร้างไอเทมลงพื้น (Spawn Helpers)
 
-    /// <summary>Spawns a drop from this peer (which becomes its State Authority).</summary>
-    public static WorldItem Spawn(NetworkRunner runner, WorldItem prefab, Vector3 position, ItemData item, int quantity)
+    /// <summary>
+    /// สร้างไอเทมลงพื้นโลก (รองรับทั้งไอเทมส่วนกลาง, ไอเทมส่วนตัว Personal Instanced Loot, และไอเทมที่ผู้เล่นทิ้งเอง 30s)
+    /// </summary>
+    public static WorldItem Spawn(
+        NetworkRunner runner,
+        WorldItem prefab,
+        Vector3 position,
+        ItemData item,
+        int quantity,
+        PlayerRef allowedLooter = default,
+        bool isPlayerDropped = false,
+        int enhancementLevel = 0)
     {
         if (runner == null || !runner.IsRunning) { Debug.LogWarning("[WorldItem] Spawn failed: runner not running."); return null; }
         if (prefab == null) { Debug.LogWarning("[WorldItem] Spawn failed: no prefab."); return null; }
-        if (item == null) { Debug.LogWarning("[WorldItem] Spawn failed: no item."); return null; }
+        if (item == null || ItemRegistry.IsRemovedJunkItem(item.itemId)) return null;
 
         string id = item.itemId;
         int qty = Mathf.Max(1, quantity);
@@ -64,10 +105,14 @@ public class WorldItem : NetworkBehaviour
             var wi = o.GetComponent<WorldItem>();
             wi.ItemId = id;
             wi.Quantity = qty;
+            wi.EnhancementLevel = Mathf.Max(0, enhancementLevel);
+            wi.AllowedLooter = allowedLooter;
+            wi.IsPlayerDropped = isPlayerDropped;
+            wi._despawnTimerRemaining = wi.droppedDespawnSeconds;
         });
     }
 
-    // ------------------------------------------------------------------ lifecycle
+    // ------------------------------------------------------------------ วงจรการทำงาน (Lifecycle)
 
     private void Awake()
     {
@@ -76,15 +121,25 @@ public class WorldItem : NetworkBehaviour
         if (visualRenderer == null) visualRenderer = GetComponentInChildren<Renderer>();
         if (visual == null && visualRenderer != null) visual = visualRenderer.transform;
         if (visual != null) _visualBase = visual.localPosition;
+        _despawnTimerRemaining = droppedDespawnSeconds;
     }
 
     public override void Spawned()
     {
         IsSpawned = true;
         if (!All.Contains(this)) All.Add(this);
+        _despawnTimerRemaining = droppedDespawnSeconds;
 
         var data = Data;
-        Debug.Log($"[WorldItem] Spawned {Quantity}x {(data != null ? data.displayName : ItemId.ToString())} at {transform.position} (authority {Object.StateAuthority}).");
+        // หากเป็นไอเทมขยะที่ถูกตัดออก ให้ลบออกจากฉากทันที
+        if (data == null || ItemRegistry.IsRemovedJunkItem(ItemId.ToString()))
+        {
+            if (Object.HasStateAuthority) Runner.Despawn(Object);
+            else gameObject.SetActive(false);
+            return;
+        }
+
+        Debug.Log($"[WorldItem] Spawned {Quantity}x {data.displayName} at {transform.position} (AllowedLooter={AllowedLooter}, PlayerDropped={IsPlayerDropped}).");
         ApplyVisual();
     }
 
@@ -95,46 +150,127 @@ public class WorldItem : NetworkBehaviour
         if (s_promptItem == this) s_promptItem = null;
     }
 
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นเครื่องนี้ (Local Player) มีสิทธิ์มองเห็นและเก็บไอเทมชิ้นนี้หรือไม่
+    /// </summary>
+    public bool IsVisibleAndLootableByLocalPlayer()
+    {
+        if (!IsSpawned || Claimed) return false;
+        if (AllowedLooter == PlayerRef.None) return true;
+        if (Runner != null && Runner.LocalPlayer != PlayerRef.None)
+            return Runner.LocalPlayer == AllowedLooter;
+        return true;
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นที่ระบุ (PlayerRef) มีสิทธิ์เก็บไอเทมชิ้นนี้หรือไม่
+    /// </summary>
+    public bool CanPlayerLoot(PlayerRef player)
+    {
+        if (Claimed) return false;
+        if (AllowedLooter == PlayerRef.None) return true;
+        return AllowedLooter == player;
+    }
+
+    /// <summary>
+    /// อัปเดตการแสดงผลสีและซ่อนไอเทมหากไม่ใช่ของเครื่องผู้เล่นคนนี้ (Personal Instanced Loot)
+    /// </summary>
     private void ApplyVisual()
     {
         if (visualRenderer == null) return;
         var data = Data;
+        Color c = data != null ? data.worldColor : Color.magenta;
         visualRenderer.GetPropertyBlock(_mpb);
-        _mpb.SetColor(BaseColorId, data != null ? data.worldColor : Color.magenta);
+        _mpb.SetColor(BaseColorId, c);
+        _mpb.SetColor(ColorId, c);
         visualRenderer.SetPropertyBlock(_mpb);
-        visualRenderer.enabled = !Claimed;
+        visualRenderer.enabled = IsVisibleAndLootableByLocalPlayer();
     }
 
     private void OnClaimedChanged()
     {
         if (!IsSpawned) return;
-        Debug.Log($"[WorldItem] {ItemId} claimed={Claimed}.");
-        if (visualRenderer != null) visualRenderer.enabled = !Claimed;
+        ApplyVisual();
     }
 
-    // ------------------------------------------------------------------ authority housekeeping
+    private void OnOwnerChanged()
+    {
+        if (!IsSpawned) return;
+        ApplyVisual();
+    }
+
+    /// <summary>
+    /// สำหรับการจำลองทดสอบ (Testing Helper): ปรับค่าเวลาที่เหลือก่อนไอเทมที่ทิ้งลงพื้นจะสลายตัว
+    /// </summary>
+    public void SetDespawnTimerForTesting(float remainingSeconds)
+    {
+        IsPlayerDropped = true;
+        _despawnTimerRemaining = Mathf.Max(0f, remainingSeconds);
+    }
+
+    // ------------------------------------------------------------------ ระบบจัดการฝั่ง Authority (FixedUpdateNetwork)
 
     public override void FixedUpdateNetwork()
     {
-        if (!IsSpawned || !Object.HasStateAuthority || !Claimed) return;
+        if (!IsSpawned || !Object.HasStateAuthority) return;
 
-        if (_claimedAt < 0f) _claimedAt = Time.time;
-        if (Time.time - _claimedAt >= despawnDelay)
+        // 1. กรณีถูกเก็บไปแล้ว รอเวลาสั้นๆ แล้วลบออกจาก Network
+        if (Claimed)
         {
-            Debug.Log($"[WorldItem] Despawning claimed item {ItemId}.");
-            Runner.Despawn(Object);
+            if (_claimedAt < 0f) _claimedAt = Time.time;
+            if (Time.time - _claimedAt >= despawnDelay)
+            {
+                Runner.Despawn(Object);
+            }
+            return;
+        }
+
+        // 2. กรณีเป็นไอเทมที่ผู้เล่นกดทิ้งลงพื้น นับถอยหลัง 30 วินาทีแล้วลบอัตโนมัติ
+        if (IsPlayerDropped)
+        {
+            _despawnTimerRemaining -= Runner.DeltaTime;
+            if (_despawnTimerRemaining <= 0f)
+            {
+                Debug.Log($"[WorldItem] Player-dropped item '{ItemId}' expired after {droppedDespawnSeconds:0}s - despawning.");
+                Runner.Despawn(Object);
+            }
         }
     }
 
-    // ------------------------------------------------------------------ local interaction
+    // ------------------------------------------------------------------ การโต้ตอบฝั่งผู้เล่น (Local Update)
 
     private void Update()
     {
         if (!IsSpawned) return;
 
-        if (visual != null && !Claimed)
+        // นับเวลาถอยหลังฝั่ง Client ด้วยเพื่อให้จังหวะกะพริบ 5 วินาทีสุดท้ายตรงกันทุกเครื่อง
+        if (IsPlayerDropped && !Claimed && (Object == null || !Object.HasStateAuthority))
         {
-            visual.localPosition = _visualBase + Vector3.up * (Mathf.Sin(Time.time * 2f + transform.position.x) * bobHeight);
+            _despawnTimerRemaining = Mathf.Max(0f, _despawnTimerRemaining - Time.deltaTime);
+        }
+
+        bool visibleToLocal = IsVisibleAndLootableByLocalPlayer();
+        if (visualRenderer != null)
+        {
+            if (!visibleToLocal)
+            {
+                visualRenderer.enabled = false;
+            }
+            else if (IsBlinkingWarning)
+            {
+                // กะพริบเตือนในช่วง 5 วินาทีสุดท้ายก่อนไอเทมหาย
+                bool blinkOn = Mathf.FloorToInt(Time.time * 10f) % 2 == 0;
+                visualRenderer.enabled = blinkOn;
+            }
+            else
+            {
+                visualRenderer.enabled = true;
+            }
+        }
+
+        if (visual != null && visibleToLocal)
+        {
+            visual.localPosition = _visualBase + Vector3.up * (Mathf.Sin(Time.time * 2.2f + transform.position.x) * bobHeight);
             visual.Rotate(0f, spinSpeed * Time.deltaTime, 0f, Space.World);
         }
 
@@ -145,6 +281,9 @@ public class WorldItem : NetworkBehaviour
         if (kb != null && kb.eKey.wasPressedThisFrame) RequestPickup();
     }
 
+    /// <summary>
+    /// ค้นหาไอเทมที่อยู่ใกล้ผู้เล่น Local มากที่สุดและผู้เล่นมีสิทธิ์เก็บได้
+    /// </summary>
     private static void RefreshPromptTarget()
     {
         if (s_frame == Time.frameCount) return;
@@ -159,41 +298,48 @@ public class WorldItem : NetworkBehaviour
         for (int i = 0; i < All.Count; i++)
         {
             var it = All[i];
-            if (it == null || !it.IsSpawned || it.Claimed) continue;
+            if (it == null || !it.IsVisibleAndLootableByLocalPlayer()) continue;
             float d = Planar(it.transform.position, p);
             if (d <= it.pickupRadius && d < best) { best = d; s_promptItem = it; }
         }
     }
 
-    private void RequestPickup()
+    /// <summary>
+    /// ส่งคำขอเก็บไอเทมชิ้นนี้ไปยัง State Authority
+    /// </summary>
+    public void RequestPickup()
     {
-        if (Time.time - _lastRequestTime < 0.5f) return;      // local spam guard
+        if (!IsVisibleAndLootableByLocalPlayer()) return;
+        if (Time.time - _lastRequestTime < 0.35f) return;
         _lastRequestTime = Time.time;
 
         var data = Data;
         var inv = InventoryManager.Local;
-        if (data == null) { Debug.LogWarning($"[WorldItem] Cannot pick up: unknown item '{ItemId}'."); return; }
-        if (inv == null) { Debug.LogWarning("[WorldItem] Cannot pick up: no local InventoryManager."); return; }
+        if (data == null || inv == null) return;
         if (!inv.CanAdd(data, Quantity))
         {
-            Debug.LogWarning($"[WorldItem] Inventory full - cannot pick up {Quantity}x {data.displayName}.");
+            PlayerStatusHud.Instance?.ShowToast("Inventory Full! Cannot pick up item.", new Color(1f, 0.35f, 0.25f));
             return;
         }
 
-        Debug.Log($"[WorldItem] Requesting pickup of {Quantity}x {data.displayName}.");
         RPC_RequestPickup();
     }
 
-    // ------------------------------------------------------------------ RPCs
+    // ------------------------------------------------------------------ Network RPCs
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_RequestPickup(RpcInfo info = default)
     {
-        if (!IsSpawned || !Object.HasStateAuthority) return;
+        if (!IsSpawned || !Object.HasStateAuthority || Claimed) return;
 
-        if (Claimed)
+        PlayerRef requester = info.Source;
+        if (requester == PlayerRef.None && Runner != null)
+            requester = Runner.LocalPlayer;
+
+        // ตรวจสอบสิทธิ์เจ้าของไอเทม (ป้องกัน Host หรือผู้เล่นอื่นแย่งเก็บของส่วนตัว)
+        if (!CanPlayerLoot(requester))
         {
-            Debug.Log($"[WorldItem] Pickup by {info.Source} rejected: already claimed.");
+            Debug.LogWarning($"[WorldItem] Pickup rejected: {requester} is not AllowedLooter ({AllowedLooter}).");
             return;
         }
 
@@ -201,63 +347,69 @@ public class WorldItem : NetworkBehaviour
         for (int i = 0; i < PlayerCombat.All.Count; i++)
         {
             var p = PlayerCombat.All[i];
-            if (p != null && p.IsSpawned && p.Object.StateAuthority == info.Source) { picker = p; break; }
+            if (p != null && p.IsSpawned && (p.Object.StateAuthority == requester || p.Object.InputAuthority == requester))
+            {
+                picker = p;
+                break;
+            }
         }
-        if (picker == null || picker.IsDead)
-        {
-            Debug.LogWarning($"[WorldItem] Pickup rejected: no living player object for {info.Source}.");
-            return;
-        }
+        if (picker == null && PlayerCombat.Local != null && requester == Runner.LocalPlayer)
+            picker = PlayerCombat.Local;
+
+        if (picker == null || picker.IsDead) return;
 
         float d = Planar(picker.transform.position, transform.position);
-        if (d > pickupRadius + validationSlack)
-        {
-            Debug.LogWarning($"[WorldItem] Pickup rejected: {info.Source} is {d:0.0}m away (max {pickupRadius + validationSlack:0.0}).");
-            return;
-        }
+        if (d > pickupRadius + validationSlack) return;
 
         Claimed = true;
-        Debug.Log($"[WorldItem] {ItemId} x{Quantity} claimed by {info.Source}.");
-        RPC_ConfirmPickup(info.Source);
+        RPC_ConfirmPickup(requester, EnhancementLevel);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_ConfirmPickup(PlayerRef winner)
+    public void RPC_ConfirmPickup(PlayerRef winner, int enhancementLvl)
     {
-        if (Runner == null || Runner.LocalPlayer != winner) return;     // only the winner's peer gets the item
+        if (Runner == null || Runner.LocalPlayer != winner) return;
 
         var data = Data;
         var inv = InventoryManager.Local;
-        if (data == null || inv == null)
-        {
-            Debug.LogWarning("[WorldItem] Pickup confirmed but data/inventory missing - item lost.");
-            return;
-        }
+        if (data == null || inv == null) return;
 
-        int remainder = inv.AddItem(data, Quantity);
-        Debug.Log($"[WorldItem] Picked up {Quantity - remainder}x {data.displayName}.");
+        int remainder = inv.AddItem(data, Quantity, enhancementLvl);
+        string enhTag = enhancementLvl > 0 ? $" +{enhancementLvl}" : "";
+        Debug.Log($"[WorldItem] Local player collected personal/world drop: {Quantity - remainder}x {data.displayName}{enhTag}.");
+        PlayerStatusHud.Instance?.ShowToast($"Picked up {data.displayName}{enhTag} x{Quantity - remainder}", ItemData.GetTierColor(data.tier), 2.2f);
 
         if (remainder > 0)
         {
-            // Inventory filled between the check and the confirmation: put the leftovers back into the world.
-            Debug.LogWarning($"[WorldItem] Inventory filled meanwhile - dropping {remainder}x {data.displayName} back.");
-            inv.SpawnWorldItem(data, remainder, transform.position);
+            inv.SpawnWorldItem(data, remainder, transform.position, enhancementLvl);
         }
     }
 
-    // ------------------------------------------------------------------ prompt UI
+    // ------------------------------------------------------------------ ป้ายแจ้งเตือนกดเก็บ [E] บนหน้าจอ
 
     private void OnGUI()
     {
         if (!IsSpawned || s_promptItem != this || Event.current.type != EventType.Repaint) return;
+        if (!IsVisibleAndLootableByLocalPlayer()) return;
+
         var data = Data;
-        string text = $"[E] Pick up  {(data != null ? data.displayName : ItemId.ToString())}  x{Quantity}";
-        var rect = new Rect(Screen.width * 0.5f - 140f, Screen.height * 0.72f, 280f, 26f);
+        string enhTag = EnhancementLevel > 0 ? $" +{EnhancementLevel}" : "";
+        string timerTag = IsPlayerDropped ? $"  ({Mathf.CeilToInt(_despawnTimerRemaining)}s)" : "";
+        string personalTag = AllowedLooter != PlayerRef.None ? " [Personal Loot]" : "";
+        string text = $"[E] Pick up  {(data != null ? data.displayName : ItemId.ToString())}{enhTag}  x{Quantity}{personalTag}{timerTag}";
+
+        var rect = new Rect(Screen.width * 0.5f - 190f, Screen.height * 0.72f, 380f, 30f);
         var prev = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, 0.6f);
+        GUI.color = new Color(0.04f, 0.05f, 0.08f, 0.84f);
         GUI.DrawTexture(rect, Texture2D.whiteTexture);
-        GUI.color = Color.white;
-        GUI.Label(new Rect(rect.x + 8f, rect.y + 3f, rect.width - 16f, 22f), text);
+        GUI.color = data != null ? ItemData.GetTierColor(data.tier) : Color.white;
+        var style = new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = 14,
+            fontStyle = FontStyle.Bold
+        };
+        GUI.Label(rect, text, style);
         GUI.color = prev;
     }
 
@@ -265,11 +417,5 @@ public class WorldItem : NetworkBehaviour
     {
         a.y = 0f; b.y = 0f;
         return Vector3.Distance(a, b);
-    }
-
-    private void OnDrawGizmosSelected()
-    {
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(transform.position, pickupRadius);
     }
 }

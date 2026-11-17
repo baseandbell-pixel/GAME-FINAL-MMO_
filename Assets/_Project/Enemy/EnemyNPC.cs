@@ -6,24 +6,27 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
 
+// สถานะพฤติกรรม AI ของมอนสเตอร์และบอส
 public enum NpcState : byte
 {
-    Idle,
-    Patrol,
-    Chasing,
-    Attacking,
-    Returning,
-    Dead
+    Idle,      // ยืนรอก่อนเดินลาดตระเวนรอบถัดไป
+    Patrol,    // เดินลาดตระเวนอัตโนมัติในอาณาเขตแคมป์
+    Chasing,   // ไล่ล่าผู้เล่นที่ตรวจพบ
+    Attacking, // โจมตีผู้เล่นในระยะ
+    Returning, // วิ่งกลับจุดเกิดเมื่อผู้เล่นออกนอกระยะหรือเข้า Safe Zone
+    Dead       // ตายและรอเวลาสลายตัว
 }
 
+// รูปแบบท่าโจมตีพิเศษทั้ง 3 ท่าของบอส (Sovereign Golem)
 public enum BossAttackPattern : byte
 {
     None = 0,
-    HeavyCleave = 1,
-    ShockwaveSpinAoE = 2,
-    DarkVolleyAndCharge = 3
+    HeavyCleave = 1,         // ท่าที่ 1: ฟาดหนักด้านหน้า 1.5x ดาเมจ
+    ShockwaveSpinAoE = 2,    // ท่าที่ 2: กระแทกคลื่นพลัง 360 องศา รอบตัว
+    DarkVolleyAndCharge = 3  // ท่าที่ 3: ยิงกระสุนพลังงานมืด 3 ลูก + พุ่งชาร์จระยะไกล
 }
 
+// โครงสร้างตารางไอเทมดรอปเพิ่มเติมบน Inspector
 [Serializable]
 public class LootEntry
 {
@@ -34,50 +37,60 @@ public class LootEntry
 }
 
 /// <summary>
-/// Hostile NPC &amp; Multi-Pattern Solo Arena Boss for Photon Fusion SHARED MODE.
-/// Features:
-///   - Dynamic Level &amp; Stat Scaling relative to Player Level (Enemies &amp; Boss).
-///   - Safe / Comfort Zone combat immunity &amp; boundary leash.
-///   - Obstacle avoidance &amp; penetration resolution.
-///   - Challenging Level 1 Boss baseline + 3 distinct telegraphed Boss Attack Patterns:
-///       1) Heavy Cleave (1.5x single-target punish)
-///       2) 360° Ground Shockwave AoE (6.2m telegraphed ring)
-///       3) Dark Energy Volley + Charge Lunge (anti-kite 3-projectile fan)
+/// ระบบ AI ของมอนสเตอร์ประจำแคมป์และบอสใหญ่ (EnemyNPC &amp; Multi-Pattern Boss) สำหรับ Photon Fusion Shared Mode:
+///   1. ระบบเดินลาดตระเวนอัตโนมัติในอาณาเขตแคมป์ (Autonomous Territory Patrol) ไม่ยืนนิ่งเป็นหุ่นปั้น
+///   2. ระบบลอบสังหารจากด้านหลัง (Stealth Assassination &amp; Vision Cone 110 องศา):
+///      - หากผู้เล่นย่องเข้าทางด้านหลังนอกมุมมองสายตา จะไม่ถูกตรวจพบทันทีและสามารถกดโจมตีลอบสังหารทำดาเมจ 3.0x ได้
+///   3. ระบบดรอปไอเทมส่วนตัวและคำนวณโอกาสออกของตามสัดส่วนดาเมจ (Personal Instanced Loot &amp; Damage-Contribution Weighted Drops):
+///      - เก็บสถิติดาเมจของผู้เล่นแต่ละคนใน Dictionary&lt;PlayerRef, float&gt;
+///      - เมื่อตาย ผู้เล่นทุกคนที่ร่วมสู้จะได้ไอเทมดรอปส่วนตัวแยกกัน (คนอื่นมองไม่เห็นและแย่งเก็บไม่ได้)
+///      - ผู้ทำดาเมจสูงสุด (Top DPS) ได้โบนัสโอกาสออกไอเทม Epic / Legendary สูงสุด ส่วนผู้ทำดาเมจรองลงมายังมีโอกาสได้ลุ้นจริงตามสัดส่วน
 /// </summary>
 [RequireComponent(typeof(Collider))]
 public class EnemyNPC : NetworkBehaviour, ILockTarget
 {
+    // รายการมอนสเตอร์และบอสทั้งหมดที่เกิดอยู่ในฉาก
     public static readonly List<EnemyNPC> All = new List<EnemyNPC>();
 
-    [Header("Base Combat Stats (Level 1 Baseline)")]
+    [Header("Base Combat Stats (ค่าพลังพื้นฐานที่เลเวล 1)")]
     public int MaxHealth = 120;
-    public int AttackDamage = 6;
+    public int AttackDamage = 8;
     public int Defense = 0;
-    public float AttackCooldown = 2.2f;
+    public float AttackCooldown = 2.1f;
     public float AttackRange = 2.4f;
 
-    [Header("AI")]
+    [Header("AI & Territory Patrol (ระบบเดินลาดตระเวนและมุมมองสายตา)")]
     [Min(1f)] [SerializeField] private float aggroRadius = 6.8f;
     [Min(2f)] [SerializeField] private float leashRadius = 22f;
-    [SerializeField] private float patrolRadius = 3.5f;
-    [SerializeField] private Vector2 idleWaitRange = new Vector2(1.5f, 4f);
-    [SerializeField] private float patrolSpeed = 1.4f;
-    [SerializeField] private float chaseSpeed = 2.8f;
-    [SerializeField] private float returnSpeed = 3.8f;
+    // รัศมีเดินลาดตระเวนในอาณาเขตแคมป์ (เพิ่มเป็น 5.5 เมตรให้เดินทั่วแคมป์อย่างมีชีวิตชีวา)
+    [SerializeField] private float patrolRadius = 5.5f;
+    // เวลารอที่จุดลาดตระเวนก่อนเดินไปยังจุดถัดไป
+    [SerializeField] private Vector2 idleWaitRange = new Vector2(0.8f, 2.2f);
+    [SerializeField] private float patrolSpeed = 1.85f;
+    [SerializeField] private float chaseSpeed = 3.4f;
+    [SerializeField] private float returnSpeed = 4.0f;
     [SerializeField] private float turnSpeed = 10f;
     [Min(0f)] [SerializeField] private float despawnDelayAfterDeath = 2.5f;
 
-    [Header("Obstacle navigation")]
+    [Header("Stealth & Vision Cone (มุมมองสายตาและการลอบสังหาร)")]
+    // มุมมองสายตาด้านหน้า (องศา) หากผู้เล่นอยู่ด้านหลังนอกมุมนี้จะสามารถย่องเข้าลอบสังหารได้
+    [Range(45f, 180f)] [SerializeField] private float visionConeAngle = 110f;
+    // ระยะได้ยินเสียงฝีเท้าด้านหลัง (หากเข้าใกล้เกินระยะนี้แม้จะอยู่ด้านหลังก็จะรู้ตัว)
+    [SerializeField] private float backHearingRadius = 1.15f;
+    // ระยะที่ผู้เล่นสามารถกดโจมตีลอบสังหารจากด้านหลังได้
+    [SerializeField] private float stealthAssassinateRange = 3.3f;
+
+    [Header("Obstacle navigation (ระบบหลบหลีกสิ่งกีดขวาง)")]
     [SerializeField] private float obstacleCheckDistance = 2.4f;
     [SerializeField] private float obstacleProbeRadius = 0.55f;
-    [SerializeField] private float allySeparationRadius = 1.35f;
+    [SerializeField] private float allySeparationRadius = 1.55f;
 
-    [Header("Damage validation (authority side)")]
-    [SerializeField] private int maxDamagePerHit = 500;
+    [Header("Damage validation (การตรวจสอบความถูกต้องของดาเมจ)")]
+    [SerializeField] private int maxDamagePerHit = 800;
     [SerializeField] private float maxHitDistance = 6.5f;
-    [SerializeField] private float minSecondsBetweenHitsPerPlayer = 0.16f;
+    [SerializeField] private float minSecondsBetweenHitsPerPlayer = 0.14f;
 
-    [Header("Rewards")]
+    [Header("Rewards (รางวัล EXP และไอเทมดรอป)")]
     [SerializeField] private int experienceReward = 50;
     [SerializeField] private WorldItem lootPrefab;
     [SerializeField] private LootEntry[] lootTable;
@@ -88,7 +101,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public UnityEvent onHit;
     public UnityEvent onDeath;
 
-    // ---- networked state ----
+    // ---- ข้อมูลที่ซิงก์ผ่าน Network (Networked State) ----
     [Networked, OnChangedRender(nameof(OnHealthChanged))]
     public int CurrentHealth { get; set; } = 120;
 
@@ -102,13 +115,17 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public NetworkBool IsBoss { get; set; }
     [Networked] public int ScaledLevel { get; set; } = 1;
 
-    // ---- public API ----
+    // ---- คุณสมบัติเปิดอ่านจากภายนอก (Public API) ----
     public bool IsSpawned { get; private set; }
     public bool IsAlive => IsSpawned && Object != null && Object.IsValid && State != NpcState.Dead && CurrentHealth > 0;
+    // ตรวจสอบว่ามอนสเตอร์รู้ตัวและกำลังต่อสู้อยู่หรือไม่ (ใช้เช็คเงื่อนไขลอบสังหาร)
+    public bool IsAlerted => State == NpcState.Chasing || State == NpcState.Attacking;
     public Collider BodyCollider { get; private set; }
     public float AggroRadius => aggroRadius;
     public float ChaseSpeed => chaseSpeed;
     public float PatrolSpeed => patrolSpeed;
+    public float PatrolRadius => patrolRadius;
+    public Vector3 CurrentPatrolWaypoint => _patrolPoint;
     public int ScaledMaxHealth => MaxHealth;
     public int ScaledAttackDamage => AttackDamage;
     public int ScaledDefense => Defense;
@@ -120,11 +137,14 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public int DistinctBossPatternsUsed => _usedPatterns.Count;
     public bool IsTelegraphing => _isTelegraphing;
 
+    // ตารางเก็บสถิติดาเมจสะสมของผู้เล่นแต่ละคน (ใช้คำนวณ Personal Loot & Damage-Weighted Drop Rate)
+    public IReadOnlyDictionary<PlayerRef, float> DamageDealtMap => _damageDealtMap;
+
     public Transform LockPoint => _lockPoint != null ? _lockPoint : transform;
     public bool IsLockable => IsAlive;
     public string LockName => IsBoss ? $"[Lv.{ScaledLevel} BOSS] Sovereign Golem" : $"[Lv.{ScaledLevel}] {name}";
 
-    // ---- private ----
+    // ---- ตัวแปรภายใน (Private State) ----
     private Transform _lockPoint;
     private GameObject _bossCrownRoot;
     private MaterialPropertyBlock _mpb;
@@ -136,6 +156,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private float _nextAttackTime;
     private float _stateTimer;
+    private float _patrolMoveElapsed;
     private float _deathTime;
     private bool _hasPatrolPoint;
     private Vector3 _patrolPoint;
@@ -152,7 +173,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private static readonly RaycastHit[] s_castBuffer = new RaycastHit[16];
     private readonly Dictionary<PlayerRef, float> _lastDamageTime = new Dictionary<PlayerRef, float>();
 
-    // ------------------------------------------------------------------ lifecycle
+    // ตารางบันทึกดาเมจที่ผู้เล่นแต่ละคนทำได้ในการต่อสู้กับมอนสเตอร์/บอสตัวนี้
+    private readonly Dictionary<PlayerRef, float> _damageDealtMap = new Dictionary<PlayerRef, float>();
+
+    // ------------------------------------------------------------------ วงจรการทำงาน (Lifecycle)
 
     private void Awake()
     {
@@ -171,6 +195,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         IsSpawned = true;
         if (!All.Contains(this)) All.Add(this);
+        _damageDealtMap.Clear();
 
         if (Object.HasStateAuthority)
         {
@@ -178,9 +203,12 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             ApplyDynamicScaling(ScaledLevel);
             CurrentHealth = MaxHealth;
             HomePosition = transform.position;
-            State = NpcState.Idle;
             TargetId = default;
-            Debug.Log($"[EnemyNPC] {name} Lv.{ScaledLevel} (Boss={IsBoss}, Camp={CampId}) spawned. HP={CurrentHealth}/{MaxHealth}, ATK={AttackDamage}, DEF={Defense}, EXP={experienceReward}.");
+
+            // ให้มอนสเตอร์แต่ละตัวเริ่มเดินลาดตระเวนทันทีแบบเหลื่อมเวลากันเล็กน้อย เพื่อไม่ให้ยืนนิ่งเป็นหุ่นปั้น
+            _stateTimer = UnityEngine.Random.Range(0.15f, 0.85f);
+            State = NpcState.Idle;
+            Debug.Log($"[EnemyNPC] {name} Lv.{ScaledLevel} (Boss={IsBoss}, Camp={CampId}) spawned. HP={CurrentHealth}/{MaxHealth}, ATK={AttackDamage}, DEF={Defense}.");
         }
         else
         {
@@ -211,6 +239,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
     }
 
+    /// <summary>
+    /// ปรับสเกลค่าพลังของมอนสเตอร์และบอสตามเลเวลของผู้เล่นอัตโนมัติ
+    /// </summary>
     public void ApplyDynamicScaling(int targetLevel)
     {
         targetLevel = Mathf.Max(1, targetLevel);
@@ -226,15 +257,15 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             AttackDamage = 24 + (targetLevel - 1) * 5;
             Defense = 2 + (targetLevel - 1) * 3;
             experienceReward = 300 + (targetLevel - 1) * 80;
-            maxDamagePerHit = 1200;
+            maxDamagePerHit = 1500;
         }
         else
         {
             MaxHealth = 120 + (targetLevel - 1) * 45;
-            AttackDamage = 6 + (targetLevel - 1) * 2;
+            AttackDamage = 8 + (targetLevel - 1) * 2;
             Defense = (targetLevel - 1) * 2;
             experienceReward = 50 + (targetLevel - 1) * 18;
-            maxDamagePerHit = 600;
+            maxDamagePerHit = 900;
         }
 
         if (IsSpawned && State != NpcState.Dead && CurrentHealth > 0)
@@ -257,7 +288,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         AttackRange = 3.2f;
         aggroRadius = 11.5f;
         leashRadius = 21.0f;
-        patrolRadius = 3.5f;
+        patrolRadius = 4.2f;
         chaseSpeed = 3.4f;
         returnSpeed = 4.5f;
         maxHitDistance = 7.5f;
@@ -310,10 +341,56 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         StopAllCoroutines();
         _bossAttackRoutine = null;
         _isTelegraphing = false;
-        Debug.Log($"[EnemyNPC] {name} despawned.");
     }
 
-    // ------------------------------------------------------------------ AI (State Authority only)
+    // ------------------------------------------------------------------ ระบบตรวจสอบการลอบสังหาร (Stealth Assassination & Vision Cone)
+
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นอยู่ในมุมมองสายตา (Vision Cone) หรือระยะได้ยินเสียงของมอนสเตอร์หรือไม่
+    /// </summary>
+    public bool CanDetectPlayer(PlayerCombat player)
+    {
+        if (player == null || !player.IsSpawned || player.IsDead) return false;
+        if (SafeZone.IsPlayerInAnySafeZone(player)) return false;
+
+        Vector3 toPlayer = player.transform.position - transform.position;
+        toPlayer.y = 0f;
+        float dist = toPlayer.magnitude;
+        if (dist > aggroRadius) return false;
+
+        // บอสมีประสาทสัมผัสรอบทิศทางในลานประลอง
+        if (IsBoss) return true;
+
+        // หากเข้าใกล้ด้านหลังเกินระยะได้ยินเสียงฝีเท้า (1.15m) มอนสเตอร์จะรู้ตัวทันที
+        if (dist <= backHearingRadius) return true;
+
+        // ตรวจสอบมุมมองสายตาด้านหน้า (Vision Cone 110 องศา)
+        Vector3 dirToPlayer = toPlayer / Mathf.Max(0.0001f, dist);
+        float angle = Vector3.Angle(transform.forward, dirToPlayer);
+        return angle <= (visionConeAngle * 0.5f);
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นสามารถใช้ท่าลอบสังหารจากด้านหลัง (Stealth Assassination Strike) ใส่มอนสเตอร์ตัวนี้ได้หรือไม่
+    /// เงื่อนไข: มอนสเตอร์ยังมีชีวิต, ไม่ใช่บอส, ยังไม่รู้ตัว (Idle หรือ Patrol), และผู้เล่นอยู่ด้านหลังในระยะลอบสังหาร
+    /// </summary>
+    public bool CanBeAssassinatedBy(Transform attackerTransform)
+    {
+        if (attackerTransform == null || !IsAlive || IsBoss || IsAlerted) return false;
+        if (State == NpcState.Returning || State == NpcState.Dead) return false;
+
+        Vector3 toAttacker = attackerTransform.position - transform.position;
+        toAttacker.y = 0f;
+        float dist = toAttacker.magnitude;
+        if (dist > stealthAssassinateRange || dist < 0.1f) return false;
+
+        // ผู้เล่นต้องอยู่ด้านหลังมอนสเตอร์ (Dot Product กับทิศด้านหน้าของมอนสเตอร์น้อยกว่า 0.05)
+        Vector3 dirToAttacker = toAttacker / dist;
+        float dot = Vector3.Dot(transform.forward, dirToAttacker);
+        return dot <= 0.05f;
+    }
+
+    // ------------------------------------------------------------------ ระบบ AI หลัก (State Authority)
 
     public override void FixedUpdateNetwork()
     {
@@ -322,7 +399,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         float dt = Runner.DeltaTime;
         switch (State)
         {
-            case NpcState.Idle: TickIdle(); break;
+            case NpcState.Idle: TickIdle(dt); break;
             case NpcState.Patrol: TickPatrol(dt); break;
             case NpcState.Chasing: TickChasing(dt); break;
             case NpcState.Attacking: TickAttacking(dt); break;
@@ -338,39 +415,68 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
     }
 
-    private void TickIdle()
+    private void TickIdle(float dt)
     {
         if (TryAcquireNearestPlayer()) return;
 
-        _stateTimer -= Time.deltaTime;
+        _stateTimer -= dt;
         if (_stateTimer <= 0f && patrolRadius > 0.5f)
         {
-            Vector2 c = UnityEngine.Random.insideUnitCircle * patrolRadius;
-            Vector3 candidate = HomePosition + new Vector3(c.x, 0f, c.y);
-            if (!SafeZone.IsPointInAnySafeZone(candidate, 0.8f))
+            if (TryPickPatrolWaypoint(out Vector3 waypoint))
             {
-                _patrolPoint = candidate;
+                _patrolPoint = waypoint;
                 _hasPatrolPoint = true;
-                ChangeState(NpcState.Patrol, "wandering");
+                _patrolMoveElapsed = 0f;
+                ChangeState(NpcState.Patrol, "territory patrol");
             }
             else
             {
-                _stateTimer = 1.5f;
+                _stateTimer = 0.75f;
             }
         }
+    }
+
+    /// <summary>
+    /// สุ่มหาจุดเดินลาดตระเวนในอาณาเขตแคมป์ โดยเว้นระยะห่างจากจุดเดิมและไม่เข้าเขต Safe Zone
+    /// </summary>
+    private bool TryPickPatrolWaypoint(out Vector3 waypoint)
+    {
+        for (int attempt = 0; attempt < 6; attempt++)
+        {
+            float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+            float dist = UnityEngine.Random.Range(patrolRadius * 0.35f, patrolRadius);
+            Vector3 candidate = HomePosition + new Vector3(Mathf.Cos(angle) * dist, 0f, Mathf.Sin(angle) * dist);
+            candidate.y = transform.position.y;
+
+            if (SafeZone.IsPointInAnySafeZone(candidate, 1.0f)) continue;
+            if (PlanarDistance(transform.position, candidate) < 1.2f) continue;
+
+            waypoint = candidate;
+            return true;
+        }
+        waypoint = HomePosition;
+        return false;
     }
 
     private void TickPatrol(float dt)
     {
         if (TryAcquireNearestPlayer()) return;
 
-        if (!_hasPatrolPoint) { ChangeState(NpcState.Idle, "no patrol point"); return; }
+        if (!_hasPatrolPoint)
+        {
+            _stateTimer = UnityEngine.Random.Range(idleWaitRange.x, idleWaitRange.y);
+            ChangeState(NpcState.Idle, "no patrol point");
+            return;
+        }
 
-        if (MoveTowards(_patrolPoint, patrolSpeed, dt) <= 0.35f)
+        _patrolMoveElapsed += dt;
+        float remaining = MoveTowards(_patrolPoint, patrolSpeed, dt);
+        // หากเดินถึงจุดหมาย หรือใช้เวลาเดินนานเกิน 4.5 วินาที ให้เปลี่ยนจุดลาดตระเวนใหม่เพื่อไม่ให้ติดกำแพง
+        if (remaining <= 0.4f || _patrolMoveElapsed >= 4.5f)
         {
             _hasPatrolPoint = false;
             _stateTimer = UnityEngine.Random.Range(idleWaitRange.x, idleWaitRange.y);
-            ChangeState(NpcState.Idle, "reached patrol point");
+            ChangeState(NpcState.Idle, "reached patrol waypoint");
         }
     }
 
@@ -384,7 +490,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
         float dist = PlanarDistance(transform.position, target.transform.position);
 
-        // Boss ranged / charge anti-kite check while chasing beyond melee range!
         if (IsBoss && !_isTelegraphing && Time.time >= _nextAttackTime && dist > AttackRange * 1.1f && dist <= 13.5f)
         {
             StartBossPatternAttack(target, BossAttackPattern.DarkVolleyAndCharge);
@@ -420,126 +525,123 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
         if (dist > AttackRange * 1.25f || !HasClearMeleeLine(target.transform.position))
         {
-            ChangeState(NpcState.Chasing, "target moved out of range or behind obstacle");
+            ChangeState(NpcState.Chasing, $"target moved to {dist:0.0}m");
             return;
         }
 
         FaceTowards(target.transform.position, dt);
 
-        if (Time.time >= _nextAttackTime)
+        if (Time.time < _nextAttackTime) return;
+
+        if (IsBoss)
         {
-            if (IsBoss)
+            BossAttackPattern nextPattern = (_bossPatternCycle % 3) switch
             {
-                BossAttackPattern pattern = ChooseNextBossPattern(dist);
-                StartBossPatternAttack(target, pattern);
-            }
-            else
-            {
-                _nextAttackTime = Time.time + AttackCooldown;
-                Debug.Log($"[EnemyNPC] {name} attacks {target.name} (dmg {AttackDamage}).");
-                RPC_PlayAttackFx();
-                target.RPC_ReceiveNpcDamage(Object.Id, AttackDamage);
-            }
+                0 => BossAttackPattern.HeavyCleave,
+                1 => BossAttackPattern.ShockwaveSpinAoE,
+                _ => BossAttackPattern.DarkVolleyAndCharge
+            };
+            _bossPatternCycle++;
+            StartBossPatternAttack(target, nextPattern);
+            return;
         }
+
+        _nextAttackTime = Time.time + AttackCooldown;
+        RPC_PlayAttackFx();
+        target.RPC_ReceiveNpcDamage(Object.Id, AttackDamage);
     }
 
-    private BossAttackPattern ChooseNextBossPattern(float distToTarget)
-    {
-        _bossPatternCycle++;
-        if (distToTarget > AttackRange * 1.1f)
-            return BossAttackPattern.DarkVolleyAndCharge;
-
-        return (_bossPatternCycle % 3) switch
-        {
-            1 => BossAttackPattern.HeavyCleave,
-            2 => BossAttackPattern.ShockwaveSpinAoE,
-            _ => BossAttackPattern.DarkVolleyAndCharge
-        };
-    }
-
-    /// <summary>Executes one of the Boss's 3 multi-attack patterns with telegraph cues.</summary>
     public void TriggerBossPatternForTest(BossAttackPattern pattern, PlayerCombat target)
     {
-        if (!IsSpawned || !Object.HasStateAuthority || !IsBoss || target == null) return;
-        StartBossPatternAttack(target, pattern);
+        if (!IsSpawned || !Object.HasStateAuthority || target == null) return;
+        StartBossPatternAttack(target, pattern, fastTestTelegraph: true);
     }
 
-    private void StartBossPatternAttack(PlayerCombat target, BossAttackPattern pattern)
+    private void StartBossPatternAttack(PlayerCombat target, BossAttackPattern pattern, bool fastTestTelegraph = false)
     {
         if (_bossAttackRoutine != null) StopCoroutine(_bossAttackRoutine);
-        _nextAttackTime = Time.time + AttackCooldown + 0.65f;
-        _bossAttackRoutine = StartCoroutine(BossPatternRoutine(target, pattern));
+        _bossAttackRoutine = StartCoroutine(ExecuteBossPatternRoutine(target, pattern, fastTestTelegraph));
     }
 
-    private IEnumerator BossPatternRoutine(PlayerCombat target, BossAttackPattern pattern)
+    private IEnumerator ExecuteBossPatternRoutine(PlayerCombat target, BossAttackPattern pattern, bool fastTestTelegraph)
     {
         _isTelegraphing = true;
         LastBossPattern = pattern;
         _usedPatterns.Add(pattern);
         BossAttackExecutions++;
 
-        Vector3 aimDir = target != null ? (target.transform.position - transform.position) : transform.forward;
+        Vector3 origin = transform.position;
+        Vector3 aimDir = target != null ? (target.transform.position - origin) : transform.forward;
         aimDir.y = 0f;
         if (aimDir.sqrMagnitude < 0.001f) aimDir = transform.forward;
-        aimDir.Normalize();
+        else aimDir.Normalize();
 
-        float windup = pattern == BossAttackPattern.ShockwaveSpinAoE ? 0.62f : 0.48f;
-        RPC_BossTelegraph((byte)pattern, transform.position, aimDir, windup);
+        float windup = fastTestTelegraph ? 0.12f : (pattern == BossAttackPattern.ShockwaveSpinAoE ? 0.85f : 0.60f);
+        _nextAttackTime = Time.time + windup + AttackCooldown;
 
+        RPC_BossTelegraph((byte)pattern, origin, aimDir, windup);
         yield return new WaitForSeconds(windup);
 
         _isTelegraphing = false;
         _bossAttackRoutine = null;
 
-        if (!IsAlive || target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target))
-            yield break;
+        if (!IsAlive || !IsSpawned || !Object.HasStateAuthority) yield break;
 
         if (pattern == BossAttackPattern.HeavyCleave)
         {
-            float d = PlanarDistance(transform.position, target.transform.position);
-            if (d <= AttackRange + 1.4f && !SafeZone.IsPlayerInAnySafeZone(target))
+            int cleaveDmg = Mathf.RoundToInt(AttackDamage * 1.5f);
+            if (target != null && target.IsSpawned && !target.IsDead && !SafeZone.IsPlayerInAnySafeZone(target))
             {
-                int cleaveDmg = Mathf.RoundToInt(AttackDamage * 1.5f);
-                Debug.Log($"[BOSS AI] Pattern 1 HEAVY CLEAVE hits {target.name} for {cleaveDmg} DMG!");
-                target.RPC_ReceiveNpcDamage(Object.Id, cleaveDmg);
+                float d = PlanarDistance(transform.position, target.transform.position);
+                if (d <= AttackRange + 2.4f)
+                {
+                    target.RPC_ReceiveNpcDamage(Object.Id, cleaveDmg);
+                }
             }
         }
         else if (pattern == BossAttackPattern.ShockwaveSpinAoE)
         {
-            const float aoeRadius = 6.2f;
-            int aoeDmg = Mathf.RoundToInt(AttackDamage * 1.25f);
-            RPC_PlayBossShockwaveRelease(transform.position, aoeRadius);
+            int aoeDmg = Mathf.RoundToInt(AttackDamage * 1.35f);
+            const float shockwaveRadius = 6.2f;
+            RPC_PlayBossShockwaveRelease(transform.position, shockwaveRadius);
 
             for (int i = 0; i < PlayerCombat.All.Count; i++)
             {
                 var p = PlayerCombat.All[i];
                 if (p == null || !p.IsSpawned || p.IsDead || SafeZone.IsPlayerInAnySafeZone(p)) continue;
-                if (PlanarDistance(transform.position, p.transform.position) <= aoeRadius)
+                if (PlanarDistance(transform.position, p.transform.position) <= shockwaveRadius)
                 {
-                    Debug.Log($"[BOSS AI] Pattern 2 360° SHOCKWAVE AoE hits {p.name} for {aoeDmg} DMG!");
                     p.RPC_ReceiveNpcDamage(Object.Id, aoeDmg);
                 }
             }
         }
         else if (pattern == BossAttackPattern.DarkVolleyAndCharge)
         {
-            Vector3 currentAim = target.transform.position - transform.position;
-            currentAim.y = 0f;
-            if (currentAim.sqrMagnitude < 0.001f) currentAim = aimDir;
-            currentAim.Normalize();
-
-            // Lunge forward safely (never entering Comfort Zone)
-            Vector3 lungeTarget = transform.position + currentAim * 2.8f;
-            if (!SafeZone.IsPointInAnySafeZone(lungeTarget, 0.8f))
+            if (target != null && target.IsSpawned && !target.IsDead && !SafeZone.IsPlayerInAnySafeZone(target))
             {
-                ResolveObstaclePenetration(ref lungeTarget);
-                lungeTarget.y = transform.position.y;
-                transform.position = lungeTarget;
+                Vector3 toTarget = target.transform.position - transform.position;
+                toTarget.y = 0f;
+                float dist = toTarget.magnitude;
+                if (dist > 2.2f)
+                {
+                    Vector3 lungeDir = toTarget / dist;
+                    float lungeStep = Mathf.Min(3.4f, dist - 1.8f);
+                    Vector3 lungedPos = transform.position + lungeDir * lungeStep;
+                    ResolveObstaclePenetration(ref lungedPos);
+                    EnforceSafeZoneExclusion(ref lungedPos);
+                    lungedPos.y = transform.position.y;
+                    transform.position = lungedPos;
+                    FaceDirection(lungeDir, 1f);
+                }
             }
+
+            Vector3 currentAim = target != null ? (target.transform.position - transform.position) : aimDir;
+            currentAim.y = 0f;
+            if (currentAim.sqrMagnitude < 0.001f) currentAim = transform.forward;
+            else currentAim.Normalize();
 
             int projDmg = Mathf.RoundToInt(AttackDamage * 0.95f);
             RPC_SpawnBossVolley(transform.position + Vector3.up * 1.3f, currentAim, projDmg);
-            Debug.Log($"[BOSS AI] Pattern 3 DARK ENERGY VOLLEY + CHARGE fired 3 projectiles ({projDmg} DMG each)!");
         }
     }
 
@@ -549,8 +651,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         {
             CurrentHealth = MaxHealth;
             TargetId = default;
+            _damageDealtMap.Clear();
             _stateTimer = UnityEngine.Random.Range(idleWaitRange.x, idleWaitRange.y);
-            ChangeState(NpcState.Idle, "arrived home, health restored");
+            ChangeState(NpcState.Idle, "arrived home, health & aggro reset");
         }
     }
 
@@ -558,11 +661,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         if (Time.time - _deathTime >= despawnDelayAfterDeath)
         {
-            Debug.Log($"[EnemyNPC] {name} corpse timeout, despawning.");
             Runner.Despawn(Object);
         }
     }
 
+    /// <summary>
+    /// ค้นหาผู้เล่นที่อยู่ในระยะสายตา (Vision Cone) เพื่อเริ่มไล่ล่า (หากผู้เล่นย่องมาด้านหลังนอก Vision Cone จะยังไม่ถูกพบ)
+    /// </summary>
     private bool TryAcquireNearestPlayer()
     {
         PlayerCombat best = null;
@@ -570,17 +675,15 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         for (int i = 0; i < PlayerCombat.All.Count; i++)
         {
             var p = PlayerCombat.All[i];
-            if (p == null || !p.IsSpawned || p.IsDead) continue;
-            if (SafeZone.IsPlayerInAnySafeZone(p)) continue;
+            if (!CanDetectPlayer(p)) continue;
 
             float d = PlanarDistance(transform.position, p.transform.position);
             if (d <= bestDist) { bestDist = d; best = p; }
         }
         if (best == null) return false;
 
-        Debug.Log($"[EnemyNPC] {name} aggro: {best.name} entered zone at {bestDist:0.0}m.");
         SetTarget(best);
-        ChangeState(NpcState.Chasing, "player entered aggro zone");
+        ChangeState(NpcState.Chasing, "player spotted in vision cone");
         BroadcastCampAggro(best);
         return true;
     }
@@ -649,11 +752,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private void ChangeState(NpcState next, string reason)
     {
         if (State == next) return;
-        Debug.Log($"[EnemyNPC] {name} state {State} -> {next} ({reason}).");
         State = next;
     }
 
-    // ------------------------------------------------------------------ obstacle & SafeZone steering
+    // ------------------------------------------------------------------ การเคลื่อนที่และหลบสิ่งกีดขวาง
 
     private float MoveTowards(Vector3 destination, float speed, float dt)
     {
@@ -667,7 +769,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         Vector3 steeredDir = ComputeObstacleAvoidanceDir(pos, desiredDir, Mathf.Min(dist, obstacleCheckDistance));
 
         Vector3 separation = ComputeAllySeparation(pos);
-        Vector3 finalDir = steeredDir + separation * 0.55f;
+        Vector3 finalDir = steeredDir + separation * 0.65f;
         finalDir.y = 0f;
         if (finalDir.sqrMagnitude > 0.0001f)
             finalDir.Normalize();
@@ -705,9 +807,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private Vector3 ComputeObstacleAvoidanceDir(Vector3 pos, Vector3 desiredDir, float checkDist)
     {
         if (!ProbeObstacle(pos, desiredDir, checkDist, out RaycastHit directHit))
-        {
             return desiredDir;
-        }
 
         if (Time.time > _avoidSignUntil || _avoidSign == 0)
         {
@@ -748,10 +848,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             }
         }
 
-        if (bestDir.sqrMagnitude > 0.0001f)
-            return bestDir.normalized;
-
-        return desiredDir;
+        return bestDir.sqrMagnitude > 0.0001f ? bestDir.normalized : desiredDir;
     }
 
     private bool ProbeObstacle(Vector3 pos, Vector3 dir, float distance, out RaycastHit closestObstacleHit)
@@ -870,7 +967,32 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         return Vector3.Distance(a, b);
     }
 
-    // ------------------------------------------------------------------ damage in
+    // ------------------------------------------------------------------ ระบบรับดาเมจและบันทึกสัดส่วนดาเมจรายบุคคล
+
+    /// <summary>
+    /// บันทึกดาเมจสะสมของผู้เล่นแต่ละคนลงใน _damageDealtMap เพื่อใช้คำนวณอัตราดรอป Personal Loot ตอนตาย
+    /// </summary>
+    public void RecordPlayerDamage(PlayerRef player, float amount)
+    {
+        if (player == PlayerRef.None || amount <= 0f) return;
+        if (_damageDealtMap.TryGetValue(player, out float current))
+            _damageDealtMap[player] = current + amount;
+        else
+            _damageDealtMap[player] = amount;
+    }
+
+    /// <summary>
+    /// คืนค่าสัดส่วนดาเมจ (0..1) ของผู้เล่นที่ระบุเมื่อเทียบกับดาเมจรวมทั้งหมด
+    /// </summary>
+    public float GetPlayerDamageShare(PlayerRef player)
+    {
+        if (player == PlayerRef.None || !_damageDealtMap.TryGetValue(player, out float dmg) || dmg <= 0f)
+            return 0f;
+
+        float total = 0f;
+        foreach (var kv in _damageDealtMap) total += Mathf.Max(0f, kv.Value);
+        return total > 0f ? Mathf.Clamp01(dmg / total) : 0f;
+    }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_TakeDamage(int damage, RpcInfo info = default)
@@ -886,39 +1008,40 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void ApplyIncomingDamage(int damage, bool isCrit, int comboStep, RpcInfo info)
     {
-        if (!IsSpawned || !Object.HasStateAuthority) return;
-        if (!IsAlive) return;
+        if (!IsSpawned || !Object.HasStateAuthority || !IsAlive) return;
 
-        PlayerCombat attacker = FindPlayerBySource(info.Source);
+        PlayerRef sourceRef = info.Source;
+        if (sourceRef == PlayerRef.None && Runner != null)
+            sourceRef = Runner.LocalPlayer;
+
+        PlayerCombat attacker = FindPlayerBySource(sourceRef);
         if (attacker == null || attacker.IsDead) return;
         if (SafeZone.IsPlayerInAnySafeZone(attacker)) return;
 
         float dist = PlanarDistance(transform.position, attacker.transform.position);
         float limit = IsBoss ? maxHitDistance + 1.5f : maxHitDistance;
-        if (dist > limit)
-        {
-            Debug.LogWarning($"[EnemyNPC] {name}: damage rejected, attacker {dist:0.0}m away (max {limit}).");
-            return;
-        }
+        if (dist > limit) return;
 
         float now = Time.time;
-        if (_lastDamageTime.TryGetValue(info.Source, out float last) && now - last < minSecondsBetweenHitsPerPlayer)
+        if (_lastDamageTime.TryGetValue(sourceRef, out float last) && now - last < minSecondsBetweenHitsPerPlayer)
             return;
-        _lastDamageTime[info.Source] = now;
+        _lastDamageTime[sourceRef] = now;
 
-        // Apply Enemy/Boss Scaled Defense mitigation (minimum 1 damage)
         int raw = Mathf.Clamp(damage, 1, maxDamagePerHit);
         int applied = Defense > 0 ? Mathf.Max(1, raw - Defense) : raw;
 
+        // บันทึกดาเมจของผู้เล่นคนนี้ลงในตารางเพื่อคำนวณโอกาสได้ของตอนตาย
+        RecordPlayerDamage(sourceRef, applied);
+
         int before = CurrentHealth;
         CurrentHealth = Mathf.Max(0, before - applied);
-        Debug.Log($"[EnemyNPC] {name} (Lv.{ScaledLevel}, DEF={Defense}) takes {applied}{(isCrit ? " (CRIT!)" : "")} from {attacker.name}: {before} -> {CurrentHealth}/{MaxHealth}.");
+        Debug.Log($"[EnemyNPC] {name} (Lv.{ScaledLevel}, DEF={Defense}) takes {applied}{(isCrit ? " (CRIT!)" : "")} from {attacker.name} ({sourceRef}): {before} -> {CurrentHealth}/{MaxHealth}.");
 
-        RPC_HitFeedback(applied, isCrit, comboStep, info.Source);
+        RPC_HitFeedback(applied, isCrit, comboStep, sourceRef);
 
         if (CurrentHealth <= 0)
         {
-            Die(info.Source);
+            Die(sourceRef);
             return;
         }
 
@@ -931,14 +1054,18 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
     }
 
+    /// <summary>
+    /// ค้นหาผู้เล่นเจ้าของ Source PlayerRef อย่างปลอดภัย (ป้องกันการปัดสิทธิ์ข้ามไปยัง Local Player หากผู้เล่นเดิมหลุดออก)
+    /// </summary>
     private PlayerCombat FindPlayerBySource(PlayerRef source)
     {
         for (int i = 0; i < PlayerCombat.All.Count; i++)
         {
             var p = PlayerCombat.All[i];
-            if (p != null && p.IsSpawned && p.Object.StateAuthority == source) return p;
+            if (p != null && p.IsSpawned && (p.Object.StateAuthority == source || p.Object.InputAuthority == source))
+                return p;
         }
-        return null;
+        return (source == PlayerRef.None || (Runner != null && source == Runner.LocalPlayer)) ? PlayerCombat.Local : null;
     }
 
     private void Die(PlayerRef killer)
@@ -948,28 +1075,89 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         _isTelegraphing = false;
         _deathTime = Time.time;
         ChangeState(NpcState.Dead, $"killed by {killer}");
-        SpawnLoot();
-        RPC_Died(killer, experienceReward);
+
+        // คำนวณส่วนแบ่งดาเมจและดรอปไอเทมส่วนตัว (Personal Instanced Loot) ให้ผู้เล่นทุกคนที่มีส่วนร่วม
+        SpawnPersonalInstancedLoot(killer);
     }
 
-    private void SpawnLoot()
+    /// <summary>
+    /// สร้างไอเทมดรอปส่วนตัว (Personal Instanced Loot) แยกให้ผู้เล่นแต่ละคนที่มีส่วนร่วมทำดาเมจ
+    /// โดยใช้อัตราดรอปที่ถ่วงน้ำหนักตามสัดส่วนดาเมจ (Top DPS ได้โบนัสโอกาสออก Epic/Legendary สูงสุด)
+    /// </summary>
+    private void SpawnPersonalInstancedLoot(PlayerRef fallbackKiller)
     {
-        if (lootTable == null || lootTable.Length == 0 || lootPrefab == null) return;
+        LootDropSystem.AnalyzeDamageContribution(
+            _damageDealtMap,
+            fallbackKiller,
+            out float totalDamage,
+            out PlayerRef topDpsPlayer,
+            out List<PlayerRef> participants);
 
-        foreach (var entry in lootTable)
+        WorldItem prefabToUse = lootPrefab;
+        if (prefabToUse == null && InventoryManager.Local != null)
+            prefabToUse = InventoryManager.Local.WorldItemPrefab;
+
+        for (int i = 0; i < participants.Count; i++)
         {
-            if (entry == null || entry.item == null) continue;
-            if (UnityEngine.Random.value > entry.chance) continue;
+            PlayerRef participant = participants[i];
+            float dealt = _damageDealtMap.TryGetValue(participant, out float d) ? d : totalDamage;
+            float share = totalDamage > 0f ? Mathf.Clamp01(dealt / totalDamage) : 1f;
+            bool isTopDps = participant == topDpsPlayer;
 
-            int qty = UnityEngine.Random.Range(entry.minAmount, Mathf.Max(entry.minAmount, entry.maxAmount) + 1);
-            Vector2 o = UnityEngine.Random.insideUnitCircle * 1.2f;
-            Vector3 pos = new Vector3(transform.position.x + o.x, 0.4f, transform.position.z + o.y);
+            // สุ่มไอเทมส่วนตัวตามสัดส่วนดาเมจของผู้เล่นคนนี้
+            ItemData rolledItem = LootDropSystem.RollDamageWeightedLoot(
+                IsBoss,
+                share,
+                isTopDps,
+                out ItemTier rolledTier,
+                out LootDropSystem.WeightedTierOdds odds);
 
-            WorldItem.Spawn(Runner, lootPrefab, pos, entry.item, qty);
+            if (rolledItem != null && prefabToUse != null && Runner != null && Runner.IsRunning)
+            {
+                Vector2 offset2D = UnityEngine.Random.insideUnitCircle * 1.15f;
+                Vector3 dropPos = new Vector3(transform.position.x + offset2D.x, 0.4f, transform.position.z + offset2D.y);
+
+                WorldItem.Spawn(
+                    Runner,
+                    prefabToUse,
+                    dropPos,
+                    rolledItem,
+                    1,
+                    allowedLooter: participant,
+                    isPlayerDropped: false,
+                    enhancementLevel: 0);
+
+                Debug.Log($"[PersonalLoot] {name} dropped personal [{ItemData.GetTierDisplayName(rolledTier)}] '{rolledItem.displayName}' for {participant} (Share={share * 100f:0}%, TopDPS={isTopDps}, EpicOdds={odds.epicChance * 100f:0.0}%, LegOdds={odds.legendaryChance * 100f:0.0}%).");
+            }
+
+            // มอบค่าประสบการณ์ (EXP) ให้ผู้เล่นทุกคนที่มีส่วนร่วม
+            int expShare = Mathf.Max(10, Mathf.RoundToInt(experienceReward * Mathf.Lerp(0.6f, 1.0f, share)));
+            RPC_AwardParticipantReward(participant, expShare, share, isTopDps, rolledItem != null ? rolledItem.displayName : "");
         }
     }
 
-    // ------------------------------------------------------------------ feedback & Boss Pattern VFX (all peers)
+    // ------------------------------------------------------------------ Network RPCs สำหรับแสดงผลทุกเครื่อง
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_AwardParticipantReward(PlayerRef recipient, int expAmount, float damageShare, NetworkBool isTopDps, string droppedItemName)
+    {
+        if (Runner == null) return;
+        if (Runner.LocalPlayer == recipient || recipient == PlayerRef.None)
+        {
+            if (InventoryManager.Local != null) InventoryManager.Local.AddExperience(expAmount);
+            else if (PlayerCombat.Local != null) PlayerCombat.Local.AddExperience(expAmount);
+
+            string rankTag = isTopDps ? "TOP DPS ★" : $"{damageShare * 100f:0}% DMG";
+            if (!string.IsNullOrEmpty(droppedItemName))
+            {
+                PlayerStatusHud.Instance?.ShowToast($"{rankTag} Personal Drop: {droppedItemName} (+{expAmount} EXP)",
+                    isTopDps ? new Color(1f, 0.84f, 0.22f) : new Color(0.45f, 0.90f, 1f), 3.0f);
+            }
+        }
+
+        if (animator != null) animator.SetTrigger(DieTrigger);
+        onDeath?.Invoke();
+    }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_HitFeedback(int damage, NetworkBool isCrit, int comboStep, PlayerRef attacker)
@@ -1016,7 +1204,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private IEnumerator TelegraphVisualRoutine(BossAttackPattern pattern, Vector3 centerPos, Vector3 dir, float duration)
     {
-        // Glowing arena telegraph marker on ground + floating warning text
         string warnText = pattern switch
         {
             BossAttackPattern.HeavyCleave => "! HEAVY CLEAVE !",
@@ -1087,20 +1274,6 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (ring != null) Destroy(ring);
     }
 
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_Died(PlayerRef killer, int exp)
-    {
-        Debug.Log($"[EnemyNPC] {name} (Lv.{ScaledLevel}) died (killer {killer}, exp={exp}).");
-        if (animator != null) animator.SetTrigger(DieTrigger);
-        onDeath?.Invoke();
-
-        if (Runner != null && Runner.LocalPlayer == killer)
-        {
-            if (InventoryManager.Local != null) InventoryManager.Local.AddExperience(exp);
-            else if (PlayerCombat.Local != null) PlayerCombat.Local.AddExperience(exp);
-        }
-    }
-
     private IEnumerator FlashRoutine()
     {
         _flashing = true;
@@ -1120,33 +1293,24 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void RefreshVisuals()
     {
-        if (BodyCollider != null) BodyCollider.enabled = State != NpcState.Dead;
-        if (_flashing) return;
+        bool dead = State == NpcState.Dead;
+        if (BodyCollider != null) BodyCollider.enabled = !dead;
 
-        Color c;
         if (IsBoss)
         {
-            switch (State)
-            {
-                case NpcState.Chasing: c = new Color(0.88f, 0.08f, 0.22f); break;
-                case NpcState.Attacking: c = new Color(1.0f, 0.38f, 0.05f); break;
-                case NpcState.Returning: c = new Color(0.95f, 0.78f, 0.15f); break;
-                case NpcState.Dead: c = new Color(0.22f, 0.18f, 0.20f); break;
-                default: c = new Color(0.52f, 0.08f, 0.18f); break;
-            }
+            SetColor(dead ? new Color(0.22f, 0.18f, 0.20f)
+                : State == NpcState.Attacking ? new Color(1.0f, 0.15f, 0.08f)
+                : State == NpcState.Chasing ? new Color(0.88f, 0.12f, 0.22f)
+                : new Color(0.62f, 0.08f, 0.18f));
         }
         else
         {
-            switch (State)
-            {
-                case NpcState.Chasing: c = new Color(1f, 0.15f, 0.1f); break;
-                case NpcState.Attacking: c = new Color(1f, 0.5f, 0f); break;
-                case NpcState.Returning: c = new Color(0.85f, 0.85f, 0.2f); break;
-                case NpcState.Dead: c = new Color(0.25f, 0.25f, 0.25f); break;
-                default: c = new Color(0.6f, 0.2f, 0.2f); break;
-            }
+            SetColor(dead ? new Color(0.35f, 0.35f, 0.35f)
+                : State == NpcState.Attacking ? new Color(0.95f, 0.2f, 0.2f)
+                : State == NpcState.Chasing ? new Color(0.95f, 0.55f, 0.15f)
+                : State == NpcState.Returning ? new Color(0.4f, 0.7f, 0.95f)
+                : new Color(0.85f, 0.3f, 0.3f));
         }
-        SetColor(c);
     }
 
     private void SetColor(Color c)
@@ -1154,95 +1318,109 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (bodyRenderer == null) return;
         bodyRenderer.GetPropertyBlock(_mpb);
         _mpb.SetColor(BaseColorId, c);
+        _mpb.SetColor(ColorId, c);
         bodyRenderer.SetPropertyBlock(_mpb);
     }
 
-    // ------------------------------------------------------------------ debug HUD
+    // ------------------------------------------------------------------ หลอดเลือดลอยเหนือหัวมอนสเตอร์และป้ายลอบสังหาร
 
     private void OnGUI()
     {
-        if (!IsSpawned || GameplayInput.IsBlocked || Event.current.type != EventType.Repaint) return;
+        // ซ่อนหลอดเลือดมอนสเตอร์เมื่อผู้เล่นเปิดหน้าต่างเมนู (Inventory / World Map / Blacksmith) เพื่อไม่ให้วาดทับ UI
+        if (!IsAlive || GameplayInput.IsBlocked || Event.current.type != EventType.Repaint) return;
         var cam = Camera.main;
         if (cam == null) return;
 
-        float heightOffset = IsBoss ? 2.85f : 1.6f;
-        Vector3 world = transform.position + Vector3.up * heightOffset;
-        Vector3 sp = cam.WorldToScreenPoint(world);
-        if (sp.z <= 0f || sp.z > 45f) return;
+        float topOffset = IsBoss ? 2.8f : 1.5f;
+        Vector3 sp = cam.WorldToScreenPoint(transform.position + Vector3.up * topOffset);
+        if (sp.z <= 0f || sp.z > (IsBoss ? 48f : 32f)) return;
 
-        float y = Screen.height - sp.y;
-        float w = IsBoss ? 130f : 74f;
-        float frac = MaxHealth > 0 ? Mathf.Clamp01(CurrentHealth / (float)MaxHealth) : 0f;
+        float w = IsBoss ? 148f : 72f;
+        float h = IsBoss ? 11f : 7f;
+        float x = sp.x - w * 0.5f;
+        float y = Screen.height - sp.y - h * 0.5f;
+        float frac = Mathf.Clamp01(CurrentHealth / (float)Mathf.Max(1, MaxHealth));
 
         var prev = GUI.color;
         GUI.color = new Color(0f, 0f, 0f, 0.75f);
-        GUI.DrawTexture(new Rect(sp.x - w * 0.5f - 1f, y - 1f, w + 2f, IsBoss ? 11f : 8f), Texture2D.whiteTexture);
-        GUI.color = IsBoss ? Color.Lerp(new Color(0.8f, 0.1f, 0.2f), new Color(1f, 0.75f, 0.15f), frac) : Color.Lerp(Color.red, Color.green, frac);
-        GUI.DrawTexture(new Rect(sp.x - w * 0.5f, y, w * frac, IsBoss ? 9f : 6f), Texture2D.whiteTexture);
-        GUI.color = prev;
-        string label = IsBoss ? $"[Lv.{ScaledLevel} BOSS] {CurrentHealth}/{MaxHealth}" : $"Lv.{ScaledLevel} {State}";
-        GUI.Label(new Rect(sp.x - 95f, y - 20f, 190f, 20f), label);
-    }
+        GUI.DrawTexture(new Rect(x - 1f, y - 1f, w + 2f, h + 2f), Texture2D.whiteTexture);
+        GUI.color = IsBoss
+            ? Color.Lerp(new Color(0.95f, 0.15f, 0.12f), new Color(1.0f, 0.65f, 0.12f), frac)
+            : Color.Lerp(new Color(0.9f, 0.2f, 0.2f), new Color(0.2f, 0.85f, 0.3f), frac);
+        GUI.DrawTexture(new Rect(x, y, w * frac, h), Texture2D.whiteTexture);
 
-    private void OnDrawGizmosSelected()
-    {
-        Gizmos.color = new Color(1f, 0.2f, 0.2f, 0.6f);
-        Gizmos.DrawWireSphere(transform.position, aggroRadius);
-        Gizmos.color = new Color(1f, 0.8f, 0f, 0.6f);
-        Gizmos.DrawWireSphere(transform.position, AttackRange);
+        var labelStyle = new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = IsBoss ? 12 : 10,
+            fontStyle = FontStyle.Bold
+        };
+        GUI.color = IsBoss ? new Color(1f, 0.85f, 0.25f) : new Color(0.92f, 0.94f, 0.98f);
+        string title = IsBoss ? $"★ Lv.{ScaledLevel} BOSS Sovereign Golem ({CurrentHealth}/{MaxHealth})" : $"Lv.{ScaledLevel}";
+        GUI.Label(new Rect(sp.x - 110f, y - 18f, 220f, 18f), title, labelStyle);
+
+        // แสดงป้ายแจ้งเตือนเมื่อผู้เล่นย่องเข้าด้านหลังในระยะลอบสังหาร (Stealth Assassination Prompt)
+        var local = PlayerCombat.Local;
+        if (local != null && local.IsSpawned && !local.IsDead && CanBeAssassinatedBy(local.transform))
+        {
+            GUI.color = new Color(0.08f, 0.02f, 0.04f, 0.88f);
+            Rect backstabRect = new Rect(sp.x - 115f, y - 42f, 230f, 22f);
+            GUI.DrawTexture(backstabRect, Texture2D.whiteTexture);
+            GUI.color = new Color(1f, 0.30f, 0.22f, 1f);
+            GUI.Label(backstabRect, "[LMB] STEALTH ASSASSINATE (3.0x)", labelStyle);
+        }
+
+        GUI.color = prev;
     }
 }
 
 /// <summary>
-/// Ranged Dark Energy Orb launched during the Boss's Pattern 3 Dark Volley attack.
-/// Moves across the arena, respects Safe Zones and dodges, and lets players block or evade!
+/// ลูกไฟพลังงานมืดวิถีโค้งของบอสในท่าที่ 3 (Dark Volley &amp; Charge)
 /// </summary>
 public sealed class BossDarkProjectile : MonoBehaviour
 {
     private EnemyNPC _owner;
     private Vector3 _dir;
     private int _damage;
-    private float _spawnTime;
-    private const float Speed = 11.5f;
-    private const float Lifetime = 2.0f;
-    private const float HitRadius = 0.95f;
+    private float _speed = 11.5f;
+    private float _expireAt;
 
     public static void Spawn(EnemyNPC owner, Vector3 origin, Vector3 direction, int damage)
     {
-        var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        go.name = "BossDarkOrb";
-        var col = go.GetComponent<Collider>();
+        var orb = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        orb.name = "BossDarkVolleyOrb";
+        var col = orb.GetComponent<Collider>();
         if (col != null) Destroy(col);
-        go.transform.position = origin;
-        go.transform.localScale = Vector3.one * 0.55f;
+        orb.transform.position = origin;
+        orb.transform.localScale = new Vector3(0.58f, 0.58f, 0.58f);
 
-        var r = go.GetComponent<Renderer>();
+        var r = orb.GetComponent<Renderer>();
         if (r != null)
         {
             var mpb = new MaterialPropertyBlock();
             r.GetPropertyBlock(mpb);
-            mpb.SetColor(Shader.PropertyToID("_BaseColor"), new Color(0.85f, 0.12f, 0.95f, 1f));
-            mpb.SetColor(Shader.PropertyToID("_Color"), new Color(0.85f, 0.12f, 0.95f, 1f));
+            Color darkPurple = new Color(0.75f, 0.14f, 0.95f, 1f);
+            mpb.SetColor("_BaseColor", darkPurple);
+            mpb.SetColor("_Color", darkPurple);
             r.SetPropertyBlock(mpb);
         }
 
-        var proj = go.AddComponent<BossDarkProjectile>();
+        var proj = orb.AddComponent<BossDarkProjectile>();
         proj._owner = owner;
-        direction.y = 0f;
-        proj._dir = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector3.forward;
+        proj._dir = direction.normalized;
         proj._damage = Mathf.Max(1, damage);
-        proj._spawnTime = Time.time;
+        proj._expireAt = Time.time + 2.2f;
     }
 
     private void Update()
     {
-        if (Time.time - _spawnTime >= Lifetime)
+        if (Time.time >= _expireAt)
         {
             Destroy(gameObject);
             return;
         }
 
-        transform.position += _dir * (Speed * Time.deltaTime);
+        transform.position += _dir * (_speed * Time.deltaTime);
 
         if (SafeZone.IsPointInAnySafeZone(transform.position))
         {
@@ -1253,11 +1431,14 @@ public sealed class BossDarkProjectile : MonoBehaviour
         var local = PlayerCombat.Local;
         if (local != null && local.IsSpawned && !local.IsDead && !SafeZone.IsPlayerInAnySafeZone(local))
         {
-            Vector3 pPos = local.transform.position + Vector3.up * 1.0f;
-            if (Vector3.Distance(transform.position, pPos) <= HitRadius)
+            Vector3 diff = local.transform.position - transform.position;
+            diff.y = 0f;
+            if (diff.sqrMagnitude <= 1.15f * 1.15f)
             {
-                if (_owner != null && _owner.IsSpawned)
+                if (_owner != null && _owner.IsSpawned && _owner.Object != null && _owner.Object.IsValid)
+                {
                     local.RPC_ReceiveNpcDamage(_owner.Object.Id, _damage);
+                }
                 Destroy(gameObject);
             }
         }

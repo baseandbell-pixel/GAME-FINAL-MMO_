@@ -88,7 +88,9 @@ public class TargetLockSystem : MonoBehaviour
 
     public bool TryAcquire()
     {
-        Vector3 eye = transform.position + Vector3.up * (eyeHeight - 1f);
+        // คำนวณจุดระดับสายตาให้แม่นยำทั้งกรณี Pivot อยู่ที่เท้า (GreatSwordGirl) และกรณี Pivot อยู่กลางตัว
+        bool isFeetPivot = _capsule != null && _capsule.CharacterVisual == transform;
+        Vector3 eye = transform.position + Vector3.up * (isFeetPivot ? eyeHeight : Mathf.Max(0.4f, eyeHeight - 1f));
         Vector3 forward = ReferenceForward();
         float halfCone = coneAngle * 0.5f;
 

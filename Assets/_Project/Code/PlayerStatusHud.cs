@@ -2,13 +2,10 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Phase 2 Top-Right Player Status HUD &amp; Top-Center Boss Respawn Banner.
-/// Replaces the legacy bottom-left bars with a unified MMORPG status frame containing:
-///   - Avatar portrait placeholder slot + Level badge
-///   - Combat Readiness indicator (Combat Ready / In Combat)
-///   - HP, Stamina, and EXP bars (+ Unspent Stat Points notice)
-///   - Top-Center Boss Respawn Countdown Banner ("Boss respawns in MM:SS") shown strictly
-///     while the local player is inside the Boss Arena cooldown radius.
+/// แผงสถานะผู้เล่นมุมขวาบน (Top-Right Player Status HUD) และแบนเนอร์นับถอยหลังบอสเกิดใหม่ (Top-Center Boss Respawn Banner):
+///   - เชื่อมโยงรูปโปรไฟล์ตัวละครมุมขวาบนเข้ากับรูป Avatar ที่เลือกมาจากหน้า Lobby (Avatar_0..3) โดยรักษาสัดส่วนภาพ (preserveAspect) ไม่ให้ยืดเบี้ยว
+///   - แสดงป้ายเลเวล, สถานะพร้อมรบ (Combat Ready / In Combat / Safe Zone), หลอด HP, Stamina, EXP และจำนวน Gold
+///   - แสดงแบนเนอร์นับถอยหลังเวลาเกิดของบอสตรงกลางด้านบนเฉพาะเมื่อผู้เล่นอยู่ในรัศมีลานบอส
 /// </summary>
 public class PlayerStatusHud : MonoBehaviour
 {
@@ -23,15 +20,19 @@ public class PlayerStatusHud : MonoBehaviour
     public string GoldBadgeText => _goldText != null ? _goldText.text : string.Empty;
     public bool IsToastVisible => _toastBanner != null && _toastBanner.activeSelf;
     public string ToastText => _toastText != null ? _toastText.text : string.Empty;
+    public Sprite CurrentAvatarSprite => _avatarSilhouette != null ? _avatarSilhouette.sprite : null;
+    public bool IsAvatarPreserveAspect => _avatarSilhouette != null && _avatarSilhouette.preserveAspect;
 
     private PlayerCombat _combat;
     private PlayerCapsule _capsule;
     private Font _font;
 
-    // Top-Right Player HUD
+    // คอมโพเนนต์ของการ์ดสถานะมุมขวาบน
     private RectTransform _statusCard;
+    private Image _avatarFrameBorder;
     private Image _avatarBg;
     private Image _avatarSilhouette;
+    private int _displayedAvatarIndex = -1;
     private Text _levelBadgeText;
     private Text _playerNameText;
     private Image _readinessDot;
@@ -45,7 +46,7 @@ public class PlayerStatusHud : MonoBehaviour
     private Text _goldText;
     private Text _pointsNoticeText;
 
-    // Safe Zone Banner & Dynamic Toast (anchored cleanly under Top-Right HUD)
+    // แบนเนอร์แจ้งเตือนเขตปลอดภัย (Safe Zone) และข้อความแจ้งเตือนชั่วคราว (Toast)
     private GameObject _safeZoneBanner;
     private Text _safeZoneBannerText;
     private GameObject _toastBanner;
@@ -54,7 +55,7 @@ public class PlayerStatusHud : MonoBehaviour
     private Text _toastText;
     private float _toastTimer;
 
-    // Top-Center Boss Banner
+    // แบนเนอร์นับถอยหลังบอสเกิดใหม่ตรงกลางด้านบน
     private GameObject _bossBanner;
     private Text _bossBannerText;
 
@@ -84,6 +85,9 @@ public class PlayerStatusHud : MonoBehaviour
         if (Instance == this) Instance = null;
     }
 
+    /// <summary>
+    /// สร้างโครงสร้าง UI ทั้งหมดของการ์ดสถานะมุมขวาบนและแบนเนอร์แจ้งเตือน
+    /// </summary>
     private void BuildHud()
     {
         var canvasGo = new GameObject("PlayerStatusHudCanvas");
@@ -98,90 +102,92 @@ public class PlayerStatusHud : MonoBehaviour
         scaler.matchWidthOrHeight = 0.5f;
 
         // ============================================================
-        // 1. TOP-RIGHT PLAYER STATUS HUD CARD (368 x 140)
+        // 1. การ์ดสถานะผู้เล่นมุมขวาบน (ขยายขนาดให้คมชัด อ่านง่าย 410 x 154)
         // ============================================================
-        var outer = MakeImage(canvasGo.transform, "TopRightStatusCard", new Color(0.55f, 0.45f, 0.22f, 0.92f));
+        var outer = MakeImage(canvasGo.transform, "TopRightStatusCard", new Color(0.58f, 0.48f, 0.24f, 0.95f));
         outer.raycastTarget = false;
         _statusCard = outer.rectTransform;
         _statusCard.anchorMin = _statusCard.anchorMax = _statusCard.pivot = new Vector2(1f, 1f);
         _statusCard.anchoredPosition = new Vector2(-18f, -18f);
-        _statusCard.sizeDelta = new Vector2(368f, 140f);
+        _statusCard.sizeDelta = new Vector2(410f, 154f);
 
-        var inner = MakeImage(_statusCard, "InnerPanel", new Color(0.05f, 0.06f, 0.09f, 0.94f));
+        var inner = MakeImage(_statusCard, "InnerPanel", new Color(0.05f, 0.06f, 0.09f, 0.95f));
         inner.raycastTarget = false;
         FillParentWithPadding(inner.rectTransform, 2f);
 
-        // Avatar Portrait Placeholder Slot (Left 76x76)
-        var avatarFrame = MakeImage(inner.transform, "AvatarFrame", new Color(0.32f, 0.28f, 0.18f, 1f));
-        PlaceTopLeft(avatarFrame.rectTransform, 10f, 12f, 76f, 76f);
-        _avatarBg = MakeImage(avatarFrame.transform, "AvatarBg", new Color(0.11f, 0.13f, 0.18f, 1f));
+        // กรอบรูปโปรไฟล์ตัวละครจากฉาก Lobby (ขนาด 84x84 รักษาสัดส่วนภาพไม่ให้ยืด)
+        _avatarFrameBorder = MakeImage(inner.transform, "AvatarFrame", new Color(0.75f, 0.62f, 0.28f, 1f));
+        PlaceTopLeft(_avatarFrameBorder.rectTransform, 10f, 12f, 84f, 84f);
+        _avatarBg = MakeImage(_avatarFrameBorder.transform, "AvatarBg", new Color(0.09f, 0.11f, 0.16f, 1f));
+        _avatarBg.gameObject.AddComponent<RectMask2D>();
         FillParentWithPadding(_avatarBg.rectTransform, 2f);
 
-        _avatarSilhouette = MakeImage(_avatarBg.transform, "AvatarPortrait", new Color(0.75f, 0.85f, 1f, 0.95f));
-        _avatarSilhouette.sprite = HudIcons.GetSprite("avatar");
-        FillParentWithPadding(_avatarSilhouette.rectTransform, 8f);
+        _avatarSilhouette = MakeImage(_avatarBg.transform, "AvatarPortrait", Color.white);
+        _avatarSilhouette.sprite = HudIcons.GetLobbyAvatarSprite(0);
+        _avatarSilhouette.preserveAspect = true;
+        FillParentWithPadding(_avatarSilhouette.rectTransform, 2f);
 
-        // Level Badge Pill (Bottom-center/right of Portrait)
-        var lvlBg = MakeImage(avatarFrame.transform, "LevelBadge", new Color(0.14f, 0.11f, 0.05f, 0.96f));
-        PlaceTopLeft(lvlBg.rectTransform, 12f, 64f, 52f, 20f);
-        _levelBadgeText = MakeText(lvlBg.transform, "LevelText", "Lv.1", 12, FontStyle.Bold, TextAnchor.MiddleCenter,
-            new Color(1f, 0.82f, 0.22f, 1f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        // ป้ายเลเวล (Level Badge)
+        var lvlBg = MakeImage(_avatarFrameBorder.transform, "LevelBadge", new Color(0.12f, 0.10f, 0.04f, 0.96f));
+        PlaceTopLeft(lvlBg.rectTransform, 12f, 68f, 60f, 22f);
+        _levelBadgeText = MakeText(lvlBg.transform, "LevelText", "Lv.1", 13, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Color(1f, 0.84f, 0.25f, 1f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-        // Header Row: Player Name + Combat Readiness Badge
-        _playerNameText = MakeText(inner.transform, "PlayerName", "Player", 15, FontStyle.Bold, TextAnchor.MiddleLeft,
-            Color.white, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(96f, -10f), new Vector2(114f, 22f));
+        // ชื่อผู้เล่นและสถานะความพร้อมรบ
+        _playerNameText = MakeText(inner.transform, "PlayerName", "Player", 16, FontStyle.Bold, TextAnchor.MiddleLeft,
+            Color.white, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(104f, -10f), new Vector2(142f, 24f));
 
         var readyBg = MakeImage(inner.transform, "ReadinessPill", new Color(0.08f, 0.12f, 0.14f, 0.95f));
-        PlaceTopLeft(readyBg.rectTransform, 214f, 10f, 140f, 20f);
+        PlaceTopLeft(readyBg.rectTransform, 250f, 10f, 146f, 22f);
 
         _readinessDot = MakeImage(readyBg.transform, "Dot", new Color(0.20f, 0.90f, 0.45f, 1f));
         _readinessDot.sprite = HudIcons.GetSprite("circle");
-        PlaceTopLeft(_readinessDot.rectTransform, 7f, 6f, 8f, 8f);
+        PlaceTopLeft(_readinessDot.rectTransform, 8f, 7f, 8f, 8f);
 
-        _readinessText = MakeText(readyBg.transform, "ReadinessText", "COMBAT READY", 10, FontStyle.Bold, TextAnchor.MiddleLeft,
-            new Color(0.40f, 0.95f, 0.65f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(20f, 0f), new Vector2(118f, 20f));
+        _readinessText = MakeText(readyBg.transform, "ReadinessText", "COMBAT READY", 11, FontStyle.Bold, TextAnchor.MiddleLeft,
+            new Color(0.40f, 0.95f, 0.65f, 1f), new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(22f, 0f), new Vector2(120f, 22f));
 
-        // Bar 1: HP Bar
-        CreateBar(inner.transform, "HPBar", 96f, 38f, 258f, 22f, new Color(0.16f, 0.05f, 0.07f, 1f),
-            new Color(0.22f, 0.85f, 0.36f, 1f), 12, out _hpFill, out _hpText);
+        // หลอด HP
+        CreateBar(inner.transform, "HPBar", 104f, 40f, 292f, 24f, new Color(0.16f, 0.05f, 0.07f, 1f),
+            new Color(0.22f, 0.85f, 0.36f, 1f), 13, out _hpFill, out _hpText);
 
-        // Bar 2: Stamina Bar
-        CreateBar(inner.transform, "StaminaBar", 96f, 64f, 258f, 19f, new Color(0.06f, 0.12f, 0.16f, 1f),
-            new Color(0.18f, 0.78f, 0.98f, 1f), 11, out _staFill, out _staText);
+        // หลอด Stamina
+        CreateBar(inner.transform, "StaminaBar", 104f, 68f, 292f, 21f, new Color(0.06f, 0.12f, 0.16f, 1f),
+            new Color(0.18f, 0.78f, 0.98f, 1f), 12, out _staFill, out _staText);
 
-        // Bar 3: EXP Bar + Gold Counter Pill
-        CreateBar(inner.transform, "ExpBar", 10f, 94f, 236f, 17f, new Color(0.10f, 0.08f, 0.16f, 1f),
-            new Color(0.62f, 0.36f, 0.96f, 1f), 10, out _expFill, out _expText);
+        // หลอด EXP และจำนวน Gold
+        CreateBar(inner.transform, "ExpBar", 10f, 102f, 266f, 19f, new Color(0.10f, 0.08f, 0.16f, 1f),
+            new Color(0.62f, 0.36f, 0.96f, 1f), 11, out _expFill, out _expText);
 
         var goldPill = MakeImage(inner.transform, "GoldPill", new Color(0.18f, 0.14f, 0.04f, 0.98f));
-        PlaceTopLeft(goldPill.rectTransform, 252f, 94f, 102f, 17f);
+        PlaceTopLeft(goldPill.rectTransform, 282f, 102f, 114f, 19f);
         var coinDot = MakeImage(goldPill.transform, "CoinIcon", new Color(1f, 0.84f, 0.22f, 1f));
         coinDot.sprite = HudIcons.GetSprite("circle");
-        PlaceTopLeft(coinDot.rectTransform, 6f, 3.5f, 10f, 10f);
-        _goldText = MakeText(goldPill.transform, "GoldText", "0 G", 11, FontStyle.Bold, TextAnchor.MiddleRight,
-            new Color(1f, 0.88f, 0.35f, 1f), Vector2.zero, Vector2.one, new Vector2(18f, 0f), new Vector2(-6f, 0f));
+        PlaceTopLeft(coinDot.rectTransform, 7f, 4.5f, 10f, 10f);
+        _goldText = MakeText(goldPill.transform, "GoldText", "0 G", 12, FontStyle.Bold, TextAnchor.MiddleRight,
+            new Color(1f, 0.88f, 0.35f, 1f), Vector2.zero, Vector2.one, new Vector2(20f, 0f), new Vector2(-8f, 0f));
 
-        // Bottom Micro-Hint / Unspent Points Row
-        _pointsNoticeText = MakeText(inner.transform, "HudHint", "[I / Tab] Character & Gear   |   [M] World Map", 11, FontStyle.Normal,
-            TextAnchor.MiddleLeft, new Color(0.72f, 0.76f, 0.84f, 0.95f),
-            new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -114f), new Vector2(344f, 18f));
+        // ข้อความแนะนำคีย์ลัดและแต้มอัปเกรดด้านล่างการ์ด
+        _pointsNoticeText = MakeText(inner.transform, "HudHint", "[I / Tab] Gear & Blacksmith  |  [M] Map  |  [J] Item Guide", 11, FontStyle.Normal,
+            TextAnchor.MiddleLeft, new Color(0.76f, 0.80f, 0.88f, 0.95f),
+            new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(10f, -126f), new Vector2(386f, 20f));
 
         // ============================================================
-        // 1B. SAFE ZONE STATUS INDICATOR BANNER
+        // 1B. แบนเนอร์แจ้งเตือนเมื่ออยู่ในเขตปลอดภัย (Safe Zone Banner)
         // ============================================================
         var szOuter = MakeImage(canvasGo.transform, "SafeZoneBanner", new Color(0.18f, 0.90f, 0.58f, 0.95f));
         _safeZoneBanner = szOuter.gameObject;
         var szrt = szOuter.rectTransform;
         szrt.anchorMin = szrt.anchorMax = szrt.pivot = new Vector2(1f, 1f);
-        szrt.anchoredPosition = new Vector2(-18f, -166f);
-        szrt.sizeDelta = new Vector2(368f, 30f);
+        szrt.anchoredPosition = new Vector2(-18f, -178f);
+        szrt.sizeDelta = new Vector2(410f, 32f);
 
         var szInner = MakeImage(szrt, "Inner", new Color(0.04f, 0.12f, 0.09f, 0.95f));
         FillParentWithPadding(szInner.rectTransform, 2f);
 
         var szIcon = MakeImage(szInner.transform, "ShieldIcon", new Color(0.24f, 0.96f, 0.66f, 1f));
         szIcon.sprite = HudIcons.GetSprite("shield");
-        PlaceTopLeft(szIcon.rectTransform, 10f, 4f, 18f, 18f);
+        PlaceTopLeft(szIcon.rectTransform, 10f, 5f, 18f, 18f);
 
         _safeZoneBannerText = MakeText(szInner.transform, "SafeZoneText", "Safe Zone - Combat Disabled", 13, FontStyle.Bold,
             TextAnchor.MiddleLeft, new Color(0.32f, 0.98f, 0.70f, 1f),
@@ -189,15 +195,15 @@ public class PlayerStatusHud : MonoBehaviour
         _safeZoneBanner.SetActive(false);
 
         // ============================================================
-        // 1C. GOLD / SYSTEM TOAST BANNER
+        // 1C. แบนเนอร์แจ้งเตือนการได้รับ Gold / ไอเทม (Toast Notification)
         // ============================================================
         var toastOuter = MakeImage(canvasGo.transform, "HudToastBanner", new Color(1f, 0.84f, 0.25f, 0.95f));
         _toastBorder = toastOuter;
         _toastBanner = toastOuter.gameObject;
         _toastRect = toastOuter.rectTransform;
         _toastRect.anchorMin = _toastRect.anchorMax = _toastRect.pivot = new Vector2(1f, 1f);
-        _toastRect.anchoredPosition = new Vector2(-18f, -166f);
-        _toastRect.sizeDelta = new Vector2(368f, 32f);
+        _toastRect.anchoredPosition = new Vector2(-18f, -178f);
+        _toastRect.sizeDelta = new Vector2(410f, 34f);
 
         var toastInner = MakeImage(_toastRect, "Inner", new Color(0.06f, 0.07f, 0.10f, 0.95f));
         FillParentWithPadding(toastInner.rectTransform, 2f);
@@ -208,7 +214,7 @@ public class PlayerStatusHud : MonoBehaviour
         _toastBanner.SetActive(false);
 
         // ============================================================
-        // 2. TOP-CENTER BOSS RESPAWN BANNER
+        // 2. แบนเนอร์นับถอยหลังเวลาบอสเกิดใหม่ตรงกลางด้านบน
         // ============================================================
         var bannerOuter = MakeImage(canvasGo.transform, "BossRespawnBanner", new Color(0.85f, 0.22f, 0.18f, 0.92f));
         bannerOuter.raycastTarget = false;
@@ -216,14 +222,14 @@ public class PlayerStatusHud : MonoBehaviour
         var brt = bannerOuter.rectTransform;
         brt.anchorMin = brt.anchorMax = brt.pivot = new Vector2(0.5f, 1f);
         brt.anchoredPosition = new Vector2(0f, -18f);
-        brt.sizeDelta = new Vector2(340f, 42f);
+        brt.sizeDelta = new Vector2(360f, 44f);
 
         var bannerInner = MakeImage(brt, "Inner", new Color(0.10f, 0.04f, 0.06f, 0.94f));
         FillParentWithPadding(bannerInner.rectTransform, 2f);
 
         var skullIcon = MakeImage(bannerInner.transform, "BossIcon", new Color(1f, 0.42f, 0.24f, 1f));
         skullIcon.sprite = HudIcons.GetSprite("boss");
-        PlaceTopLeft(skullIcon.rectTransform, 14f, 8f, 22f, 22f);
+        PlaceTopLeft(skullIcon.rectTransform, 14f, 9f, 22f, 22f);
 
         _bossBannerText = MakeText(bannerInner.transform, "CountdownText", "Boss respawns in 04:00", 16, FontStyle.Bold,
             TextAnchor.MiddleCenter, new Color(1f, 0.86f, 0.35f, 1f),
@@ -232,6 +238,9 @@ public class PlayerStatusHud : MonoBehaviour
         _bossBanner.SetActive(false);
     }
 
+    /// <summary>
+    /// แสดงข้อความแจ้งเตือนชั่วคราวใต้การ์ดสถานะมุมขวาบน
+    /// </summary>
     public void ShowToast(string text, Color color, float duration = 2.8f)
     {
         if (_toastBanner == null || _toastText == null) return;
@@ -253,7 +262,7 @@ public class PlayerStatusHud : MonoBehaviour
 
         if (_combat == null || !_combat.IsSpawned) return;
 
-        // 1. Update Top-Right Status Card
+        // 1. อัปเดตข้อมูลเลเวล ชื่อ และรูปโปรไฟล์ Lobby Avatar
         int lvl = Mathf.Max(1, _combat.NetworkLevel);
         if (_levelBadgeText != null) _levelBadgeText.text = $"Lv.{lvl}";
         if (_goldText != null) _goldText.text = $"{_combat.NetworkGold:N0} G";
@@ -264,25 +273,31 @@ public class PlayerStatusHud : MonoBehaviour
             _playerNameText.text = string.IsNullOrEmpty(nick) ? "Player" : nick;
         }
 
+        // ซิงก์รูปโปรไฟล์ Avatar จาก Lobby/PlayerCapsule และปรับสีกรอบให้ตรงกับสีประจำตัว
         if (_avatarSilhouette != null && _capsule != null)
         {
-            _avatarSilhouette.color = AvatarPalette.Get(_capsule.AvatarIndex);
+            int avatarIdx = Mathf.Clamp(_capsule.AvatarIndex, 0, 3);
+            if (_displayedAvatarIndex != avatarIdx || _avatarSilhouette.sprite == null)
+            {
+                _displayedAvatarIndex = avatarIdx;
+                Sprite lobbySprite = HudIcons.GetLobbyAvatarSprite(avatarIdx);
+                _avatarSilhouette.sprite = lobbySprite;
+                _avatarSilhouette.preserveAspect = true;
+                _avatarSilhouette.color = Color.white;
+            }
+            if (_avatarFrameBorder != null)
+                _avatarFrameBorder.color = AvatarPalette.Get(avatarIdx);
         }
 
-        // Safe Zone & Combat Readiness Status
+        // 2. อัปเดตสถานะเขตปลอดภัย (Safe Zone) และสถานะการต่อสู้
         bool inSafeZone = (_combat.IsInSafeZone || SafeZone.IsPlayerInAnySafeZone(_combat)) && !_combat.IsDead;
         bool inCombat = _combat.IsInCombat;
 
-        if (_safeZoneBanner != null)
-        {
-            if (_safeZoneBanner.activeSelf != inSafeZone)
-                _safeZoneBanner.SetActive(inSafeZone);
-        }
+        if (_safeZoneBanner != null && _safeZoneBanner.activeSelf != inSafeZone)
+            _safeZoneBanner.SetActive(inSafeZone);
 
         if (_toastRect != null)
-        {
-            _toastRect.anchoredPosition = new Vector2(-18f, inSafeZone ? -204f : -166f);
-        }
+            _toastRect.anchoredPosition = new Vector2(-18f, inSafeZone ? -216f : -178f);
 
         if (_readinessDot != null && _readinessText != null)
         {
@@ -314,7 +329,7 @@ public class PlayerStatusHud : MonoBehaviour
             }
         }
 
-        // HP Bar
+        // 3. อัปเดตหลอด HP, Stamina และ EXP
         int maxHp = Mathf.Max(1, _combat.MaxHealth);
         float hpFrac = Mathf.Clamp01(_combat.NetworkHealth / (float)maxHp);
         if (_hpFill != null)
@@ -324,7 +339,6 @@ public class PlayerStatusHud : MonoBehaviour
         }
         if (_hpText != null) _hpText.text = $"HP   {_combat.NetworkHealth} / {maxHp}";
 
-        // Stamina Bar
         float maxSta = Mathf.Max(1f, _combat.MaxStamina);
         float staFrac = Mathf.Clamp01(_combat.CurrentStamina / maxSta);
         if (_staFill != null)
@@ -336,7 +350,6 @@ public class PlayerStatusHud : MonoBehaviour
         }
         if (_staText != null) _staText.text = $"STA  {_combat.CurrentStamina:0} / {maxSta:0}";
 
-        // EXP Bar
         int nextExp = Mathf.Max(1, _combat.ExpToNextLevel);
         float expFrac = Mathf.Clamp01(_combat.NetworkExperience / (float)nextExp);
         if (_expFill != null)
@@ -344,7 +357,6 @@ public class PlayerStatusHud : MonoBehaviour
         if (_expText != null)
             _expText.text = $"EXP  {_combat.NetworkExperience} / {nextExp}  ({Mathf.RoundToInt(expFrac * 100f)}%)";
 
-        // Unspent Stat Points / Buff alert
         if (_pointsNoticeText != null)
         {
             if (_combat.NetworkUnspentStatPoints > 0)
@@ -359,7 +371,7 @@ public class PlayerStatusHud : MonoBehaviour
             }
             else if (_combat.IsBlocking)
             {
-                _pointsNoticeText.text = "GUARD ACTIVE (70% Damage Reduction)";
+                _pointsNoticeText.text = "GUARD ACTIVE (75% Damage Reduction)";
                 _pointsNoticeText.color = new Color(0.32f, 0.88f, 1f, 1f);
             }
             else if (_combat.ActiveBuffDamageBonus > 0)
@@ -369,12 +381,12 @@ public class PlayerStatusHud : MonoBehaviour
             }
             else
             {
-                _pointsNoticeText.text = "[I / Tab] Character & Gear   |   [M] World Map";
-                _pointsNoticeText.color = new Color(0.72f, 0.76f, 0.84f, 0.95f);
+                _pointsNoticeText.text = "[I / Tab] Gear & Blacksmith  |  [M] Map  |  [J] Item Guide";
+                _pointsNoticeText.color = new Color(0.76f, 0.80f, 0.88f, 0.95f);
             }
         }
 
-        // 2. Update Top-Center Boss Respawn Countdown Banner
+        // 4. อัปเดตแบนเนอร์นับถอยหลังเวลาบอสเกิดใหม่
         var spawner = SandboxWorldSpawner.Instance;
         bool showBoss = spawner != null && spawner.ShouldShowBossRespawnBanner;
         if (_bossBanner != null)
@@ -387,7 +399,7 @@ public class PlayerStatusHud : MonoBehaviour
         }
     }
 
-    // ------------------------------------------------------------------ uGUI builders
+    // ------------------------------------------------------------------ ฟังก์ชันช่วยสร้าง uGUI
 
     private void CreateBar(Transform parent, string name, float x, float y, float w, float h,
         Color bgColor, Color fillColor, int fontSize, out Image fillImg, out Text label)

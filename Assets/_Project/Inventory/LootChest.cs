@@ -5,25 +5,37 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// Physical Treasure Chest spawned at the center of an enemy camp or Boss Arena once defeated.
-/// Supports both standard 4-Tier Camp Chests (50% Normal, 30% Rare, 15% Epic, 5% Legendary)
-/// and Boss Reward Chests (30% Rare, 45% Epic, 25% Legendary).
+/// กล่องสมบัติรางวัลประจำแคมป์มอนสเตอร์และบอส (Treasure Chest System):
+///   - ดรอปไอเทมแบบส่วนตัว (Personal Instanced Loot) ให้เฉพาะผู้เล่นที่กดเปิด โดยถ่วงน้ำหนักตามดาเมจที่ทำได้
+///   - เมื่อเปิดรับของแล้ว กล่องจะสลายตัวหายไปเองอย่างสะอาดภายในเวลาที่กำหนด (ก่อนที่มอนสเตอร์ในแคมป์จะเกิดใหม่ในรอบ 1:30 นาที)
+///   - เมื่อมอนสเตอร์เกิดใหม่และถูกเคลียร์อีกครั้ง ระบบจะสร้างกล่องสมบัติใบใหม่ขึ้นมาครบวงจร
 /// </summary>
 [DisallowMultipleComponent]
 public class LootChest : MonoBehaviour
 {
+    // รายการกล่องสมบัติทั้งหมดในฉาก
     public static readonly List<LootChest> All = new List<LootChest>();
+
+    // เวลาสลายตัวของกล่องหลังจากถูกเปิดแล้ว (วินาที) เพื่อให้หายไปก่อนมอนสเตอร์เกิดใหม่
+    public const float DefaultOpenedDespawnDelay = 4.0f;
 
     [Header("Chest configuration")]
     [SerializeField] private int campId = 1;
     [SerializeField] private bool isBossChest;
-    [SerializeField] private float interactRadius = 3.2f;
+    [SerializeField] private float interactRadius = 3.4f;
     [SerializeField] private int dropsPerChest = 2;
+    [SerializeField] private float openedDespawnDelay = DefaultOpenedDespawnDelay;
     [SerializeField] private WorldItem worldItemPrefab;
 
+    // รหัสแคมป์ของกล่องใบนี้
     public int CampId => campId;
+    // เป็นกล่องสมบัติของบอสหรือไม่
     public bool IsBossChest => isBossChest;
+    // สถานะว่ากล่องถูกเปิดไปแล้วหรือยัง
     public bool IsOpened { get; private set; }
+    // เวลาที่เหลือก่อนกล่องที่เปิดแล้วจะสลายไป
+    public float DespawnRemainingSeconds => IsOpened ? Mathf.Max(0f, _despawnAtTime - Time.time) : -1f;
+    // รายการไอเทมที่สุ่มได้จากการเปิดกล่อง
     public IReadOnlyList<ItemData> DroppedItems => _droppedItems;
 
     private readonly List<ItemData> _droppedItems = new List<ItemData>();
@@ -32,6 +44,7 @@ public class LootChest : MonoBehaviour
     private Light _chestLight;
     private TextMeshPro _worldLabel;
     private float _lidAngle;
+    private float _despawnAtTime = -1f;
     private float _bannerUntil = -1f;
     private string _bannerText = "";
     private Color _bannerColor = Color.white;
@@ -39,6 +52,9 @@ public class LootChest : MonoBehaviour
     private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
     private static readonly int ColorId = Shader.PropertyToID("_Color");
 
+    /// <summary>
+    /// สร้างกล่องสมบัติประจำแคมป์หรือบอสลงในฉาก
+    /// </summary>
     public static LootChest SpawnAt(Vector3 position, int campId, WorldItem itemPrefab, bool isBossChest = false, bool replaceExisting = true)
     {
         for (int i = All.Count - 1; i >= 0; i--)
@@ -86,6 +102,9 @@ public class LootChest : MonoBehaviour
         if (_lidPivot == null) BuildVisuals();
     }
 
+    /// <summary>
+    /// สร้างโมเดลกล่องสมบัติ 3 มิติ พร้อมฝาเปิด-ปิด แสงไฟ และป้ายชื่อลอยเหนือกล่อง
+    /// </summary>
     private void BuildVisuals()
     {
         if (_lidPivot != null) return;
@@ -101,17 +120,16 @@ public class LootChest : MonoBehaviour
         Color goldTrim = new Color(0.95f, 0.76f, 0.18f, 1f);
         Color glowGold = new Color(1.0f, 0.85f, 0.25f, 1f);
 
-        // Chest Base
+        // ตัวถังกล่องสมบัติ
         CreatePart(transform, "ChestBase", PrimitiveType.Cube,
             new Vector3(0f, 0.28f, 0f), new Vector3(1.15f, 0.56f, 0.76f), woodDark);
 
-        // Gold straps on base
         CreatePart(transform, "BaseTrimLeft", PrimitiveType.Cube,
             new Vector3(-0.38f, 0.28f, 0f), new Vector3(0.10f, 0.58f, 0.80f), goldTrim);
         CreatePart(transform, "BaseTrimRight", PrimitiveType.Cube,
             new Vector3(0.38f, 0.28f, 0f), new Vector3(0.10f, 0.58f, 0.80f), goldTrim);
 
-        // Hinged Lid Pivot at back edge of chest
+        // จุดหมุนฝากล่อง
         var pivotGo = new GameObject("LidPivot");
         pivotGo.transform.SetParent(transform, false);
         pivotGo.transform.localPosition = new Vector3(0f, 0.56f, -0.38f);
@@ -126,13 +144,13 @@ public class LootChest : MonoBehaviour
         CreatePart(_lidPivot, "ChestLock", PrimitiveType.Cube,
             new Vector3(0f, 0.04f, 0.79f), new Vector3(0.20f, 0.24f, 0.08f), glowGold);
 
-        // Ground Beacon Ring
+        // วงแหวนเรืองแสงบนพื้น
         var ring = CreatePart(transform, "ChestBeacon", PrimitiveType.Cylinder,
             new Vector3(0f, 0.02f, 0f), new Vector3(1.85f, 0.015f, 1.85f),
             isBossChest ? new Color(1f, 0.45f, 0.12f, 1f) : new Color(1f, 0.82f, 0.22f, 1f));
         _beaconRing = ring.transform;
 
-        // Warm Golden Light
+        // แสงไฟส่องสว่างรอบกล่อง
         var lightGo = new GameObject("ChestLight");
         lightGo.transform.SetParent(transform, false);
         lightGo.transform.localPosition = new Vector3(0f, 1.15f, 0f);
@@ -142,14 +160,14 @@ public class LootChest : MonoBehaviour
         _chestLight.intensity = isBossChest ? 3.4f : 2.5f;
         _chestLight.range = isBossChest ? 7.0f : 5.5f;
 
-        // World-space 3D Label
+        // ป้ายข้อความ 3 มิติเหนือกล่อง
         var labelGo = new GameObject("ChestLabel");
         labelGo.transform.SetParent(transform, false);
         labelGo.transform.localPosition = new Vector3(0f, 1.55f, 0f);
         _worldLabel = labelGo.AddComponent<TextMeshPro>();
         _worldLabel.text = isBossChest
-            ? "BOSS TREASURE CHEST\n<size=75%>[E] Open High-Tier Loot</size>"
-            : "TREASURE CHEST\n<size=75%>[E] Open Reward</size>";
+            ? "BOSS TREASURE CHEST\n<size=75%>[E] Open Personal High-Tier Loot</size>"
+            : "TREASURE CHEST\n<size=75%>[E] Open Personal Reward</size>";
         _worldLabel.fontSize = 2.6f;
         _worldLabel.alignment = TextAlignmentOptions.Center;
         _worldLabel.color = new Color(1f, 0.86f, 0.24f, 1f);
@@ -181,10 +199,28 @@ public class LootChest : MonoBehaviour
 
     private void Update()
     {
-        if (IsOpened && _lidPivot != null && _lidAngle > -68f)
+        // เมื่อเปิดกล่องแล้ว ให้หมุนฝาเปิดและนับถอยหลังเพื่อลบกล่องออกจากฉากก่อนมอนสเตอร์เกิดใหม่
+        if (IsOpened)
         {
-            _lidAngle = Mathf.MoveTowards(_lidAngle, -68f, 180f * Time.deltaTime);
-            _lidPivot.localRotation = Quaternion.Euler(_lidAngle, 0f, 0f);
+            if (_lidPivot != null && _lidAngle > -68f)
+            {
+                _lidAngle = Mathf.MoveTowards(_lidAngle, -68f, 180f * Time.deltaTime);
+                _lidPivot.localRotation = Quaternion.Euler(_lidAngle, 0f, 0f);
+            }
+
+            // ย่อขนาดลงอย่างนุ่มนวลในช่วง 0.8 วินาทีสุดท้ายก่อนสลายหายไป
+            float remain = _despawnAtTime - Time.time;
+            if (remain <= 0.8f && remain > 0f)
+            {
+                float s = Mathf.Clamp01(remain / 0.8f) * (isBossChest ? 1.35f : 1f);
+                transform.localScale = new Vector3(s, s, s);
+            }
+            else if (remain <= 0f)
+            {
+                Debug.Log($"[LootChest] Opened chest for Camp {campId} despawned cleanly (ready for next respawn cycle).");
+                Destroy(gameObject);
+                return;
+            }
         }
 
         if (_beaconRing != null && !IsOpened)
@@ -225,15 +261,17 @@ public class LootChest : MonoBehaviour
     }
 
     /// <summary>
-    /// Opens the chest, rolls the 4-Tier Loot Table, and spawns WorldItem drops around the chest.
+    /// เปิดกล่องสมบัติ สุ่มไอเทมส่วนตัว (Personal Instanced Loot) ให้ผู้เปิด และตั้งเวลาลบกล่องอัตโนมัติ
     /// </summary>
-    public List<ItemData> OpenChest(PlayerCombat opener = null)
+    public List<ItemData> OpenChest(PlayerCombat opener = null, float damageShare = 1.0f, bool isTopDps = true)
     {
         if (IsOpened) return _droppedItems;
         IsOpened = true;
+        _despawnAtTime = Time.time + Mathf.Max(0.5f, openedDespawnDelay);
 
         if (opener == null) opener = PlayerCombat.Local;
         NetworkRunner runner = opener != null ? opener.Runner : null;
+        PlayerRef looterRef = (runner != null && runner.IsRunning) ? runner.LocalPlayer : PlayerRef.None;
 
         if (worldItemPrefab == null && InventoryManager.Local != null)
             worldItemPrefab = InventoryManager.Local.WorldItemPrefab;
@@ -244,9 +282,13 @@ public class LootChest : MonoBehaviour
 
         for (int i = 0; i < count; i++)
         {
-            ItemData rolled = isBossChest
-                ? ItemRegistry.RollBossLoot(out ItemTier rolledTier)
-                : ItemRegistry.RollTieredLoot(out rolledTier);
+            ItemData rolled = LootDropSystem.RollDamageWeightedLoot(
+                isBossChest,
+                damageShare,
+                isTopDps,
+                out ItemTier rolledTier,
+                out _);
+
             if (rolled == null) continue;
 
             _droppedItems.Add(rolled);
@@ -259,7 +301,8 @@ public class LootChest : MonoBehaviour
             WorldItem spawnedDrop = null;
             if (runner != null && runner.IsRunning && worldItemPrefab != null)
             {
-                spawnedDrop = WorldItem.Spawn(runner, worldItemPrefab, dropPos, rolled, 1);
+                // ผูกสิทธิ์ไอเทมให้เฉพาะผู้เล่นที่เปิดกล่อง (Personal Instanced Loot)
+                spawnedDrop = WorldItem.Spawn(runner, worldItemPrefab, dropPos, rolled, 1, allowedLooter: looterRef);
             }
 
             if (spawnedDrop == null && InventoryManager.Local != null)
@@ -267,7 +310,7 @@ public class LootChest : MonoBehaviour
                 InventoryManager.Local.AddItem(rolled, 1);
             }
 
-            Debug.Log($"[LootChest] {(isBossChest ? "Boss " : "")}Camp {campId} Chest rolled [{ItemData.GetTierDisplayName(rolledTier)}] -> {rolled.displayName} (id={rolled.itemId}).");
+            Debug.Log($"[LootChest] {(isBossChest ? "Boss " : "")}Camp {campId} Chest rolled personal loot [{ItemData.GetTierDisplayName(rolledTier)}] -> {rolled.displayName} for {looterRef}.");
         }
 
         if (_beaconRing != null) _beaconRing.gameObject.SetActive(false);
@@ -279,15 +322,24 @@ public class LootChest : MonoBehaviour
 
         if (_worldLabel != null)
         {
-            _worldLabel.text = $"CHEST OPENED!\n<size=70%>{summary}</size>";
+            _worldLabel.text = $"CHEST LOOTED!\n<size=70%>{summary}</size>";
             _worldLabel.color = ItemData.GetTierColor(highestTier);
         }
 
         _bannerText = $"{(isBossChest ? "BOSS" : "CAMP")} CLEAR REWARD:  {summary}";
         _bannerColor = ItemData.GetTierColor(highestTier);
-        _bannerUntil = Time.unscaledTime + 4.0f;
+        _bannerUntil = Time.unscaledTime + 3.8f;
 
         return _droppedItems;
+    }
+
+    /// <summary>
+    /// สำหรับการทดสอบ (Testing Helper): สั่งให้กล่องที่เปิดแล้วสลายตัวทันทีเพื่อตรวจสอบวงจร Respawn
+    /// </summary>
+    public void ForceDespawnNow()
+    {
+        if (this != null && gameObject != null)
+            Destroy(gameObject);
     }
 
     private void OnGUI()
@@ -297,9 +349,9 @@ public class LootChest : MonoBehaviour
         var player = PlayerCombat.Local;
         if (!IsOpened && player != null && player.IsSpawned && !player.IsDead && IsPlayerInRange(player))
         {
-            var rect = new Rect(Screen.width * 0.5f - 175f, Screen.height * 0.67f, 350f, 30f);
+            var rect = new Rect(Screen.width * 0.5f - 185f, Screen.height * 0.67f, 370f, 32f);
             var prev = GUI.color;
-            GUI.color = new Color(0.06f, 0.05f, 0.02f, 0.82f);
+            GUI.color = new Color(0.06f, 0.05f, 0.02f, 0.85f);
             GUI.DrawTexture(rect, Texture2D.whiteTexture);
             GUI.color = new Color(1f, 0.85f, 0.25f, 1f);
             GUIStyle style = new GUIStyle(GUI.skin.label)
@@ -308,16 +360,16 @@ public class LootChest : MonoBehaviour
                 fontSize = 15,
                 fontStyle = FontStyle.Bold
             };
-            GUI.Label(rect, isBossChest ? "[E] Open Boss Reward Chest (High-Tier Loot)" : "[E] Open Camp Reward Chest (Tiered Loot)", style);
+            GUI.Label(rect, isBossChest ? "[E] Open Boss Reward Chest (Personal Loot)" : "[E] Open Camp Reward Chest (Personal Loot)", style);
             GUI.color = prev;
         }
 
         if (Time.unscaledTime < _bannerUntil && !string.IsNullOrEmpty(_bannerText))
         {
             float alpha = Mathf.Clamp01(_bannerUntil - Time.unscaledTime);
-            var rect = new Rect(Screen.width * 0.5f - 280f, 82f, 560f, 36f);
+            var rect = new Rect(Screen.width * 0.5f - 300f, 82f, 600f, 38f);
             var prev = GUI.color;
-            GUI.color = new Color(0.05f, 0.05f, 0.08f, 0.85f * alpha);
+            GUI.color = new Color(0.05f, 0.05f, 0.08f, 0.88f * alpha);
             GUI.DrawTexture(rect, Texture2D.whiteTexture);
             GUI.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, alpha);
             GUIStyle style = new GUIStyle(GUI.skin.label)

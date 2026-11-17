@@ -309,6 +309,12 @@ public class SandboxWorldSpawner : MonoBehaviour
                 camp.EverPopulated = true;
                 camp.IsCleared = false;
                 camp.RespawnRemainingSeconds = 0f;
+                // ลบกล่องสมบัติเก่าที่ยังเหลือค้างเมื่อมอนสเตอร์ในแคมป์เกิดใหม่แล้ว
+                if (camp.ActiveChest != null)
+                {
+                    Destroy(camp.ActiveChest.gameObject);
+                    camp.ActiveChest = null;
+                }
             }
             else if (camp.EverPopulated && !camp.IsCleared)
             {
@@ -343,6 +349,12 @@ public class SandboxWorldSpawner : MonoBehaviour
             _bossEverSpawned = true;
             _bossCleared = false;
             _bossRespawnRemaining = 0f;
+            // ลบกล่องบอสเก่าที่ยังเหลือค้างเมื่อบอสเกิดใหม่แล้ว
+            if (_activeBossChest != null)
+            {
+                Destroy(_activeBossChest.gameObject);
+                _activeBossChest = null;
+            }
         }
         else if (_bossEverSpawned && !_bossCleared)
         {

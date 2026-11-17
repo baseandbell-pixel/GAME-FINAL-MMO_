@@ -18,12 +18,14 @@ public enum PlayerStatType
 }
 
 /// <summary>
-/// Networked melee combat, stamina, block VFX, combo critical hits, EXP/Level progression,
-/// Stat Point allocation, and 4-slot Equipment stat aggregation (Photon Fusion 2, SHARED MODE).
+/// ระบบต่อสู้ระยะประชิดและจัดการค่าพลังผู้เล่นผ่าน Photon Fusion Shared Mode (MMORPG Combat Core):
+///   - รองรับ IClassCombatHandler เพื่อขยายคลาส Magic ในอนาคตโดยไม่ต้องรื้อโค้ดหลัก
+///   - ขับเคลื่อนท่าโจมตีครบทุกชุดของ GreatSword (Light Combo 1..3, Heavy Slash 1..3, Run Attack, Jump Attack, Stealth Assassination)
+///   - ระบบ Stamina, การตั้งการ์ดป้องกัน (ลดดาเมจ 75% + Block Impact + Guard Break), การกลิ้งหลบ, Buff และ Hitbox ใบดาบ
 /// </summary>
 [DisallowMultipleComponent]
 [RequireComponent(typeof(Rigidbody))]
-public class PlayerCombat : NetworkBehaviour
+public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 {
     private const int DefaultMaxHealth = 100;
     private const float DefaultMaxStamina = 100f;
@@ -56,9 +58,10 @@ public class PlayerCombat : NetworkBehaviour
     [Tooltip("Damage multiplier applied on chained combo finisher step 3 (Critical Hit).")]
     [Min(1f)] [SerializeField] private float comboStep3CritMultiplier = 2.0f;
 
-    [Header("Block & Dodge")]
+    [Header("Block & Dodge (ตั้งการ์ดป้องกันและกลิ้งหลบ)")]
     [Range(0.1f, 1f)] [SerializeField] private float blockMoveSpeedMultiplier = 0.45f;
-    [Range(0f, 0.95f)] [SerializeField] private float blockDamageReduction = 0.7f;
+    // ลดดาเมจที่ได้รับลง 75% ขณะตั้งการ์ดป้องกันด้วยดาบใหญ่
+    [Range(0f, 0.95f)] [SerializeField] private float blockDamageReduction = 0.75f;
     [Min(0.1f)] [SerializeField] private float dodgeCooldown = 0.75f;
     [Min(0.1f)] [SerializeField] private float dodgeDuration = 0.45f;
     [Min(0.5f)] [SerializeField] private float dodgeDistance = 4.2f;
@@ -209,6 +212,33 @@ public class PlayerCombat : NetworkBehaviour
     public GameObject BlockVfxObject => _blockVfxRoot;
     public bool IsBlockVfxActive => _blockVfxRoot != null && _blockVfxRoot.activeSelf;
 
+    // อ้างอิงรูปแบบโจมตีปัจจุบัน (สำหรับสั่งเล่นอนิเมชันและคำนวณตัวคูณดาเมจ)
+    public PlayerAttackKind CurrentAttackKind { get; private set; } = PlayerAttackKind.LightCombo;
+
+    // ------------------------------------------------------------------ IClassCombatHandler (รองรับการเพิ่มคลาส Magic ในอนาคต)
+
+    // คลาสต่อสู้ปัจจุบันของผู้เล่น (GreatSword)
+    public CombatClassType ActiveClass => CombatClassType.GreatSword;
+
+    // ประเภทอาวุธที่สวมใส่อยู่ปัจจุบัน
+    public WeaponArchetype ActiveWeaponArchetype
+    {
+        get
+        {
+            var inv = InventoryManager.Local;
+            if (inv != null)
+            {
+                var eqWeapon = inv.GetEquippedItem(EquipmentSlotType.Sword);
+                if (eqWeapon != null) return eqWeapon.weaponArchetype;
+            }
+            return WeaponArchetype.GreatSword;
+        }
+    }
+
+    public bool CanPerformPrimaryAttack() => CanAttack;
+    public bool TryPerformPrimaryAttack() => TryRequestAttack();
+    public bool TryPerformSecondaryAction() => TryRequestAttackKind(ResolveContextualHeavyAttackKind());
+
     /// <summary>Sequence number of the swing this peer last saw start (identifies a swing for de-duplication).</summary>
     public int CurrentSequence { get; private set; }
 
@@ -269,6 +299,7 @@ public class PlayerCombat : NetworkBehaviour
     // Local (input side)
     private float _nextLocalAttackTime;
     private float _bufferedUntil = -1f;
+    private bool _bufferedHeavy;
     private float _nextLocalDodgeTime;
     private float _overrideBlockUntil;
     private bool _localBlockingSent;
@@ -391,6 +422,22 @@ public class PlayerCombat : NetworkBehaviour
             }
         }
 
+        if (weaponHitbox == null && swordHand != null)
+        {
+            // สร้าง BoxCollider สำหรับใบดาบอัตโนมัติบน Sword_Hand หากยังไม่ได้ผูกไว้ใน Prefab
+            var hitboxObj = new GameObject("WeaponHitbox");
+            hitboxObj.transform.SetParent(swordHand, false);
+            hitboxObj.transform.localPosition = Vector3.zero;
+            hitboxObj.transform.localRotation = Quaternion.identity;
+            hitboxObj.transform.localScale = Vector3.one;
+            var autoBox = hitboxObj.AddComponent<BoxCollider>();
+            autoBox.center = Vector3.zero;
+            autoBox.size = new Vector3(1.6f, 0.5f, 8.6f);
+            autoBox.isTrigger = true;
+            autoBox.enabled = false;
+            weaponHitbox = autoBox;
+        }
+
         if (weaponHitbox == null)
         {
             Debug.LogError($"[PlayerCombat] '{name}': weaponHitbox is not assigned - attacks will never hit.", this);
@@ -421,12 +468,15 @@ public class PlayerCombat : NetworkBehaviour
         if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
         if (shader == null) shader = Shader.Find("Unlit/Color");
 
+        // ปรับระดับความสูงของโล่พลังงาน Block VFX ให้ตรงกับตัวละครที่มีจุดหมุนอยู่ที่เท้า (GreatSwordGirl) vs กึ่งกลางตัว
+        float yOffset = (_capsule != null && _capsule.CharacterVisual == transform) ? 1.0f : 0f;
+
         GameObject dome = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         dome.name = "ShieldDome";
         var domeCol = dome.GetComponent<Collider>();
         if (domeCol != null) Destroy(domeCol);
         dome.transform.SetParent(_blockVfxRoot.transform, false);
-        dome.transform.localPosition = new Vector3(0f, 0.15f, 0.25f);
+        dome.transform.localPosition = new Vector3(0f, 0.15f + yOffset, 0.25f);
         dome.transform.localScale = new Vector3(1.35f, 1.65f, 1.15f);
         var domeRenderer = dome.GetComponent<Renderer>();
         if (domeRenderer != null)
@@ -447,7 +497,7 @@ public class PlayerCombat : NetworkBehaviour
         var ringCol = ring.GetComponent<Collider>();
         if (ringCol != null) Destroy(ringCol);
         ring.transform.SetParent(_blockVfxRoot.transform, false);
-        ring.transform.localPosition = new Vector3(0f, -0.92f, 0f);
+        ring.transform.localPosition = new Vector3(0f, -0.92f + yOffset, 0f);
         ring.transform.localScale = new Vector3(1.65f, 0.02f, 1.65f);
         var ringRenderer = ring.GetComponent<Renderer>();
         if (ringRenderer != null)
@@ -853,7 +903,17 @@ public class PlayerCombat : NetworkBehaviour
             SetBlockingInput(wantBlock);
         }
 
-        if (PollAttackPressed()) _bufferedUntil = Time.time + inputBufferSeconds;
+        // รองรับทั้งโจมตีปกติ (LMB -> Light / Run / Jump / Stealth Assassination) และโจมตีหนัก (R -> Heavy / RunHeavy / JumpHeavy)
+        if (PollAttackPressed())
+        {
+            _bufferedUntil = Time.time + inputBufferSeconds;
+            _bufferedHeavy = false;
+        }
+        else if (PollHeavyAttackPressed())
+        {
+            _bufferedUntil = Time.time + inputBufferSeconds;
+            _bufferedHeavy = true;
+        }
 
         if (_bufferedUntil >= Time.time && Time.time >= _nextLocalAttackTime && !IsDodging)
         {
@@ -861,7 +921,10 @@ public class PlayerCombat : NetworkBehaviour
             if (CanAttack)
             {
                 if (_localBlockingSent) SetBlockingInput(false);
-                TryRequestAttack();
+                if (_bufferedHeavy)
+                    TryRequestAttackKind(ResolveContextualHeavyAttackKind());
+                else
+                    TryRequestAttack();
             }
         }
     }
@@ -955,12 +1018,30 @@ public class PlayerCombat : NetworkBehaviour
         Debug.Log($"[PlayerCombat] Applied +{bonusDamage} Attack Buff for {durationSeconds:0}s.");
     }
 
+    /// <summary>
+    /// ตรวจจับการกดปุ่มโจมตีปกติ (คลิกซ้าย Mouse Left Button)
+    /// </summary>
     private static bool PollAttackPressed()
     {
         if (!Application.isFocused || GameplayInput.IsBlocked) return false;
 
         var mouse = Mouse.current;
         if (mouse == null || !mouse.leftButton.wasPressedThisFrame) return false;
+
+        if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// ตรวจจับการกดปุ่มโจมตีหนัก (ปุ่ม R) เพื่อสั่งท่า Heavy Slash / Run Heavy / Jump Heavy
+    /// </summary>
+    private static bool PollHeavyAttackPressed()
+    {
+        if (!Application.isFocused || GameplayInput.IsBlocked) return false;
+
+        var kb = Keyboard.current;
+        if (kb == null || !kb.rKey.wasPressedThisFrame) return false;
 
         if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return false;
 
@@ -992,7 +1073,18 @@ public class PlayerCombat : NetworkBehaviour
         return kb != null && (kb.spaceKey.wasPressedThisFrame || kb.leftCtrlKey.wasPressedThisFrame);
     }
 
+    /// <summary>
+    /// สั่งโจมตีปกติแบบฉลาดตามบริบท (Stealth Assassination / Jump Attack / Run Attack / Light Combo)
+    /// </summary>
     public bool TryRequestAttack()
+    {
+        return TryRequestAttackKind(ResolveContextualLightAttackKind());
+    }
+
+    /// <summary>
+    /// สั่งโจมตีตามรูปแบบท่าที่ระบุ (ส่งผ่าน Photon Fusion RPC เพื่อซิงก์ทุกเครื่อง)
+    /// </summary>
+    public bool TryRequestAttackKind(PlayerAttackKind kind)
     {
         if (!_isSpawned || !IsLocallyControlled || IsDead) return false;
         if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position))
@@ -1009,8 +1101,65 @@ public class PlayerCombat : NetworkBehaviour
 
         _nextLocalAttackTime = Time.time + attackCooldown;
         _lastCombatActivityTime = Time.time;
-        RPC_RequestAttack();
+
+        if (kind == PlayerAttackKind.LightCombo)
+            RPC_RequestAttack();
+        else
+            RPC_RequestAttackKind((byte)kind);
         return true;
+    }
+
+    /// <summary>
+    /// วิเคราะห์บริบทการโจมตีเบา (LMB): ลอบสังหารด้านหลัง -> กลางอากาศ -> วิ่งฟัน -> คอมโบปกติ
+    /// </summary>
+    public PlayerAttackKind ResolveContextualLightAttackKind()
+    {
+        if (ActiveWeaponArchetype != WeaponArchetype.GreatSword)
+            return PlayerAttackKind.SpellCast;
+
+        for (int i = 0; i < EnemyNPC.All.Count; i++)
+        {
+            var npc = EnemyNPC.All[i];
+            if (npc != null && npc.IsSpawned && npc.IsAlive && npc.CanBeAssassinatedBy(transform))
+                return PlayerAttackKind.StealthAssassination;
+        }
+
+        if (_capsule != null && !_capsule.IsGrounded)
+            return PlayerAttackKind.JumpAttack;
+
+        if (_capsule != null && _capsule.NetworkSprinting)
+            return PlayerAttackKind.RunAttack;
+
+        return PlayerAttackKind.LightCombo;
+    }
+
+    /// <summary>
+    /// วิเคราะห์บริบทการโจมตีหนัก (ปุ่ม R): วิ่งกระโดดฟัน -> กระโดดฟันหนัก -> วิ่งฟันหนัก -> คอมโบฟันหนัก
+    /// </summary>
+    public PlayerAttackKind ResolveContextualHeavyAttackKind()
+    {
+        if (ActiveWeaponArchetype != WeaponArchetype.GreatSword)
+            return PlayerAttackKind.SpellCast;
+
+        bool sprinting = _capsule != null && _capsule.NetworkSprinting;
+        bool airborne = _capsule != null && !_capsule.IsGrounded;
+
+        if (airborne && sprinting) return PlayerAttackKind.RunJumpHeavyAttack;
+        if (airborne) return PlayerAttackKind.JumpHeavyAttack;
+        if (sprinting) return PlayerAttackKind.RunHeavyAttack;
+        return PlayerAttackKind.HeavyCombo;
+    }
+
+    /// <summary>
+    /// สั่งเล่นอนิเมชัน Buff เมื่อผู้เล่นใช้ไอเทมยาฟื้นฟูหรือยาเพิ่มพลังโจมตี
+    /// </summary>
+    public void PlayConsumableBuffEffect()
+    {
+        if (!_isSpawned || IsDead) return;
+        if (Object.HasStateAuthority)
+            RPC_BroadcastConsumableBuff();
+        else if (IsLocallyControlled)
+            RPC_RequestConsumableBuff();
     }
 
     public bool TryRequestDodge()
@@ -1071,6 +1220,23 @@ public class PlayerCombat : NetworkBehaviour
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     public void RPC_RequestAttack()
     {
+        ExecuteAuthorityAttack(PlayerAttackKind.LightCombo);
+    }
+
+    /// <summary>
+    /// รับคำขอโจมตีระบุประเภทท่าทางจาก Input Authority ไปยัง State Authority เพื่อซิงก์ทุกเครื่อง
+    /// </summary>
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_RequestAttackKind(byte attackKindByte)
+    {
+        ExecuteAuthorityAttack((PlayerAttackKind)attackKindByte);
+    }
+
+    /// <summary>
+    /// ประมวลผลการโจมตีฝั่ง State Authority: หัก Stamina, คำนวณ Combo และกระจาย RPC ไปยังผู้เล่นทุกคน
+    /// </summary>
+    private void ExecuteAuthorityAttack(PlayerAttackKind kind)
+    {
         if (!Object.HasStateAuthority) return;
         if (IsDead) return;
         if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)) return;
@@ -1078,7 +1244,12 @@ public class PlayerCombat : NetworkBehaviour
 
         float now = Time.time;
         if (now < _nextAuthorityAttackTime - cooldownTolerance) return;
-        if (!TryConsumeAuthorityStamina(attackStaminaCost)) return;
+
+        float staminaCost = (kind == PlayerAttackKind.HeavyCombo || kind == PlayerAttackKind.RunHeavyAttack ||
+                             kind == PlayerAttackKind.JumpHeavyAttack || kind == PlayerAttackKind.RunJumpHeavyAttack)
+            ? attackStaminaCost * 1.25f
+            : attackStaminaCost;
+        if (!TryConsumeAuthorityStamina(staminaCost)) return;
 
         _nextAuthorityAttackTime = now + attackCooldown;
         _lastCombatActivityTime = now;
@@ -1098,18 +1269,36 @@ public class PlayerCombat : NetworkBehaviour
         ComboStep = _authorityComboStep;
 
         _sequenceCounter++;
-        RPC_BroadcastAttack(_sequenceCounter, _authorityComboStep);
+        if (kind == PlayerAttackKind.LightCombo)
+            RPC_BroadcastAttack(_sequenceCounter, _authorityComboStep);
+        else
+            RPC_BroadcastAttackKind(_sequenceCounter, _authorityComboStep, (byte)kind);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_BroadcastAttack(int sequence, int comboStep = 1)
     {
+        ApplyBroadcastAttack(sequence, comboStep, PlayerAttackKind.LightCombo);
+    }
+
+    /// <summary>
+    /// กระจายคำสั่งเล่นท่าโจมตีพิเศษ (Heavy, Run, Jump, Stealth Assassination, SpellCast) ไปยังทุกเครื่อง
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastAttackKind(int sequence, int comboStep, byte attackKindByte)
+    {
+        ApplyBroadcastAttack(sequence, comboStep, (PlayerAttackKind)attackKindByte);
+    }
+
+    private void ApplyBroadcastAttack(int sequence, int comboStep, PlayerAttackKind kind)
+    {
         CurrentSequence = sequence;
         ComboStep = comboStep;
+        CurrentAttackKind = kind;
         _lastCombatActivityTime = Time.time;
 
         if (_animationDriver != null)
-            _animationDriver.PlayAttack(comboStep);
+            _animationDriver.PlayAttackKind(kind, comboStep);
         else if (animator != null && _attackTriggerHash != 0)
             animator.SetTrigger(_attackTriggerHash);
 
@@ -1118,6 +1307,40 @@ public class PlayerCombat : NetworkBehaviour
 
         if (_hitWindowRoutine != null) StopCoroutine(_hitWindowRoutine);
         _hitWindowRoutine = StartCoroutine(HitWindowRoutine());
+    }
+
+    /// <summary>
+    /// ซิงก์อนิเมชันรับแรงกระแทกขณะตั้งการ์ด (Block Hit) ข้ามเครือข่าย
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastBlockHit()
+    {
+        if (!IsDead) _animationDriver?.PlayBlockImpact();
+    }
+
+    /// <summary>
+    /// ซิงก์อนิเมชันการ์ดแตก (Guard Break / Stunned) เมื่อ Stamina หมดขณะตั้งการ์ด
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastGuardBreak()
+    {
+        if (!IsDead) _animationDriver?.PlayGuardBreak();
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_RequestConsumableBuff()
+    {
+        if (!Object.HasStateAuthority || IsDead) return;
+        RPC_BroadcastConsumableBuff();
+    }
+
+    /// <summary>
+    /// ซิงก์อนิเมชันใช้ยา/บัฟ (Buff) ข้ามเครือข่ายไปยังผู้เล่นทุกคน
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastConsumableBuff()
+    {
+        if (!IsDead) _animationDriver?.PlayBuff();
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
@@ -1322,20 +1545,45 @@ public class PlayerCombat : NetworkBehaviour
         _lastNpcHitSequence[id] = CurrentSequence;
 
         int totalAtk = TotalAttackDamage;
+        bool isStealthStrike = CurrentAttackKind == PlayerAttackKind.StealthAssassination && !npc.IsBoss;
+        bool isHeavyStrike = CurrentAttackKind == PlayerAttackKind.HeavyCombo ||
+                             CurrentAttackKind == PlayerAttackKind.RunHeavyAttack ||
+                             CurrentAttackKind == PlayerAttackKind.JumpHeavyAttack ||
+                             CurrentAttackKind == PlayerAttackKind.RunJumpHeavyAttack;
+
         bool isComboCrit = ComboStep >= 2;
         bool isStatCrit = !isComboCrit && UnityEngine.Random.value < TotalCritChance;
-        bool isCrit = isComboCrit || isStatCrit;
+        bool isCrit = isStealthStrike || isHeavyStrike || isComboCrit || isStatCrit;
 
-        float mult = ComboStep switch
+        float mult;
+        if (isStealthStrike)
         {
-            2 => comboStep2CritMultiplier,
-            3 => comboStep3CritMultiplier,
-            _ => isStatCrit ? 1.5f : 1f
-        };
+            // ท่าลอบสังหารจากด้านหลังทำความเสียหายวิกฤต 3.0 เท่า
+            mult = 3.0f;
+        }
+        else if (isHeavyStrike)
+        {
+            mult = ComboStep switch
+            {
+                2 => comboStep2CritMultiplier * 1.25f,
+                3 => comboStep3CritMultiplier * 1.25f,
+                _ => 1.4f
+            };
+        }
+        else
+        {
+            mult = ComboStep switch
+            {
+                2 => comboStep2CritMultiplier,
+                3 => comboStep3CritMultiplier,
+                _ => isStatCrit ? 1.5f : 1f
+            };
+        }
+
         int finalDamage = Mathf.Max(1, Mathf.RoundToInt(totalAtk * mult));
         _lastCombatActivityTime = Time.time;
 
-        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} (Combo {ComboStep}{(isCrit ? " CRIT!" : "")}) hit NPC {npc.name} (id={id}) for {finalDamage} (TotalATK={totalAtk}).");
+        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} ({CurrentAttackKind}, Combo {ComboStep}{(isCrit ? " CRIT!" : "")}) hit NPC {npc.name} (id={id}) for {finalDamage} (TotalATK={totalAtk}).");
         npc.RPC_TakeDamageWithCrit(finalDamage, isCrit, ComboStep);
     }
 
@@ -1420,7 +1668,13 @@ public class PlayerCombat : NetworkBehaviour
                 if (_capsule != null) _capsule.SpeedMultiplier = 1f;
                 UpdateBlockVfxVisual(false);
                 RPC_BroadcastBlocking(false);
+                RPC_BroadcastGuardBreak();
                 Debug.Log("[PlayerCombat] Guard broken! Stamina depleted from blocking hit.");
+            }
+            else
+            {
+                // เล่นอนิเมชันรับแรงปะทะขณะตั้งการ์ด (Block Hit) บนทุกเครื่อง
+                RPC_BroadcastBlockHit();
             }
         }
         if (damage <= 0) return;
@@ -1453,7 +1707,12 @@ public class PlayerCombat : NetworkBehaviour
 
     public void TeleportTo(Vector3 targetPosition)
     {
-        if (_rb != null)
+        if (_capsule != null)
+        {
+            _capsule.TeleportCharacter(targetPosition);
+            return;
+        }
+        if (_rb != null && !_rb.isKinematic)
         {
             _rb.position = targetPosition;
             _rb.linearVelocity = Vector3.zero;

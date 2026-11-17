@@ -233,6 +233,7 @@ MonoBehaviour:
   nameText: {fileID: 1817101945430857245}
   readyText: {fileID: 5610135267706370599}
   readyBadge: {fileID: 2033236470368565992}
+  hostBadge: {fileID: 0}
   readyColor: {r: 0.2, g: 0.78, b: 0.35, a: 1}
   notReadyColor: {r: 0.8, g: 0.27, b: 0.27, a: 1}
   localHighlight: {r: 1, g: 0.85, b: 0.3, a: 1}
@@ -1251,6 +1252,7 @@ MonoBehaviour:
   nameText: {fileID: 198208985003139863}
   readyText: {fileID: 1477753294657140286}
   readyBadge: {fileID: 3852139883983526913}
+  hostBadge: {fileID: 0}
   readyColor: {r: 0.2, g: 0.78, b: 0.35, a: 1}
   notReadyColor: {r: 0.8, g: 0.27, b: 0.27, a: 1}
   localHighlight: {r: 1, g: 0.85, b: 0.3, a: 1}
@@ -2140,15 +2142,23 @@ MonoBehaviour:
   - {fileID: 2759119043041728382}
   - {fileID: 1310772909921217211}
   avatarSprites:
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
-  - {fileID: 0}
+  - {fileID: 21300000, guid: 3eb16a6be11ffab46bfcdfe3924f4d72, type: 3}
+  - {fileID: 21300000, guid: 94e7356783d3b7a4dae760fd22df54a1, type: 3}
+  - {fileID: 21300000, guid: 2a7c2e5ef8a42024db4ed7d1ad9a94b6, type: 3}
+  - {fileID: 21300000, guid: 9961c8ad52b08844cb2148f945f60f49, type: 3}
   readyButton: {fileID: 2335553678662867458}
   readyButtonLabel: {fileID: 3672224065365161613}
+  playButton: {fileID: 0}
+  playButtonLabel: {fileID: 0}
+  hidePlayForNonHost: 1
+  requireAllReady: 1
+  minPlayersToStart: 1
   leaveButton: {fileID: 558941833572813967}
+  editPlayerButton: {fileID: 0}
   statusText: {fileID: 4325577237175217626}
+  editPlayerPanel: {fileID: 0}
   refreshInterval: 0.1
+  hostNoticeDuration: 4
 --- !u!1 &5268682640777710841
 GameObject:
   m_ObjectHideFlags: 0
@@ -3184,6 +3194,7 @@ MonoBehaviour:
   nameText: {fileID: 2740105460303594756}
   readyText: {fileID: 3082544184550657922}
   readyBadge: {fileID: 5780979034391099176}
+  hostBadge: {fileID: 0}
   readyColor: {r: 0.2, g: 0.78, b: 0.35, a: 1}
   notReadyColor: {r: 0.8, g: 0.27, b: 0.27, a: 1}
   localHighlight: {r: 1, g: 0.85, b: 0.3, a: 1}
@@ -3638,6 +3649,7 @@ MonoBehaviour:
   nameText: {fileID: 6411475249732164040}
   readyText: {fileID: 241821151694872827}
   readyBadge: {fileID: 1859248236011230407}
+  hostBadge: {fileID: 0}
   readyColor: {r: 0.2, g: 0.78, b: 0.35, a: 1}
   notReadyColor: {r: 0.8, g: 0.27, b: 0.27, a: 1}
   localHighlight: {r: 1, g: 0.85, b: 0.3, a: 1}

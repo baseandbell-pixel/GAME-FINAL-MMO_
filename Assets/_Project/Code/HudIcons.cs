@@ -2,16 +2,53 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Generates lightweight, crisp runtime Sprite icons for HUD portraits, 4-slot equipment,
-/// consumables, and World Map markers without external texture asset dependencies.
+/// ระบบสร้างและโหลดไอคอน Sprite สำหรับ HUD, รูปโปรไฟล์ตัวละครจากฉาก Lobby (Avatar_0..3),
+/// ช่องอุปกรณ์ 4 ชิ้น (Sword, Shield, Armor, Pants), ไอเทมกดใช้ และหมุดบนแผนที่โลก (World Map)
 /// </summary>
 public static class HudIcons
 {
     private static readonly Dictionary<string, Sprite> _cache = new Dictionary<string, Sprite>();
+    private static readonly Dictionary<int, Sprite> _lobbyAvatars = new Dictionary<int, Sprite>();
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-    private static void ResetCache() => _cache.Clear();
+    private static void ResetCache()
+    {
+        _cache.Clear();
+        _lobbyAvatars.Clear();
+    }
 
+    /// <summary>
+    /// โหลดรูปโปรไฟล์ Avatar (0..3) ที่ผู้เล่นเลือกมาจากหน้า Lobby (Resources/Avatars/Avatar_0..3)
+    /// หากหาไม่เจอจะคืนค่าไอคอน Avatar มาตรฐานแทน
+    /// </summary>
+    public static Sprite GetLobbyAvatarSprite(int avatarIndex)
+    {
+        int clamped = Mathf.Clamp(avatarIndex, 0, 3);
+        if (_lobbyAvatars.TryGetValue(clamped, out Sprite sp) && sp != null)
+            return sp;
+
+        sp = Resources.Load<Sprite>($"Avatars/Avatar_{clamped}");
+        if (sp == null)
+        {
+            var tex = Resources.Load<Texture2D>($"Avatars/Avatar_{clamped}");
+            if (tex != null)
+            {
+                sp = Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+            }
+        }
+
+        if (sp != null)
+        {
+            _lobbyAvatars[clamped] = sp;
+            return sp;
+        }
+
+        return GetSprite("avatar");
+    }
+
+    /// <summary>
+    /// คืนค่าไอคอนสำหรับแสดงผลไอเทมแต่ละประเภท
+    /// </summary>
     public static Sprite GetForItem(ItemData item)
     {
         if (item == null) return GetSprite("empty");
@@ -29,6 +66,9 @@ public static class HudIcons
         };
     }
 
+    /// <summary>
+    /// คืนค่าไอคอนประจำช่องอุปกรณ์ทั้ง 4 ช่อง (Sword, Shield, Armor, Pants)
+    /// </summary>
     public static Sprite GetForEquipmentSlot(EquipmentSlotType slot)
     {
         return slot switch
@@ -41,6 +81,9 @@ public static class HudIcons
         };
     }
 
+    /// <summary>
+    /// สร้างหรือดึงไอคอนรูปทรงเรขาคณิตที่แคชไว้ตามชื่อชนิด
+    /// </summary>
     public static Sprite GetSprite(string kind)
     {
         if (_cache.TryGetValue(kind, out Sprite cached) && cached != null)
@@ -105,7 +148,6 @@ public static class HudIcons
                         break;
 
                     case "boss":
-                        // Crown + Skull emblem
                         bool skull = (nx * nx * 1.1f + (ny + 0.18f) * (ny + 0.18f)) <= 0.36f;
                         bool crownBase = ny >= 0.25f && ny <= 0.46f && Mathf.Abs(nx) <= 0.65f;
                         bool crownSpikes = ny > 0.46f && ny <= 0.82f &&
@@ -115,7 +157,6 @@ public static class HudIcons
                         break;
 
                     case "camp":
-                        // Crossed banner / camp ring
                         float r2 = nx * nx + ny * ny;
                         bool ring = r2 <= 0.86f && r2 >= 0.48f;
                         bool core = r2 <= 0.18f;

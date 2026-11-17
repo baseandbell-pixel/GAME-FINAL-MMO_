@@ -15,7 +15,8 @@ public class SafeZone : MonoBehaviour
     public static SafeZone Instance { get; private set; }
 
     [SerializeField] private float radius = 7.5f;
-    [SerializeField] private Vector3 reconnectLocalOffset = new Vector3(0f, 1.0f, 0f);
+    // ระยะชดเชยแนวดิ่งเมื่อวาร์ปผู้เล่นกลับเข้า Safe Zone (ปรับให้พอดีกับ Pivot ที่ปลายเท้าของ GreatSwordGirl)
+    [SerializeField] private Vector3 reconnectLocalOffset = new Vector3(0f, 0.05f, 0f);
 
     public float Radius => radius;
     public Vector3 Center => transform.position;

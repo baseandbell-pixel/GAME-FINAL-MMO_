@@ -15,3 +15,9 @@ Logs/
 *.suo
 *.user
 *.userprefs
+
+# Agent / Test / Unity Recovery temporary folders
+AgentScripts/
+Screenshots/
+Assets/_Recovery/
+Assets/_Recovery.meta
