@@ -39,8 +39,11 @@ public class SandboxBootstrap : MonoBehaviour
     private bool _starting;
     private bool _destroyed;
 
+    public static bool OfflineFallbackActive { get; private set; }
+
     private void Awake()
     {
+        OfflineFallbackActive = false;
         // Standalone path only: hold the spawner back until the session is fully ready.
         if (!HasRunningRunner())
         {
@@ -67,11 +70,6 @@ public class SandboxBootstrap : MonoBehaviour
         }
 
         int buildIndex = SceneManager.GetActiveScene().buildIndex;
-        if (buildIndex < 0)
-        {
-            Debug.LogError($"[SandboxBootstrap] Scene '{SceneManager.GetActiveScene().name}' is not in Build Settings.");
-            return;
-        }
 
         _starting = true;
         try
@@ -81,7 +79,14 @@ public class SandboxBootstrap : MonoBehaviour
             _runner.ProvideInput = false;           // combat/movement are owner-driven, not tick-input driven
 
             var sceneInfo = new NetworkSceneInfo();
-            sceneInfo.AddSceneRef(SceneRef.FromIndex(buildIndex));
+            if (buildIndex >= 0)
+            {
+                sceneInfo.AddSceneRef(SceneRef.FromIndex(buildIndex));
+            }
+            else
+            {
+                Debug.LogWarning($"[SandboxBootstrap] Scene '{SceneManager.GetActiveScene().name}' is not enabled in Build Settings; starting session without scene reload.");
+            }
 
             var result = await _runner.StartGame(new StartGameArgs
             {
@@ -95,7 +100,9 @@ public class SandboxBootstrap : MonoBehaviour
 
             if (!result.Ok)
             {
-                Debug.LogError($"[SandboxBootstrap] Start failed: {result.ShutdownReason}");
+                Debug.LogWarning($"[SandboxBootstrap] Photon Shared connection failed ({result.ShutdownReason}). Enabling offline local fallback so you can still test in the Editor.");
+                OfflineFallbackActive = true;
+                ReleaseController();
                 return;
             }
 

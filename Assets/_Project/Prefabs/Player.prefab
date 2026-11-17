@@ -1703,6 +1703,7 @@ GameObject:
   - component: {fileID: 1183383062373467830}
   - component: {fileID: 431166334951252831}
   - component: {fileID: 43639104908276042}
+  - component: {fileID: -4835116904186906001}
   m_Layer: 0
   m_Name: Player
   m_TagString: Player
@@ -2013,6 +2014,22 @@ MonoBehaviour:
   _IsBlocking:
     RawValue: 0
   _ComboStep: 1
+  _NetworkLevel: 1
+  _NetworkExperience: 0
+  _NetworkUnspentStatPoints: 0
+  _StatPointsSTR: 0
+  _StatPointsVIT: 0
+  _StatPointsEND: 0
+  _StatPointsAGI: 0
+  _NetworkGold: 0
+  _IsInSafeZone:
+    RawValue: 0
+  _NetworkGearDamageBonus: 0
+  _NetworkGearMaxHealthBonus: 0
+  _NetworkGearMaxStaminaBonus: 0
+  _NetworkGearDefenseBonus: 0
+  _NetworkGearMoveSpeedBonus: 0
+  _NetworkGearCritBonus: 0
 --- !u!114 &1183383062373467830
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2066,6 +2083,22 @@ MonoBehaviour:
   swordBack: {fileID: 110398276086683624}
   locomotionDampTime: 0.08
   alwaysArmedInSandbox: 1
+--- !u!114 &-4835116904186906001
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5419122963534593085}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dd186485b8c8dcd4db9c58471ecea673, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::SwordWindSlashVFX
+  windSlashPrefab: {fileID: 8892043519662639876, guid: ca3c1acb1770d874b8b78ca1eecfa992, type: 3}
+  activeSlashStartNormalized: 0.19
+  activeSlashEndNormalized: 0.48
+  waveSpawnOffset: {x: 0, y: 1.15, z: 0.75}
 --- !u!1 &5579243513453936096
 GameObject:
   m_ObjectHideFlags: 0

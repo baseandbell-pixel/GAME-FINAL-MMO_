@@ -27,6 +27,18 @@ public class GameSceneController : MonoBehaviour
     bool _spawnRequested;
     float _nextSpawnAttempt;
 
+    void Awake()
+    {
+        // ถ้ากด Play ในฉากแมปโดยตรง (เช่น TestScene หรือ Map1) โดยไม่มี LobbyNetwork หรือ SandboxBootstrap
+        // ให้สร้าง SandboxBootstrap อัตโนมัติเพื่อเชื่อมต่อ Photon และเสกตัวละครทันที
+        if (LobbyNetwork.Instance == null &&
+            FindAnyObjectByType<NetworkRunner>() == null &&
+            FindAnyObjectByType<SandboxBootstrap>() == null)
+        {
+            gameObject.AddComponent<SandboxBootstrap>();
+        }
+    }
+
     void Update()
     {
         if (_runner == null)
@@ -35,7 +47,14 @@ public class GameSceneController : MonoBehaviour
             if (_runner == null) _runner = FindAnyObjectByType<NetworkRunner>();
         }
 
-        if (_runner == null || !_runner.IsRunning) return;
+        if (_runner == null || !_runner.IsRunning)
+        {
+            if (SandboxBootstrap.OfflineFallbackActive && !_spawnRequested)
+            {
+                SpawnOfflineFallbackPlayer();
+            }
+            return;
+        }
 
         if (!_spawnRequested) TrySpawnLocalPlayer();
 
@@ -106,6 +125,28 @@ public class GameSceneController : MonoBehaviour
         if (lockSys != null)
         {
             soulsCamera.lockSys = lockSys;
+        }
+    }
+
+    void SpawnOfflineFallbackPlayer()
+    {
+        _spawnRequested = true;
+        Vector3 spawnPos = GetSpawnPosition(0);
+        Quaternion spawnRot = GetSpawnRotation(0);
+
+        if (characterPrefab != null)
+        {
+            var spawnedObj = Instantiate(characterPrefab.gameObject, spawnPos, spawnRot);
+            if (soulsCamera == null) soulsCamera = FindAnyObjectByType<SoulsCamera>();
+            if (soulsCamera != null) BindSoulsCamera(spawnedObj.transform);
+            Debug.Log("[GameSceneController] Spawned characterPrefab in Offline Fallback mode.");
+        }
+        else if (playerCapsulePrefab != null)
+        {
+            var capsule = Instantiate(playerCapsulePrefab, spawnPos, spawnRot);
+            if (followCamera == null) followCamera = FindAnyObjectByType<PlayerFollowCamera>();
+            if (followCamera != null) followCamera.target = capsule.transform;
+            Debug.Log("[GameSceneController] Spawned playerCapsulePrefab in Offline Fallback mode.");
         }
     }
 

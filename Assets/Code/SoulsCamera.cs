@@ -21,25 +21,48 @@ public class SoulsCamera : MonoBehaviour
     float yaw, pitch = 15f;
     float currentDist, velY;
     Vector3 pivot;
+    bool initialized;
     readonly RaycastHit[] hits = new RaycastHit[8];
 
     void Start()
     {
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
+        currentDist = distance;
+        if (target != null)
+        {
+            InitializeFromTarget();
+        }
+    }
+
+    void InitializeFromTarget()
+    {
+        if (target == null) return;
         yaw = target.eulerAngles.y;
         pivot = target.position + pivotOffset;
         currentDist = distance;
+        initialized = true;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 
     void LateUpdate()
     {
         if (target == null || Mouse.current == null) return;
 
-        if (Keyboard.current.escapeKey.wasPressedThisFrame)
+        if (!initialized)
+        {
+            InitializeFromTarget();
+        }
+
+        if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
+        }
+        else if (Cursor.lockState != CursorLockMode.Locked && !GameplayInput.IsBlocked &&
+                 Mouse.current.leftButton.wasPressedThisFrame)
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
         }
 
         // X/Z ตามเป๊ะ, Y หน่วงนิดหน่อย

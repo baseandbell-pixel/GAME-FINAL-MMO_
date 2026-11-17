@@ -12,7 +12,7 @@ public class EnemyZone : MonoBehaviour
     {
         if (player == null)
         {
-            player = FindFirstObjectByType<CombatState>();
+            player = FindAnyObjectByType<CombatState>();
             if (player == null) return;
         }
 
