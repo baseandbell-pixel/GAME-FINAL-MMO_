@@ -152,12 +152,40 @@ public sealed class MMOPlayerController : MonoBehaviour
     private float attackSafetyTimeout = 5f;
 
     // =========================================================
+    // DODGE / ROLL & HIT REACTION
+    // =========================================================
+
+    [Header("Dodge & Combat Feel")]
+
+    [SerializeField, Min(1.5f)]
+    private float dodgeDistance = 5.4f;
+
+    [SerializeField, Min(0.15f)]
+    private float dodgeDuration = 0.34f;
+
+    [SerializeField, Min(0.10f)]
+    private float dodgeInvulnerabilityDuration = 0.30f;
+
+    [SerializeField, Min(0.25f)]
+    private float dodgeCooldown = 1.15f;
+
+    // =========================================================
     // PRIVATE REFERENCES
     // =========================================================
 
     private CharacterController _characterController;
 
     private MMOCameraController _cameraController;
+
+    private Transform _visualRoot;
+
+    private Vector3 _visualBaseLocalPos;
+
+    private Quaternion _visualBaseLocalRot = Quaternion.identity;
+
+    private Renderer[] _playerRenderers;
+
+    private Coroutine _hitFlashCoroutine;
 
     // =========================================================
     // PLAYER CONTROL STATE
@@ -168,6 +196,8 @@ public sealed class MMOPlayerController : MonoBehaviour
     private bool _isGrounded;
 
     private bool _isDead;
+
+    private bool _inputSuppressed;
 
     private float _nextFootstepTime;
 
@@ -230,6 +260,18 @@ public sealed class MMOPlayerController : MonoBehaviour
     private bool _cachedGameplayInputAllowed;
     private bool _jumpPressed;
     private bool _attackPressed;
+    private bool _dodgePressed;
+
+    // Dodge & Hit-React runtime state
+    private bool _isDodging;
+    private float _dodgeStartedAt;
+    private float _invulnerableUntil;
+    private float _nextDodgeAllowedTime;
+    private Vector3 _dodgeDirection = Vector3.forward;
+    private float _hitFlinchUntil;
+    private Vector3 _hitKnockbackVelocity;
+    private float _remoteDodgeUntil;
+    private float _remoteHitUntil;
 
     // =========================================================
     // ANIMATOR PARAMETER VALIDATION
@@ -256,6 +298,8 @@ public sealed class MMOPlayerController : MonoBehaviour
     /// 3 = Attack2
     /// 4 = SkillE (Heavy Stun Strike)
     /// 5 = SkillR (Heal)
+    /// 6 = Dodge Dash
+    /// 7 = Hit React
     /// </summary>
 
     public int NetworkActionCode =>
@@ -282,8 +326,30 @@ public sealed class MMOPlayerController : MonoBehaviour
     public bool IsDead =>
         _isDead;
 
+    public bool IsDodging =>
+        _isDodging;
+
+    public bool IsInvulnerable =>
+        Time.time < _invulnerableUntil;
+
+    public float DodgeCooldownRemaining =>
+        Mathf.Max(0f, _nextDodgeAllowedTime - Time.time);
+
     public int CurrentAttackStep =>
         _attackStep;
+
+    public void SetInputSuppressed(bool suppressed)
+    {
+        _inputSuppressed = suppressed;
+        if (suppressed)
+        {
+            _cachedMoveInput = Vector2.zero;
+            _cachedSprintHeld = false;
+            _jumpPressed = false;
+            _attackPressed = false;
+            _dodgePressed = false;
+        }
+    }
 
     public void SetDead(bool dead)
     {
@@ -294,6 +360,9 @@ public sealed class MMOPlayerController : MonoBehaviour
             _cachedSprintHeld = false;
             _jumpPressed = false;
             _attackPressed = false;
+            _dodgePressed = false;
+            _isDodging = false;
+            _hitKnockbackVelocity = Vector3.zero;
             _currentMoveSpeed = 0f;
             _speedSmoothVelocity = 0f;
             if (_attackActive)
@@ -301,6 +370,30 @@ public sealed class MMOPlayerController : MonoBehaviour
                 FinishAttack();
             }
         }
+        else if (animator != null)
+        {
+            animator.speed = 1f;
+        }
+    }
+
+    public void ApplyHitReaction(Vector3 attackerWorldPosition, bool isCritical)
+    {
+        if (_isDead || IsInvulnerable)
+        {
+            return;
+        }
+
+        _hitFlinchUntil = Time.time + (isCritical ? 0.28f : 0.20f);
+        Vector3 pushDir = transform.position - attackerWorldPosition;
+        pushDir.y = 0f;
+        if (pushDir.sqrMagnitude > 0.001f)
+        {
+            _hitKnockbackVelocity = pushDir.normalized * (isCritical ? 4.4f : 2.6f);
+        }
+
+        _networkActionCode = 7;
+        _networkActionSequence++;
+        TriggerPlayerHitFlash(isCritical);
     }
 
     public void TriggerSkillAction(int actionCode)
@@ -364,6 +457,14 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         // CharacterController controls root movement.
         animator.applyRootMotion = false;
+
+        _visualRoot = transform.Find("VisualRoot") ?? animator.transform;
+        if (_visualRoot != null)
+        {
+            _visualBaseLocalPos = _visualRoot.localPosition;
+            _visualBaseLocalRot = _visualRoot.localRotation;
+        }
+        _playerRenderers = GetComponentsInChildren<Renderer>(true);
 
         CacheAnimatorParameters();
     }
@@ -429,6 +530,7 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         bool gameplayInputAllowed =
             !_isDead &&
+            !_inputSuppressed &&
             (_cameraController == null
                 ? allowStandaloneInput
                 : _cameraController.GameplayEnabled);
@@ -456,6 +558,7 @@ public sealed class MMOPlayerController : MonoBehaviour
             // Keep one-frame button presses until the next Fusion simulation tick.
             _jumpPressed |= Input.GetKeyDown(KeyCode.Space); // <--- จุดที่แก้ไข/เพิ่มเติม
             _attackPressed |= Input.GetMouseButtonDown(0) && CanStartAttackFromMouse(); // <--- จุดที่แก้ไข/เพิ่มเติม
+            _dodgePressed |= Input.GetKeyDown(KeyCode.LeftControl) || (Input.GetMouseButtonDown(1) && CanStartAttackFromMouse());
         }
         else
         {
@@ -473,6 +576,8 @@ public sealed class MMOPlayerController : MonoBehaviour
         {
             SimulateNetworked(Time.deltaTime);
         }
+
+        UpdateVisualOverlay(Time.deltaTime, isRemote: false);
     }
 
     /// <summary>
@@ -485,6 +590,7 @@ public sealed class MMOPlayerController : MonoBehaviour
         {
             _jumpPressed = false;
             _attackPressed = false;
+            _dodgePressed = false;
             return;
         }
 
@@ -525,6 +631,29 @@ public sealed class MMOPlayerController : MonoBehaviour
         UpdateJumpLock();
 
         // =====================================================
+        // DODGE / ROLL INPUT (Can Attack-Cancel!)
+        // =====================================================
+
+        if (_isDodging && Time.time - _dodgeStartedAt >= dodgeDuration)
+        {
+            _isDodging = false;
+        }
+
+        if (gameplayInputAllowed &&
+            _dodgePressed &&
+            !_isDodging &&
+            !_jumpLocked &&
+            _isGrounded &&
+            Time.time >= _nextDodgeAllowedTime)
+        {
+            Vector3 desiredDodgeDir = moveDirection.sqrMagnitude > 0.01f
+                ? moveDirection
+                : cameraForward;
+            BeginDodge(desiredDodgeDir);
+        }
+        _dodgePressed = false;
+
+        // =====================================================
         // JUMP INPUT
         // =====================================================
 
@@ -532,6 +661,7 @@ public sealed class MMOPlayerController : MonoBehaviour
             _jumpPressed &&
             _isGrounded &&
             !_attackActive &&
+            !_isDodging &&
             !_jumpLocked)
         {
             BeginJump();
@@ -542,7 +672,7 @@ public sealed class MMOPlayerController : MonoBehaviour
         // ATTACK INPUT
         // =====================================================
 
-        if (gameplayInputAllowed && _attackPressed)
+        if (gameplayInputAllowed && _attackPressed && !_isDodging)
         {
             HandleAttackClick();
         }
@@ -577,9 +707,9 @@ public sealed class MMOPlayerController : MonoBehaviour
         // ATTACK MOVEMENT LOCK
         // =====================================================
 
-        if (_attackActive)
+        if (_attackActive || _isDodging || _isDead)
         {
-            _currentMoveSpeed = 0f;
+            _currentMoveSpeed = _isDodging ? (dodgeDistance / Mathf.Max(0.15f, dodgeDuration)) : 0f;
 
             _speedSmoothVelocity = 0f;
         }
@@ -600,12 +730,24 @@ public sealed class MMOPlayerController : MonoBehaviour
         // ROTATION
         // =====================================================
 
-        UpdateFacing(
-            moveDirection,
-            hasMoveInput,
-            isMovingBackward,
-            deltaTime
-        );
+        if (_isDodging)
+        {
+            UpdateFacing(
+                _dodgeDirection,
+                true,
+                false,
+                deltaTime
+            );
+        }
+        else
+        {
+            UpdateFacing(
+                moveDirection,
+                hasMoveInput,
+                isMovingBackward,
+                deltaTime
+            );
+        }
 
         // =====================================================
         // GRAVITY
@@ -617,10 +759,31 @@ public sealed class MMOPlayerController : MonoBehaviour
         // CHARACTER MOVEMENT
         // =====================================================
 
-        Vector3 horizontalVelocity =
-            _attackActive
-                ? Vector3.zero
-                : moveDirection * _currentMoveSpeed;
+        Vector3 horizontalVelocity;
+        if (_isDead)
+        {
+            horizontalVelocity = Vector3.zero;
+        }
+        else if (_isDodging)
+        {
+            float dodgeT = Mathf.Clamp01((Time.time - _dodgeStartedAt) / Mathf.Max(0.15f, dodgeDuration));
+            float dashSpeed = (dodgeDistance / Mathf.Max(0.15f, dodgeDuration)) * Mathf.Lerp(1.55f, 0.50f, dodgeT);
+            horizontalVelocity = _dodgeDirection * dashSpeed;
+        }
+        else if (_attackActive)
+        {
+            horizontalVelocity = Vector3.zero;
+        }
+        else
+        {
+            horizontalVelocity = moveDirection * _currentMoveSpeed;
+        }
+
+        if (_hitKnockbackVelocity.sqrMagnitude > 0.01f && !_isDodging && !_isDead)
+        {
+            horizontalVelocity += _hitKnockbackVelocity;
+            _hitKnockbackVelocity = Vector3.MoveTowards(_hitKnockbackVelocity, Vector3.zero, 18f * deltaTime);
+        }
 
         Vector3 totalVelocity =
             horizontalVelocity +
@@ -637,6 +800,10 @@ public sealed class MMOPlayerController : MonoBehaviour
         if (_attackActive || _isDead)
         {
             _networkAnimationSpeed = 0f;
+        }
+        else if (_isDodging)
+        {
+            _networkAnimationSpeed = 2.0f;
         }
         else if (isMovingBackward && hasMoveInput)
         {
@@ -1298,7 +1465,11 @@ public sealed class MMOPlayerController : MonoBehaviour
     {
         Vector3 facingDirection = Vector3.zero;
 
-        if (_attackActive)
+        if (_isDodging)
+        {
+            facingDirection = _dodgeDirection;
+        }
+        else if (_attackActive)
         {
             facingDirection =
                 _cameraController != null
@@ -1416,11 +1587,18 @@ public sealed class MMOPlayerController : MonoBehaviour
         float speed,
         bool grounded,
         int actionCode,
-        int actionSequence)
+        int actionSequence,
+        bool isRemoteDead = false)
     {
         if (_inputEnabled || animator == null)
         {
             return;
+        }
+
+        _isDead = isRemoteDead;
+        if (!_isDead && animator.speed < 0.99f)
+        {
+            animator.speed = 1f;
         }
 
         if (_hasSpeedParameter)
@@ -1443,67 +1621,183 @@ public sealed class MMOPlayerController : MonoBehaviour
 
         // Prevent repeating one-shot animation events.
 
-        if (actionSequence == _lastRemoteActionSequence)
+        if (actionSequence != _lastRemoteActionSequence)
+        {
+            _lastRemoteActionSequence = actionSequence;
+
+            switch (actionCode)
+            {
+                case 1:
+                    if (_hasJumpParameter)
+                    {
+                        animator.ResetTrigger(JumpHash);
+                        animator.SetTrigger(JumpHash);
+                    }
+                    break;
+
+                case 2:
+                    if (_hasAttack1Parameter)
+                    {
+                        animator.ResetTrigger(Attack1Hash);
+                        animator.SetTrigger(Attack1Hash);
+                    }
+                    break;
+
+                case 3:
+                case 4:
+                    if (_hasAttack2Parameter)
+                    {
+                        animator.ResetTrigger(Attack2Hash);
+                        animator.SetTrigger(Attack2Hash);
+                    }
+                    break;
+            }
+
+            if (actionCode == 2 || actionCode == 3)
+            {
+                bool finisher = actionCode == 3;
+                MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, 2.25f, finisher);
+                MMOAudioManager.PlaySwordSwing(transform.position, finisher);
+            }
+            else if (actionCode == 4)
+            {
+                Vector3 burstCenter = transform.position + Vector3.up * 1.0f + transform.forward * 1.5f;
+                MMOCombatVFX.SpawnHitEffect(burstCenter, isCritical: true, new Color(1f, 0.88f, 0.15f, 1f));
+                MMOAudioManager.PlayStunStrike(burstCenter);
+            }
+            else if (actionCode == 5)
+            {
+                MMOCombatVFX.SpawnRespawnEffect(transform.position);
+                MMOAudioManager.PlayHeal(transform.position);
+            }
+            else if (actionCode == 6)
+            {
+                _remoteDodgeUntil = Time.time + dodgeDuration;
+                MMOCombatVFX.SpawnDodgeBurst(transform.position, transform.forward);
+                MMOAudioManager.PlayDodgeDash(transform.position);
+            }
+            else if (actionCode == 7)
+            {
+                _remoteHitUntil = Time.time + 0.22f;
+                TriggerPlayerHitFlash(false);
+            }
+        }
+
+        UpdateVisualOverlay(Time.deltaTime, isRemote: true);
+    }
+
+    private void BeginDodge(Vector3 rawDirection)
+    {
+        if (_attackActive)
+        {
+            FinishAttack();
+        }
+
+        Vector3 dir = rawDirection;
+        dir.y = 0f;
+        if (dir.sqrMagnitude < 0.001f)
+        {
+            dir = transform.forward;
+            dir.y = 0f;
+        }
+        _dodgeDirection = dir.normalized;
+        _isDodging = true;
+        _dodgeStartedAt = Time.time;
+        _invulnerableUntil = Time.time + dodgeInvulnerabilityDuration;
+        _nextDodgeAllowedTime = Time.time + dodgeCooldown;
+
+        _networkActionCode = 6;
+        _networkActionSequence++;
+
+        MMOCombatVFX.SpawnDodgeBurst(transform.position, _dodgeDirection);
+        MMOAudioManager.PlayDodgeDash(transform.position);
+    }
+
+    private void TriggerPlayerHitFlash(bool isCritical)
+    {
+        if (!Application.isPlaying || _playerRenderers == null || _playerRenderers.Length == 0)
         {
             return;
         }
 
-        _lastRemoteActionSequence = actionSequence;
-
-        switch (actionCode)
+        if (_hitFlashCoroutine != null)
         {
-            case 1:
+            StopCoroutine(_hitFlashCoroutine);
+        }
+        _hitFlashCoroutine = StartCoroutine(PlayerHitFlashRoutine(isCritical));
+    }
 
-                if (_hasJumpParameter)
-                {
-                    animator.ResetTrigger(JumpHash);
+    private System.Collections.IEnumerator PlayerHitFlashRoutine(bool isCritical)
+    {
+        Color flashColor = isCritical
+            ? new Color(1f, 0.45f, 0.15f, 1f)
+            : new Color(1f, 0.22f, 0.22f, 1f);
 
-                    animator.SetTrigger(JumpHash);
-                }
-
-                break;
-
-            case 2:
-
-                if (_hasAttack1Parameter)
-                {
-                    animator.ResetTrigger(Attack1Hash);
-
-                    animator.SetTrigger(Attack1Hash);
-                }
-
-                break;
-
-            case 3:
-            case 4:
-
-                if (_hasAttack2Parameter)
-                {
-                    animator.ResetTrigger(Attack2Hash);
-
-                    animator.SetTrigger(Attack2Hash);
-                }
-
-                break;
+        MaterialPropertyBlock mpb = new MaterialPropertyBlock();
+        for (int i = 0; i < _playerRenderers.Length; i++)
+        {
+            Renderer r = _playerRenderers[i];
+            if (r == null || r is ParticleSystemRenderer || r.GetComponent<TMPro.TextMeshPro>() != null)
+            {
+                continue;
+            }
+            r.GetPropertyBlock(mpb);
+            mpb.SetColor("_BaseColor", flashColor);
+            mpb.SetColor("_Color", flashColor);
+            r.SetPropertyBlock(mpb);
         }
 
-        if (actionCode == 2 || actionCode == 3)
+        yield return new WaitForSeconds(0.11f);
+
+        for (int i = 0; i < _playerRenderers.Length; i++)
         {
-            bool finisher = actionCode == 3;
-            MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, 2.25f, finisher);
-            MMOAudioManager.PlaySwordSwing(transform.position, finisher);
+            Renderer r = _playerRenderers[i];
+            if (r == null || r is ParticleSystemRenderer || r.GetComponent<TMPro.TextMeshPro>() != null)
+            {
+                continue;
+            }
+            r.SetPropertyBlock(null);
         }
-        else if (actionCode == 4)
+
+        _hitFlashCoroutine = null;
+    }
+
+    private void UpdateVisualOverlay(float deltaTime, bool isRemote)
+    {
+        if (_visualRoot == null)
         {
-            Vector3 burstCenter = transform.position + Vector3.up * 1.0f + transform.forward * 1.5f;
-            MMOCombatVFX.SpawnHitEffect(burstCenter, isCritical: true, new Color(1f, 0.88f, 0.15f, 1f));
-            MMOAudioManager.PlayStunStrike(burstCenter);
+            return;
         }
-        else if (actionCode == 5)
+
+        Vector3 targetLocalPos = _visualBaseLocalPos;
+        Quaternion targetLocalRot = _visualBaseLocalRot;
+
+        bool dodgingVisual = isRemote ? (Time.time < _remoteDodgeUntil) : _isDodging;
+        bool hitVisual = isRemote ? (Time.time < _remoteHitUntil) : (Time.time < _hitFlinchUntil);
+
+        if (_isDead)
         {
-            MMOCombatVFX.SpawnRespawnEffect(transform.position);
-            MMOAudioManager.PlayHeal(transform.position);
+            // Collapse cleanly onto the arena floor instead of standing frozen upright.
+            targetLocalPos = new Vector3(_visualBaseLocalPos.x, Mathf.Max(0.12f, _visualBaseLocalPos.y - 0.36f), _visualBaseLocalPos.z);
+            targetLocalRot = _visualBaseLocalRot * Quaternion.Euler(-82f, 0f, 0f);
+            if (animator != null)
+            {
+                animator.speed = 0.05f;
+            }
         }
+        else if (dodgingVisual)
+        {
+            targetLocalPos = _visualBaseLocalPos + new Vector3(0f, -0.10f, 0f);
+            targetLocalRot = _visualBaseLocalRot * Quaternion.Euler(24f, 0f, 0f);
+        }
+        else if (hitVisual)
+        {
+            targetLocalRot = _visualBaseLocalRot * Quaternion.Euler(-16f, 0f, 0f);
+        }
+
+        float blendSpeed = _isDead ? 9f : 18f;
+        _visualRoot.localPosition = Vector3.Lerp(_visualRoot.localPosition, targetLocalPos, blendSpeed * deltaTime);
+        _visualRoot.localRotation = Quaternion.Slerp(_visualRoot.localRotation, targetLocalRot, blendSpeed * deltaTime);
     }
 
     // =========================================================

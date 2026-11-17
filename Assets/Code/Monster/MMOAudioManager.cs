@@ -23,11 +23,62 @@ public sealed class MMOAudioManager : MonoBehaviour
         }
     }
 
-    public static float MasterSfxVolume { get; set; } = 0.65f;
+    private const string PrefKeySfxVolume = "MMO_SfxVolume";
+    private const string PrefKeyBgmVolume = "MMO_BgmVolume";
+
+    private static float _masterSfxVolume = -1f;
+    public static float MasterSfxVolume
+    {
+        get
+        {
+            if (_masterSfxVolume < 0f)
+            {
+                _masterSfxVolume = PlayerPrefs.GetFloat(PrefKeySfxVolume, 0.65f);
+            }
+            return _masterSfxVolume;
+        }
+        set
+        {
+            _masterSfxVolume = Mathf.Clamp01(value);
+            PlayerPrefs.SetFloat(PrefKeySfxVolume, _masterSfxVolume);
+        }
+    }
+
+    private static float _masterBgmVolume = -1f;
+    public static float MasterBgmVolume
+    {
+        get
+        {
+            if (_masterBgmVolume < 0f)
+            {
+                _masterBgmVolume = PlayerPrefs.GetFloat(PrefKeyBgmVolume, 0.35f);
+            }
+            return _masterBgmVolume;
+        }
+        set
+        {
+            _masterBgmVolume = Mathf.Clamp01(value);
+            PlayerPrefs.SetFloat(PrefKeyBgmVolume, _masterBgmVolume);
+            if (_instance != null && _instance._bgmSource != null)
+            {
+                _instance._bgmSource.volume = _masterBgmVolume * 0.45f;
+            }
+        }
+    }
 
     private readonly Dictionary<string, AudioClip> _clips = new Dictionary<string, AudioClip>();
     private readonly List<AudioSource> _pool = new List<AudioSource>();
+    private AudioSource _bgmSource;
     private int _poolCursor;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    private static void EnsureAudioManagerInitialized()
+    {
+        if (Application.isPlaying)
+        {
+            _ = Instance;
+        }
+    }
 
     private void Awake()
     {
@@ -41,6 +92,7 @@ public sealed class MMOAudioManager : MonoBehaviour
         DontDestroyOnLoad(gameObject);
         BuildProceduralClips();
         WarmAudioSourcePool(12);
+        StartAmbientBgm();
     }
 
     private void WarmAudioSourcePool(int count)
@@ -72,6 +124,9 @@ public sealed class MMOAudioManager : MonoBehaviour
         _clips["death"] = CreateImpactClip("SFX_Death", 0.38f, 140f, 38f, 0.6f, 0.25f);
         _clips["footstep"] = CreateImpactClip("SFX_Footstep", 0.08f, 110f, 45f, 0.22f, 0.25f);
         _clips["boss_cast"] = CreateChimeClip("SFX_BossCast", 0.45f, new[] { 220f, 196f, 164.8f });
+        _clips["dodge"] = CreateNoiseWhooshClip("SFX_Dodge", 0.22f, 960f, 260f, 0.55f);
+        _clips["player_hurt"] = CreateImpactClip("SFX_PlayerHurt", 0.16f, 145f, 48f, 0.65f, 0.28f);
+        _clips["loot"] = CreateChimeClip("SFX_Loot", 0.28f, new[] { 659.25f, 880f, 1174.66f });
     }
 
     // =========================================================
@@ -136,6 +191,24 @@ public sealed class MMOAudioManager : MonoBehaviour
         Instance.PlayClipAt("boss_cast", worldPos, 0.70f, 0.95f);
     }
 
+    public static void PlayDodgeDash(Vector3 worldPos)
+    {
+        if (!Application.isPlaying) return;
+        Instance.PlayClipAt("dodge", worldPos, 0.62f, Random.Range(0.96f, 1.08f));
+    }
+
+    public static void PlayPlayerHurt(Vector3 worldPos)
+    {
+        if (!Application.isPlaying) return;
+        Instance.PlayClipAt("player_hurt", worldPos, 0.72f, Random.Range(0.92f, 1.04f));
+    }
+
+    public static void PlayLootPickup(Vector3 worldPos)
+    {
+        if (!Application.isPlaying) return;
+        Instance.PlayClipAt("loot", worldPos, 0.65f, Random.Range(0.96f, 1.08f));
+    }
+
     private void PlayClipAt(string key, Vector3 worldPos, float volume, float pitch)
     {
         if (MasterSfxVolume <= 0.001f || !_clips.TryGetValue(key, out AudioClip clip) || clip == null)
@@ -156,6 +229,78 @@ public sealed class MMOAudioManager : MonoBehaviour
         src.volume = Mathf.Clamp01(volume * MasterSfxVolume);
         src.clip = clip;
         src.Play();
+    }
+
+    private void StartAmbientBgm()
+    {
+        GameObject bgmGo = new GameObject("BGM_AmbientPlayer");
+        bgmGo.transform.SetParent(transform, false);
+        _bgmSource = bgmGo.AddComponent<AudioSource>();
+        _bgmSource.loop = true;
+        _bgmSource.playOnAwake = false;
+        _bgmSource.spatialBlend = 0f;
+        _bgmSource.volume = MasterBgmVolume * 0.45f;
+        _bgmSource.clip = CreateAmbientBgmClip("BGM_FantasyAmbient", 16f);
+        _bgmSource.Play();
+    }
+
+    private static AudioClip CreateAmbientBgmClip(string name, float duration)
+    {
+        const int sampleRate = 22050;
+        int samples = Mathf.Max(22050, Mathf.RoundToInt(sampleRate * duration));
+        float[] data = new float[samples];
+
+        // 4 chords x 4s each in D Dorian: Dm9 -> Bbmaj7 -> C6 -> Am7
+        float[][] chords =
+        {
+            new[] { 146.83f, 220.00f, 261.63f, 329.63f },
+            new[] { 116.54f, 174.61f, 220.00f, 293.66f },
+            new[] { 130.81f, 196.00f, 220.00f, 329.63f },
+            new[] { 110.00f, 164.81f, 220.00f, 261.63f },
+        };
+
+        float[] phases = new float[4];
+        float arpPhase = 0f;
+
+        for (int i = 0; i < samples; i++)
+        {
+            float time = (float)i / sampleRate;
+            float loopNorm = time / duration;
+            int chordIndex = Mathf.Clamp((int)(loopNorm * chords.Length), 0, chords.Length - 1);
+            float localChordT = (loopNorm * chords.Length) - chordIndex;
+            float[] chord = chords[chordIndex];
+
+            // Smooth crossfade inside each chord block so transitions are click-free
+            float chordEnv = Mathf.Sin(Mathf.Clamp01(localChordT) * Mathf.PI);
+            chordEnv = Mathf.Lerp(0.45f, 1f, chordEnv);
+
+            float pad = 0f;
+            for (int n = 0; n < chord.Length; n++)
+            {
+                phases[n] += chord[n] / sampleRate;
+                pad += Mathf.Sin(phases[n] * Mathf.PI * 2f) * (n == 0 ? 0.36f : 0.20f);
+            }
+            pad *= chordEnv;
+
+            // Gentle plucked harp note every 0.5 seconds
+            float beatTime = time % 0.5f;
+            int noteStep = ((int)(time / 0.5f)) % chord.Length;
+            float arpFreq = chord[(noteStep + 1) % chord.Length] * 2f;
+            arpPhase += arpFreq / sampleRate;
+            float arpEnv = Mathf.Sin(Mathf.Min(beatTime / 0.03f, 1f) * Mathf.PI * 0.5f) * Mathf.Exp(-beatTime * 6.5f);
+            float arp = Mathf.Sin(arpPhase * Mathf.PI * 2f) * arpEnv * 0.16f;
+
+            // Master loop edge fade (first/last 0.15s) for seamless looping
+            float edgeFade = 1f;
+            if (time < 0.15f) edgeFade = time / 0.15f;
+            else if (duration - time < 0.15f) edgeFade = (duration - time) / 0.15f;
+
+            data[i] = Mathf.Clamp((pad * 0.28f + arp) * edgeFade, -0.8f, 0.8f);
+        }
+
+        AudioClip clip = AudioClip.Create(name, samples, 1, sampleRate, false);
+        clip.SetData(data, 0);
+        return clip;
     }
 
     // =========================================================

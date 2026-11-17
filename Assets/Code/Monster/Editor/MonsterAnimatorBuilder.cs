@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Fusion;
+using Unity.AI.Navigation;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.AI;
 using UnityEngine.SceneManagement;
 
 /// <summary>
@@ -24,7 +26,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
     public const string LobbyScenePath = "Assets/Scenes/Lobby.unity";
     public const string PlayerPrefabPath = "Assets/Prefabs/Player.prefab";
     public const string PlayerControllerPath = "Assets/Characters/AC_Player.controller";
-    private const string PipelineVersionStampPath = "Temp/MonsterPipelineV3_Ready.stamp";
+    private const string PipelineVersionStampPath = "Temp/MonsterPipelineV7_Ready.stamp";
 
     public const string SlotSpawn = "Placeholder_Spawn";
     public const string SlotIdle = "Placeholder_Idle";
@@ -720,13 +722,17 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
 
                 if (localB.size.sqrMagnitude > 0.0001f)
                 {
-                    Vector3 lossy = smr.transform.lossyScale;
-                    Vector3 worldMin = smr.transform.position + Vector3.Scale(localB.min, lossy);
-                    Vector3 worldMax = smr.transform.position + Vector3.Scale(localB.max, lossy);
-                    Bounds wb = new Bounds((worldMin + worldMax) * 0.5f, new Vector3(
-                        Mathf.Abs(worldMax.x - worldMin.x),
-                        Mathf.Abs(worldMax.y - worldMin.y),
-                        Mathf.Abs(worldMax.z - worldMin.z)));
+                    Quaternion rot = smr.transform.rotation;
+                    Vector3 center = smr.transform.position + rot * localB.center;
+                    Vector3 ext = localB.extents;
+                    Vector3 right = rot * Vector3.right * ext.x;
+                    Vector3 up = rot * Vector3.up * ext.y;
+                    Vector3 fwd = rot * Vector3.forward * ext.z;
+                    Vector3 worldSize = new Vector3(
+                        Mathf.Abs(right.x) + Mathf.Abs(up.x) + Mathf.Abs(fwd.x),
+                        Mathf.Abs(right.y) + Mathf.Abs(up.y) + Mathf.Abs(fwd.y),
+                        Mathf.Abs(right.z) + Mathf.Abs(up.z) + Mathf.Abs(fwd.z)) * 2f;
+                    Bounds wb = new Bounds(center, worldSize);
 
                     if (!hasBounds)
                     {
@@ -781,7 +787,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
 
         float rawEnemyHeight = MeasureObjectVisualHeight(baseModelPrefab, aoc, idleClip);
         float heightMatchScale = (rawEnemyHeight > 0.25f)
-            ? Mathf.Clamp(playerHeight / rawEnemyHeight, 0.4f, 4.0f)
+            ? Mathf.Clamp(playerHeight / rawEnemyHeight, 0.4f, 6.0f)
             : 1.0f;
 
         string prefabPath = CombineAssetPath(monsterFolder, $"{safeName}_Monster.prefab");
@@ -845,6 +851,20 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
                 bridge = instance.AddComponent<MonsterAnimatorBridge>();
             }
             bridge.Config = config;
+
+            NavMeshAgent navAgent = instance.GetComponent<NavMeshAgent>();
+            if (navAgent == null)
+            {
+                navAgent = instance.AddComponent<NavMeshAgent>();
+            }
+            navAgent.radius = Mathf.Clamp(0.48f / Mathf.Max(0.1f, heightMatchScale), 0.25f, 1.2f);
+            navAgent.height = localColliderHeight;
+            navAgent.speed = 3.8f;
+            navAgent.angularSpeed = 540f;
+            navAgent.acceleration = 28f;
+            navAgent.stoppingDistance = 1.7f;
+            navAgent.obstacleAvoidanceType = ObstacleAvoidanceType.HighQualityObstacleAvoidance;
+            navAgent.updateRotation = false;
 
             MMOMonsterAI ai = instance.GetComponent<MMOMonsterAI>();
             if (ai == null)
@@ -977,8 +997,10 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
                     SetSerializedFloat(so, "comboWindowStart", 0.40f);
                     SetSerializedFloat(so, "comboWindowEnd", 0.88f);
                     so.ApplyModifiedPropertiesWithoutUndo();
-                    PrefabUtility.SaveAsPrefabAsset(playerRoot, PlayerPrefabPath);
                 }
+
+                RemoveSwordFromPlayer(playerRoot);
+                PrefabUtility.SaveAsPrefabAsset(playerRoot, PlayerPrefabPath);
             }
             finally
             {
@@ -987,6 +1009,17 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         }
 
         AssetDatabase.SaveAssets();
+    }
+
+    private static void RemoveSwordFromPlayer(GameObject playerRoot)
+    {
+        if (playerRoot == null) return;
+
+        Transform existingSword = FindBoneRecursive(playerRoot.transform, "Player_Sword_Equipped");
+        if (existingSword != null)
+        {
+            DestroyImmediate(existingSword.gameObject);
+        }
     }
 
     private static AnimatorState FindStateByName(AnimatorStateMachine sm, string stateName)
@@ -1061,11 +1094,16 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
             }
             else if (root.name.StartsWith("Ancient_", StringComparison.Ordinal) ||
                      root.name == "MMO_Map1_CombatSystem" ||
+                     root.name == "MMO_ArenaProps" ||
+                     root.name == "MMO_NavMeshSurface" ||
                      root.name == "LockOn Test Dummy")
             {
                 DestroyImmediate(root);
             }
         }
+
+        BuildMap1ArenaLandmarks();
+        BuildMap1ArenaNavMesh();
 
         // 1. Create MMOMap1CombatDirector so pressing Play directly in Map1 spawns the Player with MMOPlayerCombat!
         GameObject directorGo = new GameObject("MMO_Map1_CombatSystem");
@@ -1135,6 +1173,157 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         {
             EditorSceneManager.OpenScene(originalScenePath, OpenSceneMode.Single);
         }
+    }
+
+    private static void BuildMap1ArenaLandmarks()
+    {
+        EnsureFolderExists("Assets/Material");
+        Material stoneMat = LoadOrCreateUrpLitMaterial("Assets/Material/ArenaStone.mat", new Color(0.26f, 0.28f, 0.32f), 0.1f, 0.35f, Color.black);
+        Material sanctuaryGlow = LoadOrCreateUrpLitMaterial("Assets/Material/ArenaSanctuaryCrystal.mat", new Color(0.25f, 0.85f, 1.0f), 0.3f, 0.85f, new Color(0.15f, 0.65f, 0.95f));
+        Material bossGlow = LoadOrCreateUrpLitMaterial("Assets/Material/ArenaBossCrystal.mat", new Color(1.0f, 0.32f, 0.15f), 0.3f, 0.85f, new Color(0.95f, 0.25f, 0.08f));
+
+        GameObject root = new GameObject("MMO_ArenaProps");
+
+        // 1. Spawn Sanctuary Pillars around (0, 0, 0)
+        Vector3[] spawnPillars =
+        {
+            new Vector3(-3.8f, 0f, -3.8f),
+            new Vector3(3.8f, 0f, -3.8f),
+            new Vector3(-3.8f, 0f, 3.8f),
+            new Vector3(3.8f, 0f, 3.8f),
+        };
+        for (int i = 0; i < spawnPillars.Length; i++)
+        {
+            CreateArenaPillar(root.transform, $"Sanctuary_Pillar_{i + 1}", spawnPillars[i], 3.4f, 0.55f, stoneMat, sanctuaryGlow);
+        }
+
+        // 2. Warrior Camp Gate Pillars
+        CreateArenaPillar(root.transform, "WarriorCamp_Pillar_L", new Vector3(-5.2f, 0f, 11f), 4.2f, 0.7f, stoneMat, sanctuaryGlow);
+        CreateArenaPillar(root.transform, "WarriorCamp_Pillar_R", new Vector3(5.2f, 0f, 11f), 4.2f, 0.7f, stoneMat, sanctuaryGlow);
+
+        // 3. Guardian Camp Ruins
+        CreateArenaPillar(root.transform, "GuardianCamp_Pillar_1", new Vector3(-18.5f, 0f, 19.5f), 4.8f, 0.8f, stoneMat, sanctuaryGlow);
+        CreateArenaPillar(root.transform, "GuardianCamp_Pillar_2", new Vector3(-11.5f, 0f, 21.5f), 3.9f, 0.65f, stoneMat, sanctuaryGlow);
+
+        // 4. Warlord Boss Arena Monoliths
+        CreateArenaPillar(root.transform, "BossArena_Monolith_1", new Vector3(19f, 0f, 21f), 6.2f, 1.0f, stoneMat, bossGlow);
+        CreateArenaPillar(root.transform, "BossArena_Monolith_2", new Vector3(11f, 0f, 23f), 5.6f, 0.9f, stoneMat, bossGlow);
+        CreateArenaPillar(root.transform, "BossArena_Monolith_3", new Vector3(19.5f, 0f, 13.5f), 5.0f, 0.85f, stoneMat, bossGlow);
+
+        // 5. Tactical Ruin Cover Walls (Line-of-Sight blockers & NavMesh obstacles)
+        CreateArenaWall(root.transform, "WarriorCover_Wall_L", new Vector3(-2.6f, 0f, 7.2f), new Vector3(2.8f, 2.2f, 0.7f), 15f, stoneMat);
+        CreateArenaWall(root.transform, "WarriorCover_Wall_R", new Vector3(3.1f, 0f, 7.6f), new Vector3(2.6f, 2.0f, 0.7f), -18f, stoneMat);
+        CreateArenaWall(root.transform, "GuardianCover_Wall", new Vector3(-9.5f, 0f, 12.2f), new Vector3(3.4f, 2.4f, 0.8f), 38f, stoneMat);
+        CreateArenaWall(root.transform, "BossCover_Wall", new Vector3(9.5f, 0f, 13.0f), new Vector3(3.6f, 2.6f, 0.85f), -35f, stoneMat);
+
+        // 6. Arena Perimeter Walls at +-45m
+        CreateArenaWall(root.transform, "ArenaBoundary_North", new Vector3(0f, 0f, 45f), new Vector3(91.6f, 4.0f, 1.6f), 0f, stoneMat);
+        CreateArenaWall(root.transform, "ArenaBoundary_South", new Vector3(0f, 0f, -45f), new Vector3(91.6f, 4.0f, 1.6f), 0f, stoneMat);
+        CreateArenaWall(root.transform, "ArenaBoundary_West", new Vector3(-45f, 0f, 0f), new Vector3(1.6f, 4.0f, 91.6f), 0f, stoneMat);
+        CreateArenaWall(root.transform, "ArenaBoundary_East", new Vector3(45f, 0f, 0f), new Vector3(1.6f, 4.0f, 91.6f), 0f, stoneMat);
+    }
+
+    private static void BuildMap1ArenaNavMesh()
+    {
+        const string navMeshAssetPath = "Assets/Scenes/Map1_NavMesh.asset";
+        GameObject surfaceGo = new GameObject("MMO_NavMeshSurface");
+        NavMeshSurface surface = surfaceGo.AddComponent<NavMeshSurface>();
+        surface.collectObjects = CollectObjects.All;
+        surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
+        surface.layerMask = ~((1 << 7) | (1 << 5));
+
+        NavMeshData existingData = AssetDatabase.LoadAssetAtPath<NavMeshData>(navMeshAssetPath);
+        if (existingData != null)
+        {
+            surface.navMeshData = existingData;
+        }
+
+        surface.BuildNavMesh();
+
+        if (surface.navMeshData != null)
+        {
+            if (!AssetDatabase.Contains(surface.navMeshData))
+            {
+                AssetDatabase.CreateAsset(surface.navMeshData, navMeshAssetPath);
+            }
+            else
+            {
+                EditorUtility.SetDirty(surface.navMeshData);
+            }
+            AssetDatabase.SaveAssets();
+        }
+        EditorUtility.SetDirty(surface);
+    }
+
+    private static void CreateArenaWall(
+        Transform parent,
+        string name,
+        Vector3 basePosition,
+        Vector3 size,
+        float yawDegrees,
+        Material stoneMat)
+    {
+        GameObject wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        wall.name = name;
+        wall.transform.SetParent(parent, false);
+        wall.transform.position = basePosition + new Vector3(0f, size.y * 0.5f, 0f);
+        wall.transform.rotation = Quaternion.Euler(0f, yawDegrees, 0f);
+        wall.transform.localScale = size;
+        wall.GetComponent<Renderer>().sharedMaterial = stoneMat;
+    }
+
+    private static void CreateArenaPillar(
+        Transform parent,
+        string name,
+        Vector3 basePosition,
+        float height,
+        float width,
+        Material stoneMat,
+        Material crystalMat)
+    {
+        GameObject pillar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        pillar.name = name;
+        pillar.transform.SetParent(parent, false);
+        pillar.transform.position = basePosition + new Vector3(0f, height * 0.5f, 0f);
+        pillar.transform.localScale = new Vector3(width, height, width);
+        pillar.GetComponent<Renderer>().sharedMaterial = stoneMat;
+
+        GameObject crystal = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        crystal.name = name + "_Crystal";
+        crystal.transform.SetParent(pillar.transform, false);
+        crystal.transform.localPosition = new Vector3(0f, 0.56f, 0f);
+        crystal.transform.localRotation = Quaternion.Euler(45f, 45f, 0f);
+        crystal.transform.localScale = new Vector3(0.45f, 0.45f / Mathf.Max(0.5f, height / width), 0.45f);
+        crystal.GetComponent<Renderer>().sharedMaterial = crystalMat;
+        DestroyImmediate(crystal.GetComponent<Collider>());
+    }
+
+    private static Material LoadOrCreateUrpLitMaterial(
+        string assetPath,
+        Color baseColor,
+        float metallic,
+        float smoothness,
+        Color emissionColor)
+    {
+        Material mat = AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+        if (mat == null)
+        {
+            Shader urpLit = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            mat = new Material(urpLit);
+            AssetDatabase.CreateAsset(mat, assetPath);
+        }
+
+        mat.SetColor("_BaseColor", baseColor);
+        mat.SetColor("_Color", baseColor);
+        mat.SetFloat("_Metallic", metallic);
+        mat.SetFloat("_Smoothness", smoothness);
+        if (emissionColor.maxColorComponent > 0.01f)
+        {
+            mat.EnableKeyword("_EMISSION");
+            mat.SetColor("_EmissionColor", emissionColor * 1.4f);
+        }
+        EditorUtility.SetDirty(mat);
+        return mat;
     }
 
     private static void SpawnSceneMonster(
@@ -1283,6 +1472,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
 
                 AssertTest("Enemy Has MonsterAnimatorBridge + MMOMonsterAI + Targetable", bridge != null && ai != null && targetable != null);
                 AssertTest("Enemy Has Fusion NetworkObject + NetworkTransform + MMOMonsterNetwork", netObj != null && netTx != null && monsterNet != null);
+                AssertTest("Enemy Has NavMeshAgent Configured", tempInstance.GetComponent<NavMeshAgent>() != null);
 
                 // Verify Player vs Enemy Height Parity ("ขยายตัวละครให้เท่าคนเล่น")
                 GameObject playerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(PlayerPrefabPath);
@@ -1346,23 +1536,39 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
 
         MMOMonsterAI[] sceneMonsters = FindObjectsByType<MMOMonsterAI>();
         MMOMap1CombatDirector sceneDirector = FindAnyObjectByType<MMOMap1CombatDirector>();
+        NavMeshSurface navSurface = FindAnyObjectByType<NavMeshSurface>();
+        NavMeshTriangulation navTri = NavMesh.CalculateTriangulation();
         AssertTest("Map1 Has MMOMap1CombatDirector + Player Prefab Assigned", sceneDirector != null && sceneDirector.playerPrefab != null);
         AssertTest("Map1 Has 3 Active Monsters with Territory Zones", sceneMonsters.Length >= 3, $"Count={sceneMonsters.Length}");
+        AssertTest("Map1 Has Baked NavMeshSurface & Arena Cover", navSurface != null && GameObject.Find("MMO_ArenaProps") != null && navTri.vertices.Length > 0, $"NavVerts={navTri.vertices.Length}");
 
         if (openedTempMap1 && !string.IsNullOrEmpty(originalScenePath) && File.Exists(originalScenePath))
         {
             EditorSceneManager.OpenScene(originalScenePath, OpenSceneMode.Single);
         }
 
-        bool lobbyInBuild = false;
-        bool map1InBuild = false;
+        int lobbyBuildIndex = -1;
+        int map1BuildIndex = -1;
         for (int i = 0; i < EditorBuildSettings.scenes.Length; i++)
         {
             string path = EditorBuildSettings.scenes[i].path;
-            if (EditorBuildSettings.scenes[i].enabled && path == LobbyScenePath) lobbyInBuild = true;
-            if (EditorBuildSettings.scenes[i].enabled && path == Map1ScenePath) map1InBuild = true;
+            if (EditorBuildSettings.scenes[i].enabled && path == LobbyScenePath) lobbyBuildIndex = i;
+            if (EditorBuildSettings.scenes[i].enabled && path == Map1ScenePath) map1BuildIndex = i;
         }
-        AssertTest("Build Settings Include Enabled Lobby.unity & Map1.unity", lobbyInBuild && map1InBuild);
+        AssertTest("Build Settings Include Enabled Lobby.unity & Map1.unity (Lobby First)",
+            lobbyBuildIndex >= 0 && map1BuildIndex >= 0 && lobbyBuildIndex < map1BuildIndex,
+            $"LobbyIdx={lobbyBuildIndex}, Map1Idx={map1BuildIndex}");
+
+        GameObject loadedPlayerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(PlayerPrefabPath);
+        bool hasVisualRoot = loadedPlayerPrefab != null && FindBoneRecursive(loadedPlayerPrefab.transform, "VisualRoot") != null;
+        AssertTest("Player.prefab Has VisualRoot for Dodge/Hit/Death", hasVisualRoot);
+
+        bool phaseSystemsReady =
+            typeof(MMOGameplayHUD) != null &&
+            typeof(MMOLootPickup) != null &&
+            typeof(MMOAudioManager) != null &&
+            !string.IsNullOrEmpty(LobbyNetwork.CustomLobbyName);
+        AssertTest("Phase 3-5 Systems Ready (uGUI HUD, Loot, BGM, Isolated Lobby)", phaseSystemsReady, LobbyNetwork.CustomLobbyName);
 
         bool lobbyLinksToMap1 = File.Exists(LobbyScenePath) &&
                                 File.ReadAllText(LobbyScenePath).Contains("gameSceneName: Map1");

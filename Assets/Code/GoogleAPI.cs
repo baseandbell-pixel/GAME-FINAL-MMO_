@@ -14,6 +14,13 @@ public class PlayerData
     [FirestoreProperty] public int avatarId { get; set; }
     [FirestoreProperty] public int level { get; set; }
     [FirestoreProperty] public int exp { get; set; }
+    [FirestoreProperty] public int gold { get; set; }
+    [FirestoreProperty] public int potions { get; set; }
+    [FirestoreProperty] public int weaponTier { get; set; }
+    [FirestoreProperty] public int armorTier { get; set; }
+    [FirestoreProperty] public int questStage { get; set; }
+    [FirestoreProperty] public int questKills { get; set; }
+    [FirestoreProperty] public int bossKills { get; set; }
 }
 
 public class GoogleAPI : MonoBehaviour
@@ -30,6 +37,13 @@ public class GoogleAPI : MonoBehaviour
     public int avatarId = 0;
     public int level = 5;
     public int exp = 0;
+    public int gold = 0;
+    public int potions = 3;
+    public int weaponTier = 0;
+    public int armorTier = 0;
+    public int questStage = 0;
+    public int questKills = 0;
+    public int bossKills = 0;
 
 
     public bool profileLoaded;
@@ -96,6 +110,13 @@ public class GoogleAPI : MonoBehaviour
                         avatarId = Mathf.Clamp(saved.avatarId, 0, LobbyNetwork.AvatarCount - 1);
                         level = saved.level >= 1 ? saved.level : 5;
                         exp = Mathf.Max(0, saved.exp);
+                        gold = Mathf.Max(0, saved.gold);
+                        potions = Mathf.Max(0, saved.potions);
+                        weaponTier = Mathf.Max(0, saved.weaponTier);
+                        armorTier = Mathf.Max(0, saved.armorTier);
+                        questStage = Mathf.Max(0, saved.questStage);
+                        questKills = Mathf.Max(0, saved.questKills);
+                        bossKills = Mathf.Max(0, saved.bossKills);
                         loaded = true;
                     }
                 }
@@ -112,6 +133,13 @@ public class GoogleAPI : MonoBehaviour
             avatarId = UnityEngine.Random.Range(0, LobbyNetwork.AvatarCount);
             level = 5;
             exp = 0;
+            gold = 0;
+            potions = 3;
+            weaponTier = 0;
+            armorTier = 0;
+            questStage = 0;
+            questKills = 0;
+            bossKills = 0;
             await SaveProfileAsync();
         }
 
@@ -130,6 +158,13 @@ public class GoogleAPI : MonoBehaviour
                 avatarId = avatarId,
                 level = level,
                 exp = exp,
+                gold = gold,
+                potions = potions,
+                weaponTier = weaponTier,
+                armorTier = armorTier,
+                questStage = questStage,
+                questKills = questKills,
+                bossKills = bossKills,
             };
             await Doc.SetAsync(toSave, SetOptions.MergeAll);
             return true;
@@ -145,6 +180,33 @@ public class GoogleAPI : MonoBehaviour
     {
         level = Mathf.Max(1, newLevel);
         exp = Mathf.Max(0, newExp);
+        if (!string.IsNullOrEmpty(uuid))
+        {
+            _ = SaveProfileAsync();
+        }
+    }
+
+    public void SaveInventoryAndQuest(
+        int newLevel,
+        int newExp,
+        int newGold,
+        int newPotions,
+        int newWeaponTier,
+        int newArmorTier,
+        int newQuestStage,
+        int newQuestKills,
+        int newBossKills)
+    {
+        level = Mathf.Max(1, newLevel);
+        exp = Mathf.Max(0, newExp);
+        gold = Mathf.Max(0, newGold);
+        potions = Mathf.Max(0, newPotions);
+        weaponTier = Mathf.Max(0, newWeaponTier);
+        armorTier = Mathf.Max(0, newArmorTier);
+        questStage = Mathf.Max(0, newQuestStage);
+        questKills = Mathf.Max(0, newQuestKills);
+        bossKills = Mathf.Max(0, newBossKills);
+
         if (!string.IsNullOrEmpty(uuid))
         {
             _ = SaveProfileAsync();

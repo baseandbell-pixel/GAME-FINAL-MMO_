@@ -6,13 +6,14 @@ using Fusion.Sockets;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[RequireComponent(typeof(NetworkRunner))]
 public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 {
     public enum State { Idle, Connecting, ConnectedToPhoton, Joining, InLobby, Starting, InGame, Failed }
 
     public const int AvatarCount = 4;
     public const int MaxPlayers = 4;
+    public const string NetworkBuildVersion = "mmo_v6";
+    public const string CustomLobbyName = "MMO_" + NetworkBuildVersion;
 
     public static LobbyNetwork Instance { get; private set; }
 
@@ -30,9 +31,20 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
     private bool _localGameplayPlayerSpawned;
     private NetworkObject _localGameplayPlayer;
+    private GameObject _runnerHost;
+    private bool _isReturningToLobby;
+    private readonly List<SessionInfo> _availableSessions = new List<SessionInfo>();
 
     /// <summary>Raised whenever the connection state changes (state, human readable message).</summary>
     public event Action<State, string> OnStateChanged;
+    public event Action<IReadOnlyList<SessionInfo>> OnSessionListChanged;
+
+    public string CurrentRoomCode =>
+        (Runner != null && Runner.IsRunning && Runner.SessionInfo.IsValid)
+            ? Runner.SessionInfo.Name
+            : string.Empty;
+
+    public IReadOnlyList<SessionInfo> AvailableSessions => _availableSessions;
 
     /// <summary>
     /// Raised when the room gets a new "first player". In Shared mode Photon hands the
@@ -59,11 +71,38 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         }
         Instance = this;
 
-        // Keep the NetworkRunner and its callbacks alive while Fusion changes scenes.
-        // Place this manager on its own root GameObject in the initial scene.
+        // Keep this manager (and GoogleAPI if co-located) alive across Fusion scene loads.
         DontDestroyOnLoad(transform.root.gameObject);
 
-        Runner = GetComponent<NetworkRunner>();
+        // If a NetworkRunner was serialized directly onto this GameObject in the scene,
+        // destroy it so Fusion Shutdown() only destroys a dedicated child GameObject.
+        NetworkRunner bakedRunner = GetComponent<NetworkRunner>();
+        if (bakedRunner != null)
+        {
+            bakedRunner.enabled = false;
+            Destroy(bakedRunner);
+        }
+
+        EnsureFreshRunner();
+    }
+
+    private void EnsureFreshRunner()
+    {
+        if (Runner != null && !Runner.IsShutdown)
+        {
+            return;
+        }
+
+        if (_runnerHost != null)
+        {
+            Destroy(_runnerHost);
+            _runnerHost = null;
+        }
+        Runner = null;
+
+        _runnerHost = new GameObject("FusionRunner");
+        _runnerHost.transform.SetParent(transform, false);
+        Runner = _runnerHost.AddComponent<NetworkRunner>();
         Runner.ProvideInput = false;
         Runner.AddCallbacks(this);
     }
@@ -108,51 +147,127 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     public async Task<bool> ConnectToPhotonAsync()
     {
         if (CurrentState == State.Connecting || CurrentState == State.Joining) return false;
-        if (CurrentState == State.ConnectedToPhoton || CurrentState == State.InLobby) return true;
+        if ((CurrentState == State.ConnectedToPhoton || CurrentState == State.InLobby) && Runner != null && !Runner.IsShutdown)
+        {
+            return true;
+        }
 
+        EnsureFreshRunner();
         SetState(State.Connecting, "Connecting to Photon...");
 
-        var result = await Runner.JoinSessionLobby(SessionLobby.Shared);
+        var result = await Runner.JoinSessionLobby(SessionLobby.Custom, CustomLobbyName);
         if (!result.Ok)
         {
             SetState(State.Failed, $"Photon connect failed: {result.ShutdownReason}");
             return false;
         }
 
-        SetState(State.ConnectedToPhoton, "Connected. Ready to Quick Join.");
+        SetState(State.ConnectedToPhoton, $"Connected ({NetworkBuildVersion}). Ready to Join or Create Room.");
         return true;
     }
 
-    public async Task<bool> QuickJoinAsync()
+    public Task<bool> QuickJoinAsync()
     {
-        if (CurrentState == State.Idle || CurrentState == State.Failed)
+        return StartGameSessionAsync(null, allowCreate: true, isPublicMatchmaking: true, "Looking for a room...");
+    }
+
+    public Task<bool> CreateRoomAsync(string optionalCode = null)
+    {
+        string code = SanitizeRoomCode(optionalCode);
+        if (string.IsNullOrEmpty(code))
+        {
+            code = GenerateRoomCode(5);
+        }
+
+        return StartGameSessionAsync(code, allowCreate: true, isPublicMatchmaking: false, $"Creating room {code}...");
+    }
+
+    public async Task<bool> JoinRoomByCodeAsync(string rawCode)
+    {
+        string code = SanitizeRoomCode(rawCode);
+        if (string.IsNullOrEmpty(code))
+        {
+            SetState(State.Failed, "Please enter a valid Room Code.");
+            return false;
+        }
+
+        return await StartGameSessionAsync(code, allowCreate: false, isPublicMatchmaking: false, $"Joining room {code}...");
+    }
+
+    private async Task<bool> StartGameSessionAsync(
+        string sessionName,
+        bool allowCreate,
+        bool isPublicMatchmaking,
+        string statusMessage)
+    {
+        EnsureFreshRunner();
+
+        if (CurrentState == State.Idle || CurrentState == State.Failed || CurrentState == State.InGame || CurrentState == State.Starting)
         {
             if (!await ConnectToPhotonAsync()) return false;
         }
         if (CurrentState == State.Joining || CurrentState == State.InLobby) return false;
 
-        SetState(State.Joining, "Looking for a room...");
+        EnsureFreshRunner();
+        SetState(State.Joining, statusMessage);
+
+        GameObject runnerHost = Runner.gameObject;
+        var sessionProps = new Dictionary<string, SessionProperty>
+        {
+            { "ver", NetworkBuildVersion }
+        };
 
         var result = await Runner.StartGame(new StartGameArgs
         {
             GameMode = GameMode.Shared,
-            SessionName = null,                       // null => random matchmaking
+            CustomLobbyName = CustomLobbyName,
+            SessionName = sessionName,
             PlayerCount = MaxPlayers,
+            IsVisible = isPublicMatchmaking,
+            SessionProperties = sessionProps,
             MatchmakingMode = Photon.Realtime.MatchmakingMode.FillRoom,
-            EnableClientSessionCreation = true,       // create a room if none is free
-            SceneManager = GetComponent<INetworkSceneManager>() ?? gameObject.AddComponent<NetworkSceneManagerDefault>(),
-            ObjectProvider = GetComponent<INetworkObjectProvider>() ?? gameObject.AddComponent<NetworkObjectProviderDefault>(),
+            EnableClientSessionCreation = allowCreate,
+            SceneManager = runnerHost.GetComponent<INetworkSceneManager>() ?? runnerHost.AddComponent<NetworkSceneManagerDefault>(),
+            ObjectProvider = runnerHost.GetComponent<INetworkObjectProvider>() ?? runnerHost.AddComponent<NetworkObjectProviderDefault>(),
         });
 
         if (!result.Ok)
         {
-            SetState(State.Failed, $"Quick Join failed: {result.ShutdownReason}");
+            SetState(State.Failed, $"Room join failed: {result.ShutdownReason}");
             return false;
         }
 
         SpawnLocalPlayer();
-        SetState(State.InLobby, $"Joined room {Runner.SessionInfo.Name}");
+        string roomLabel = Runner.SessionInfo.IsValid ? Runner.SessionInfo.Name : (sessionName ?? "Room");
+        SetState(State.InLobby, $"Joined room {roomLabel}");
         return true;
+    }
+
+    public static string SanitizeRoomCode(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var sb = new System.Text.StringBuilder(12);
+        string upper = raw.Trim().ToUpperInvariant();
+        for (int i = 0; i < upper.Length && sb.Length < 12; i++)
+        {
+            char c = upper[i];
+            if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_')
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static string GenerateRoomCode(int length)
+    {
+        const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        char[] buf = new char[length];
+        for (int i = 0; i < length; i++)
+        {
+            buf[i] = alphabet[UnityEngine.Random.Range(0, alphabet.Length)];
+        }
+        return new string(buf);
     }
 
     /// <summary>True for the player that owns the room - in Shared mode that is the first player in.</summary>
@@ -188,11 +303,34 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         Runner.Spawn(lobbyPlayerPrefab, Vector3.zero, Quaternion.identity, Runner.LocalPlayer);
     }
 
+    private async Task ShutdownRunnerSafely()
+    {
+        NetworkRunner activeRunner = Runner;
+        Runner = null;
+
+        if (activeRunner != null && !activeRunner.IsShutdown)
+        {
+            await activeRunner.Shutdown(destroyGameObject: activeRunner.gameObject != gameObject);
+        }
+
+        if (_runnerHost != null)
+        {
+            Destroy(_runnerHost);
+            _runnerHost = null;
+        }
+
+        LobbyPlayer.All.Clear();
+        MasterClient = PlayerRef.None;
+        _lastMaster = PlayerRef.None;
+        _localGameplayPlayer = null;
+        _localGameplayPlayerSpawned = false;
+    }
+
     public async void LeaveLobby()
     {
-        if (Runner == null || !Runner.IsRunning) return;
-        await Runner.Shutdown();
+        await ShutdownRunnerSafely();
         SetState(State.Idle, "Left the room.");
+        EnsureFreshRunner();
     }
 
     /// <summary>
@@ -200,33 +338,43 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     /// </summary>
     public async void ReturnToLobbyScene()
     {
-        if (Runner != null && Runner.IsRunning)
+        if (_isReturningToLobby) return;
+        _isReturningToLobby = true;
+        try
         {
-            await Runner.Shutdown();
+            await ShutdownRunnerSafely();
+            SetState(State.Idle, "Returned to Lobby.");
+            EnsureFreshRunner();
+            SceneManager.LoadScene("Lobby", LoadSceneMode.Single);
         }
-
-        _localGameplayPlayer = null;
-        _localGameplayPlayerSpawned = false;
-        SetState(State.Idle, "Returned to Lobby.");
-        SceneManager.LoadScene("Lobby", LoadSceneMode.Single);
+        finally
+        {
+            _isReturningToLobby = false;
+        }
     }
 
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { }
     public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
     {
+        if (Runner != null && runner != Runner) return;
         // The role may have just moved to somebody else - tell the UI right away
         // instead of waiting for the next Update.
         PollMasterClient();
     }
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
     {
+        if (Runner != null && runner != Runner) return;
+
         LobbyPlayer.All.Clear();
         MasterClient = PlayerRef.None;
         _lastMaster = PlayerRef.None;
         _localGameplayPlayer = null;
         _localGameplayPlayerSpawned = false;
-        SetState(State.Idle, $"Disconnected ({shutdownReason}).");
+        if (CurrentState != State.Idle)
+        {
+            SetState(State.Idle, $"Disconnected ({shutdownReason}).");
+        }
     }
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
     {
@@ -242,12 +390,32 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     public void OnConnectedToServer(NetworkRunner runner) { }
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
     public void OnUserSimulationMessage(NetworkRunner runner) { }
-    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList) { }
+    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList)
+    {
+        _availableSessions.Clear();
+        if (sessionList != null)
+        {
+            for (int i = 0; i < sessionList.Count; i++)
+            {
+                if (sessionList[i].IsValid && sessionList[i].IsVisible)
+                {
+                    _availableSessions.Add(sessionList[i]);
+                }
+            }
+        }
+        OnSessionListChanged?.Invoke(_availableSessions);
+    }
     public void OnCustomAuthenticationResponse(NetworkRunner runner, Dictionary<string, object> data) { }
     public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) { }
     public void OnSceneLoadDone(NetworkRunner runner)
     {
-        if (CurrentState != State.Starting)
+        if (Runner != null && runner != Runner) return;
+
+        string activeSceneName = SceneManager.GetActiveScene().name;
+        bool inGameScene = !string.IsNullOrEmpty(gameSceneName) &&
+                           string.Equals(activeSceneName, gameSceneName, StringComparison.OrdinalIgnoreCase);
+
+        if (!inGameScene && CurrentState != State.Starting)
         {
             return;
         }

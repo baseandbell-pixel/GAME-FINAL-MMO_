@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Fusion;
 using UnityEngine;
 
@@ -253,6 +254,51 @@ public sealed class MMOMonsterNetwork : NetworkBehaviour
         if (killerNetObj != null && killerNetObj.IsValid)
         {
             RPC_AwardKillExp(killerNetObj.Id, exp);
+        }
+    }
+
+    public void AwardKillExpToContributors(IEnumerable<Transform> contributors, int exp)
+    {
+        if (contributors == null || exp <= 0)
+        {
+            return;
+        }
+
+        if (!IsNetworkedActive)
+        {
+            foreach (Transform c in contributors)
+            {
+                if (c == null) continue;
+                MMOPlayerCombat pc = c.GetComponent<MMOPlayerCombat>();
+                if (pc != null)
+                {
+                    pc.AwardKillExp(exp, _monsterAI);
+                }
+            }
+            return;
+        }
+
+        var sentIds = new HashSet<NetworkId>();
+        foreach (Transform c in contributors)
+        {
+            if (c == null) continue;
+            NetworkObject netObj = c.GetComponentInParent<NetworkObject>();
+            if (netObj == null || !netObj.IsValid || !sentIds.Add(netObj.Id))
+            {
+                continue;
+            }
+
+            if (netObj.HasStateAuthority)
+            {
+                MMOPlayerCombat localCombat = netObj.GetComponent<MMOPlayerCombat>();
+                if (localCombat != null)
+                {
+                    localCombat.AwardKillExp(exp, _monsterAI);
+                    continue;
+                }
+            }
+
+            RPC_AwardKillExp(netObj.Id, exp);
         }
     }
 

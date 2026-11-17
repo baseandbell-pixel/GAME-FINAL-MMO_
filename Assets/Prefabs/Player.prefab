@@ -402,6 +402,10 @@ MonoBehaviour:
   attackStartGraceTime: 0.25
   attackEntryTimeout: 1
   attackSafetyTimeout: 5
+  dodgeDistance: 5.4
+  dodgeDuration: 0.34
+  dodgeInvulnerabilityDuration: 0.3
+  dodgeCooldown: 1.15
 --- !u!114 &3332517906185699313
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -422,6 +426,8 @@ MonoBehaviour:
   _NetworkHealth: 0
   _NetworkMaxHealth: 0
   _NetworkLevel: 0
+  _NetworkDead:
+    RawValue: 0
   _AvatarIndex: 0
   _Nick:
     _length: 0

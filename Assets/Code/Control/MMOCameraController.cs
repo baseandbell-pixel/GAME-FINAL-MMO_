@@ -99,10 +99,16 @@ public sealed class MMOCameraController : MonoBehaviour
         _gameplayEnabled && !_altHeld && Cursor.lockState == CursorLockMode.Locked;
     public Targetable LockedTarget => _lockedTarget; // <--- จุดที่แก้ไข/เพิ่มเติม
     public bool HasLockedTarget => _lockedTarget != null;
+    private const string PrefKeyMouseSens = "MMO_MouseSensitivity";
+
     public float MouseSensitivity
     {
         get => mouseSensitivity;
-        set => mouseSensitivity = Mathf.Clamp(value, 0.2f, 10f);
+        set
+        {
+            mouseSensitivity = Mathf.Clamp(value, 0.2f, 10f);
+            PlayerPrefs.SetFloat(PrefKeyMouseSens, mouseSensitivity);
+        }
     }
 
     /// <summary>Horizontal direction the camera is aiming toward.</summary>
@@ -136,6 +142,10 @@ public sealed class MMOCameraController : MonoBehaviour
 
         Instance = this;
         _camera = GetComponent<Camera>();
+        if (PlayerPrefs.HasKey(PrefKeyMouseSens))
+        {
+            mouseSensitivity = Mathf.Clamp(PlayerPrefs.GetFloat(PrefKeyMouseSens, mouseSensitivity), 0.2f, 10f);
+        }
 
         _currentPreset = startingPreset;
         _settings = GetPresetSettings(_currentPreset);

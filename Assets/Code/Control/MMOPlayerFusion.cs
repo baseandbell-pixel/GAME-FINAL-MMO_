@@ -1,4 +1,6 @@
 
+using System;
+using System.Collections.Generic;
 using Fusion;
 using TMPro;
 using UnityEngine;
@@ -31,6 +33,8 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
     [Networked] public int NetworkMaxHealth { get; set; }
 
     [Networked] public int NetworkLevel { get; set; }
+
+    [Networked] public NetworkBool NetworkDead { get; set; }
 
     // ---------------------------------------------------------
     // NETWORKED PLAYER IDENTITY
@@ -81,6 +85,10 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
     // PROPERTIES
     // ---------------------------------------------------------
 
+    public static readonly List<MMOPlayerFusion> AllPlayers = new List<MMOPlayerFusion>();
+
+    public static event Action<string, string> OnChatMessageReceived;
+
     public bool IsLocalPlayer => isLocalPlayer;
 
     public string PlayerName => Nick.Value;
@@ -124,6 +132,11 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
 
     public override void Spawned()
     {
+        if (!AllPlayers.Contains(this))
+        {
+            AllPlayers.Add(this);
+        }
+
         isLocalPlayer = Object.HasStateAuthority;
 
         if (isLocalPlayer)
@@ -177,6 +190,7 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
             NetworkHealth = 1200;
             NetworkMaxHealth = 1200;
             NetworkLevel = 5;
+            NetworkDead = false;
         }
 
         ApplyPlayerName();
@@ -268,6 +282,7 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
             NetworkHealth = playerCombat.CurrentHealth;
             NetworkMaxHealth = playerCombat.MaxHealth;
             NetworkLevel = playerCombat.playerLevel;
+            NetworkDead = playerCombat.IsDead;
         }
     }
 
@@ -295,7 +310,8 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
             NetworkSpeed,
             (bool)NetworkGrounded,
             NetworkAction,
-            NetworkActionSequence
+            NetworkActionSequence,
+            (bool)NetworkDead
         );
     }
 
@@ -368,6 +384,8 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
         bool hasState
     )
     {
+        AllPlayers.Remove(this);
+
         if (isLocalPlayer && cameraController != null)
         {
             if (cameraController.Target == transform)
@@ -377,5 +395,28 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
         }
 
         isLocalPlayer = false;
+    }
+
+    public void SendChatMessage(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return;
+        string trimmed = message.Trim();
+        if (trimmed.Length > 120) trimmed = trimmed.Substring(0, 120);
+
+        string sender = string.IsNullOrWhiteSpace(Nick.Value) ? DefaultPlayerName : Nick.Value;
+        if (Object != null && Object.IsValid && Runner != null && Runner.IsRunning)
+        {
+            RPC_BroadcastChat(sender, trimmed);
+        }
+        else
+        {
+            OnChatMessageReceived?.Invoke(sender, trimmed);
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    private void RPC_BroadcastChat(string senderName, string message)
+    {
+        OnChatMessageReceived?.Invoke(senderName, message);
     }
 }

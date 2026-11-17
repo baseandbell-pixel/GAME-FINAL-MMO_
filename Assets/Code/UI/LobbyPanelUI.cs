@@ -41,15 +41,63 @@ public class LobbyPanelUI : MonoBehaviour
     string _notice;
     float _noticeUntil;
     readonly List<LobbyPlayer> _sorted = new List<LobbyPlayer>();
+    Button _copyCodeButton;
+    TMP_Text _copyCodeLabel;
+    float _copiedUntil;
 
     void OnEnable()
     {
+        EnsureCopyCodeBadge();
         if (readyButton) readyButton.onClick.AddListener(OnClickReady);
         if (playButton) playButton.onClick.AddListener(OnClickPlay);
         if (leaveButton) leaveButton.onClick.AddListener(OnClickLeave);
         if (editPlayerButton) editPlayerButton.onClick.AddListener(OnClickEditPlayer);
         if (LobbyNetwork.Instance != null) LobbyNetwork.Instance.OnMasterClientChanged += OnMasterClientChanged;
         Refresh();
+    }
+
+    private void EnsureCopyCodeBadge()
+    {
+        if (_copyCodeButton != null) return;
+
+        GameObject go = new GameObject("RoomCodeBadge");
+        RectTransform rt = go.AddComponent<RectTransform>();
+        rt.SetParent(transform, false);
+        rt.anchorMin = new Vector2(1f, 1f);
+        rt.anchorMax = new Vector2(1f, 1f);
+        rt.pivot = new Vector2(1f, 1f);
+        rt.anchoredPosition = new Vector2(-24f, -18f);
+        rt.sizeDelta = new Vector2(210f, 34f);
+
+        Image bg = go.AddComponent<Image>();
+        bg.color = new Color(0.14f, 0.22f, 0.34f, 0.92f);
+
+        _copyCodeButton = go.AddComponent<Button>();
+        _copyCodeButton.onClick.AddListener(() =>
+        {
+            string code = LobbyNetwork.Instance != null ? LobbyNetwork.Instance.CurrentRoomCode : string.Empty;
+            if (!string.IsNullOrEmpty(code))
+            {
+                GUIUtility.systemCopyBuffer = code;
+                _copiedUntil = Time.unscaledTime + 1.5f;
+            }
+        });
+
+        GameObject lblGo = new GameObject("Label");
+        RectTransform lRt = lblGo.AddComponent<RectTransform>();
+        lRt.SetParent(rt, false);
+        lRt.anchorMin = Vector2.zero;
+        lRt.anchorMax = Vector2.one;
+        lRt.offsetMin = Vector2.zero;
+        lRt.offsetMax = Vector2.zero;
+
+        TextMeshProUGUI tmp = lblGo.AddComponent<TextMeshProUGUI>();
+        if (TMP_Settings.defaultFontAsset != null) tmp.font = TMP_Settings.defaultFontAsset;
+        tmp.fontSize = 14;
+        tmp.fontStyle = FontStyles.Bold;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.color = new Color(0.75f, 0.94f, 1f);
+        _copyCodeLabel = tmp;
     }
 
     void OnDisable()
@@ -59,6 +107,11 @@ public class LobbyPanelUI : MonoBehaviour
         if (leaveButton) leaveButton.onClick.RemoveListener(OnClickLeave);
         if (editPlayerButton) editPlayerButton.onClick.RemoveListener(OnClickEditPlayer);
         if (LobbyNetwork.Instance != null) LobbyNetwork.Instance.OnMasterClientChanged -= OnMasterClientChanged;
+        if (editPlayerPanel != null && editPlayerPanel.gameObject.activeSelf)
+        {
+            editPlayerPanel.gameObject.SetActive(false);
+        }
+        _sorted.Clear();
     }
 
     /// <summary>
@@ -157,6 +210,19 @@ public class LobbyPanelUI : MonoBehaviour
 
         UpdatePlayButton(_sorted.Count, readyCount);
 
+        string roomCode = net != null ? net.CurrentRoomCode : string.Empty;
+        if (_copyCodeLabel != null)
+        {
+            if (Time.unscaledTime < _copiedUntil)
+            {
+                _copyCodeLabel.text = "Copied Room Code!";
+            }
+            else
+            {
+                _copyCodeLabel.text = string.IsNullOrEmpty(roomCode) ? "Room: ..." : $"Room: {roomCode} [Copy]";
+            }
+        }
+
         if (statusText)
         {
             int total = _sorted.Count;
@@ -167,9 +233,10 @@ public class LobbyPanelUI : MonoBehaviour
             else
             {
                 _notice = null;
+                string roomPrefix = string.IsNullOrEmpty(roomCode) ? "" : $"Room {roomCode}  |  ";
                 statusText.text = total >= LobbyNetwork.MaxPlayers && readyCount == total
-                    ? "All players ready!"
-                    : $"Players {total}/{LobbyNetwork.MaxPlayers}   -   Ready {readyCount}/{total}";
+                    ? $"{roomPrefix}All players ready!"
+                    : $"{roomPrefix}Players {total}/{LobbyNetwork.MaxPlayers}   -   Ready {readyCount}/{total}";
             }
         }
     }

@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.AI;
 
 /// <summary>
 /// Full MMORPG Monster AI, Territory Zone (Aggro & Leash), Combat, and Overhead Health Bar controller.
@@ -69,9 +70,16 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
     private MonsterAnimatorBridge _bridge;
     private MMOMonsterNetwork _network;
+    private NavMeshAgent _navMeshAgent;
     private CharacterController _characterController;
     private CapsuleCollider _capsuleCollider;
     private Renderer[] _renderers;
+
+    private float _baseChaseRunSpeed;
+    private float _baseAttackCooldown;
+    private float _baseBossSkillCooldown;
+    private float _baseBossSkillRadius;
+    private bool _phase2Enraged;
 
     private Vector3 _territoryCenter;
     private Quaternion _spawnRotation;
@@ -91,6 +99,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
     private bool _isExecutingBossSkill;
     private Coroutine _activeAttackCoroutine;
     private Coroutine _hitFlashCoroutine;
+    private readonly HashSet<Transform> _combatContributors = new HashSet<Transform>();
 
     // Ground Territory Visuals
     private GameObject _territoryRoot;
@@ -153,9 +162,18 @@ public sealed class MMOMonsterAI : MonoBehaviour
     {
         if (_bridge == null) _bridge = GetComponent<MonsterAnimatorBridge>();
         if (_network == null) _network = GetComponent<MMOMonsterNetwork>();
+        if (_navMeshAgent == null) _navMeshAgent = GetComponent<NavMeshAgent>();
         if (_capsuleCollider == null) _capsuleCollider = GetComponent<CapsuleCollider>();
         if (_characterController == null) _characterController = GetComponent<CharacterController>();
         if (_renderers == null || _renderers.Length == 0) _renderers = GetComponentsInChildren<Renderer>(true);
+
+        if (_baseChaseRunSpeed <= 0.01f)
+        {
+            _baseChaseRunSpeed = chaseRunSpeed;
+            _baseAttackCooldown = attackCooldown;
+            _baseBossSkillCooldown = bossSkillCooldown;
+            _baseBossSkillRadius = bossSkillRadius;
+        }
 
         if (_currentHealth <= 0 && _state != AIState.Dead)
         {
@@ -176,8 +194,28 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
     private void Start()
     {
+        EnsureReferencesInitialized();
         SnapToGround();
         _territoryCenter = transform.position;
+
+        if (_navMeshAgent != null)
+        {
+            _navMeshAgent.updateRotation = false;
+            bool isRemoteClient = _network != null && _network.IsNetworkedActive && !_network.HasSimulationAuthority;
+            if (isRemoteClient)
+            {
+                _navMeshAgent.enabled = false;
+            }
+            else if (_navMeshAgent.enabled && !_navMeshAgent.isOnNavMesh)
+            {
+                if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5f, NavMesh.AllAreas))
+                {
+                    _navMeshAgent.Warp(hit.position);
+                    _territoryCenter = hit.position;
+                }
+            }
+        }
+
         PickNewPatrolPoint();
         _patrolWaitTimer = Random.Range(1.0f, 2.5f);
 
@@ -218,8 +256,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
         if (_stunRemainingTimer > 0f && _state != AIState.Dead)
         {
             _stunRemainingTimer -= dt;
-            _currentWorldSpeed = 0f;
-            _bridge.SetWorldSpeed(0f);
+            StopAgentMovement(clearPath: true);
             if (_stunRemainingTimer <= 0f)
             {
                 _stunRemainingTimer = 0f;
@@ -247,8 +284,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
                 break;
 
             case AIState.Dead:
-                _currentWorldSpeed = 0f;
-                _bridge.SetWorldSpeed(0f);
+                StopAgentMovement(clearPath: true);
                 break;
         }
     }
@@ -269,6 +305,10 @@ public sealed class MMOMonsterAI : MonoBehaviour
             if (_capsuleCollider != null)
             {
                 _capsuleCollider.enabled = _state != AIState.Dead;
+            }
+            if (_navMeshAgent != null)
+            {
+                _navMeshAgent.enabled = false;
             }
 
             if (_bridge != null)
@@ -356,18 +396,16 @@ public sealed class MMOMonsterAI : MonoBehaviour
         if (_patrolWaitTimer > 0f)
         {
             _patrolWaitTimer -= dt;
-            _currentWorldSpeed = 0f;
-            _bridge.SetWorldSpeed(0f);
+            StopAgentMovement(clearPath: false);
             return;
         }
 
         Vector3 toPatrol = _patrolPoint - transform.position;
         toPatrol.y = 0f;
 
-        if (toPatrol.magnitude <= 0.35f)
+        if (toPatrol.magnitude <= 0.45f)
         {
-            _currentWorldSpeed = 0f;
-            _bridge.SetWorldSpeed(0f);
+            StopAgentMovement(clearPath: true);
             _patrolWaitTimer = Random.Range(2.2f, 4.2f);
             PickNewPatrolPoint();
             return;
@@ -395,11 +433,10 @@ public sealed class MMOMonsterAI : MonoBehaviour
         }
 
         float distToPlayer = PlanarDistance(transform.position, _targetPlayer.position);
-        if (distToPlayer <= attackRange)
+        if (distToPlayer <= attackRange && HasLineOfSightTo(_targetPlayer))
         {
             _state = AIState.Attacking;
-            _currentWorldSpeed = 0f;
-            _bridge.SetWorldSpeed(0f);
+            StopAgentMovement(clearPath: true);
             return;
         }
 
@@ -425,16 +462,15 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         // Smoothly face the player
         RotateTowards(_targetPlayer.position, 10f, dt);
-        _currentWorldSpeed = 0f;
-        _bridge.SetWorldSpeed(0f);
+        StopAgentMovement(clearPath: true);
 
         if (_isExecutingBossSkill)
         {
             return;
         }
 
-        // If player ran out of melee range and we aren't mid-swing, resume chasing
-        if (distToPlayer > attackRange + 0.55f && !_bridge.IsActionInProgress)
+        // If player ran out of melee range or behind cover and we aren't mid-swing, resume chasing
+        if ((distToPlayer > attackRange + 0.55f || !HasLineOfSightTo(_targetPlayer)) && !_bridge.IsActionInProgress)
         {
             _state = AIState.AggroChase;
             return;
@@ -514,7 +550,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
                 new Color(1f, 0.25f, 0.12f, 0.95f));
             MMOCombatVFX.SpawnStatusPopup(
                 transform.position + Vector3.up * 2.7f,
-                "⚡ WARLORD SLAM!",
+                "[!] WARLORD SLAM!",
                 new Color(1f, 0.45f, 0.12f, 1f),
                 1.15f);
             MMOAudioManager.PlayBossCast(transform.position);
@@ -573,11 +609,11 @@ public sealed class MMOMonsterAI : MonoBehaviour
         if (distToHome <= 0.45f)
         {
             transform.position = new Vector3(_territoryCenter.x, transform.position.y, _territoryCenter.z);
-            _currentWorldSpeed = 0f;
-            _bridge.SetWorldSpeed(0f);
+            StopAgentMovement(clearPath: true);
             _bridge.SetEvading(false);
             _bridge.SetCombat(false);
             _currentHealth = maxHealth;
+            ResetBossPhase2Enrage();
             _state = AIState.IdlePatrol;
             _patrolWaitTimer = 1.5f;
             PickNewPatrolPoint();
@@ -634,8 +670,10 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         _isExecutingBossSkill = false;
         _targetPlayer = null;
+        _combatContributors.Clear();
         _state = AIState.EvadeReturn;
         _currentHealth = maxHealth;
+        ResetBossPhase2Enrage();
         if (_bridge != null && Application.isPlaying)
         {
             _bridge.SetEvading(true);
@@ -708,6 +746,11 @@ public sealed class MMOMonsterAI : MonoBehaviour
         int finalDamage = Mathf.Max(1, amount);
         _currentHealth = Mathf.Max(0, _currentHealth - finalDamage);
 
+        if (attacker != null)
+        {
+            _combatContributors.Add(attacker);
+        }
+
         if (Application.isPlaying)
         {
             // Spawn Hit Sparks & Floating Damage Popup
@@ -740,6 +783,16 @@ public sealed class MMOMonsterAI : MonoBehaviour
         {
             Die(attacker);
             return true;
+        }
+
+        // Boss Phase 2 Enrage at <= 50% HP
+        if (!_phase2Enraged &&
+            _currentHealth <= maxHealth * 0.5f &&
+            _bridge != null &&
+            _bridge.Config != null &&
+            _bridge.Config.isBossOrElite)
+        {
+            EnterBossPhase2Enrage();
         }
 
         // Trigger Hit_React animation (respects Boss Super Armor via MonsterAnimationConfig.canFlinch)
@@ -837,7 +890,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
         }
 
         float dist = PlanarDistance(transform.position, _targetPlayer.position);
-        if (dist > attackRange + 0.85f)
+        if (dist > attackRange + 0.85f || !HasLineOfSightTo(_targetPlayer))
         {
             return;
         }
@@ -881,6 +934,12 @@ public sealed class MMOMonsterAI : MonoBehaviour
             _bridge.SetDead(true);
         }
 
+        StopAgentMovement(clearPath: true);
+        if (_navMeshAgent != null)
+        {
+            _navMeshAgent.enabled = false;
+        }
+
         if (_capsuleCollider != null)
         {
             _capsuleCollider.enabled = false;
@@ -896,19 +955,29 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
             if (killer != null)
             {
+                _combatContributors.Add(killer);
+            }
+
+            if (_combatContributors.Count > 0)
+            {
                 if (_network != null && _network.IsNetworkedActive)
                 {
-                    _network.AwardKillExpToKiller(killer, expReward);
+                    _network.AwardKillExpToContributors(_combatContributors, expReward);
                 }
                 else
                 {
-                    MMOPlayerCombat pc = killer.GetComponent<MMOPlayerCombat>();
-                    if (pc != null)
+                    foreach (Transform contributor in _combatContributors)
                     {
-                        pc.AwardKillExp(expReward, this);
+                        if (contributor == null) continue;
+                        MMOPlayerCombat pc = contributor.GetComponent<MMOPlayerCombat>();
+                        if (pc != null)
+                        {
+                            pc.AwardKillExp(expReward, this);
+                        }
                     }
                 }
             }
+            _combatContributors.Clear();
 
             StartCoroutine(RespawnRoutine());
         }
@@ -924,16 +993,32 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         _currentHealth = maxHealth;
         _displayedHealthRatio = 1f;
+        ResetBossPhase2Enrage();
         _targetPlayer = null;
         _state = AIState.IdlePatrol;
         _patrolWaitTimer = 1.5f;
         _attacksSinceSkill = 0;
         _isExecutingBossSkill = false;
+        _combatContributors.Clear();
         PickNewPatrolPoint();
 
         if (_capsuleCollider != null)
         {
             _capsuleCollider.enabled = true;
+        }
+
+        bool isRemoteClient = _network != null && _network.IsNetworkedActive && !_network.HasSimulationAuthority;
+        if (_navMeshAgent != null && !isRemoteClient)
+        {
+            _navMeshAgent.enabled = true;
+            if (!_navMeshAgent.isOnNavMesh && NavMesh.SamplePosition(_territoryCenter, out NavMeshHit hit, 5f, NavMesh.AllAreas))
+            {
+                _navMeshAgent.Warp(hit.position);
+            }
+            else if (_navMeshAgent.isOnNavMesh)
+            {
+                _navMeshAgent.Warp(transform.position);
+            }
         }
 
         if (_bridge != null)
@@ -954,13 +1039,41 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
     private void MoveMonsterTowards(Vector3 targetWorldPos, float speed, float dt)
     {
+        if (_navMeshAgent != null && _navMeshAgent.enabled && _navMeshAgent.isOnNavMesh)
+        {
+            _navMeshAgent.updateRotation = false;
+            _navMeshAgent.stoppingDistance = _state == AIState.AggroChase ? Mathf.Max(0.4f, attackRange * 0.72f) : 0.25f;
+            _navMeshAgent.speed = speed;
+            _navMeshAgent.isStopped = false;
+            _navMeshAgent.SetDestination(targetWorldPos);
+
+            Vector3 steerTarget = _navMeshAgent.hasPath && _navMeshAgent.steeringTarget != transform.position
+                ? _navMeshAgent.steeringTarget
+                : targetWorldPos;
+            RotateTowards(steerTarget, 10f, dt);
+
+            Vector3 planarVel = _navMeshAgent.velocity;
+            planarVel.y = 0f;
+            float measuredSpeed = planarVel.magnitude;
+            if (measuredSpeed < 0.1f && (_navMeshAgent.pathPending || _navMeshAgent.remainingDistance > _navMeshAgent.stoppingDistance))
+            {
+                measuredSpeed = speed * 0.5f;
+            }
+
+            _currentWorldSpeed = measuredSpeed;
+            if (_bridge != null)
+            {
+                _bridge.SetWorldSpeed(measuredSpeed);
+            }
+            return;
+        }
+
         Vector3 delta = targetWorldPos - transform.position;
         delta.y = 0f;
 
         if (delta.sqrMagnitude < 0.001f)
         {
-            _currentWorldSpeed = 0f;
-            _bridge.SetWorldSpeed(0f);
+            StopAgentMovement(clearPath: false);
             return;
         }
 
@@ -979,7 +1092,103 @@ public sealed class MMOMonsterAI : MonoBehaviour
         }
 
         _currentWorldSpeed = speed;
-        _bridge.SetWorldSpeed(speed);
+        if (_bridge != null)
+        {
+            _bridge.SetWorldSpeed(speed);
+        }
+    }
+
+    private void StopAgentMovement(bool clearPath)
+    {
+        if (_navMeshAgent != null && _navMeshAgent.enabled && _navMeshAgent.isOnNavMesh)
+        {
+            _navMeshAgent.isStopped = true;
+            if (clearPath && _navMeshAgent.hasPath)
+            {
+                _navMeshAgent.ResetPath();
+            }
+        }
+
+        _currentWorldSpeed = 0f;
+        if (_bridge != null)
+        {
+            _bridge.SetWorldSpeed(0f);
+        }
+    }
+
+    private void EnterBossPhase2Enrage()
+    {
+        if (_phase2Enraged)
+        {
+            return;
+        }
+
+        _phase2Enraged = true;
+        if (_baseChaseRunSpeed > 0.01f)
+        {
+            chaseRunSpeed = _baseChaseRunSpeed * 1.28f;
+            attackCooldown = Mathf.Max(0.95f, _baseAttackCooldown * 0.72f);
+            bossSkillCooldown = Mathf.Max(4.0f, _baseBossSkillCooldown * 0.65f);
+            bossSkillRadius = _baseBossSkillRadius * 1.2f;
+        }
+
+        if (Application.isPlaying)
+        {
+            Color enrageColor = new Color(1f, 0.22f, 0.08f, 1f);
+            Vector3 popupPos = transform.position + Vector3.up * 2.65f;
+            MMOCombatVFX.SpawnStatusPopup(popupPos, "PHASE 2: ENRAGE!", enrageColor, 1.3f);
+            MMOCombatVFX.SpawnAggroPulse(transform.position);
+            MMOAudioManager.PlayBossCast(transform.position);
+            _network?.BroadcastStatusPopup(popupPos, "PHASE 2: ENRAGE!", enrageColor, 1.3f);
+        }
+    }
+
+    private void ResetBossPhase2Enrage()
+    {
+        if (!_phase2Enraged)
+        {
+            return;
+        }
+
+        _phase2Enraged = false;
+        if (_baseChaseRunSpeed > 0.01f)
+        {
+            chaseRunSpeed = _baseChaseRunSpeed;
+            attackCooldown = _baseAttackCooldown;
+            bossSkillCooldown = _baseBossSkillCooldown;
+            bossSkillRadius = _baseBossSkillRadius;
+        }
+    }
+
+    private bool HasLineOfSightTo(Transform target)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        Vector3 origin = transform.position + Vector3.up * 1.1f;
+        Vector3 destination = target.position + Vector3.up * 1.1f;
+        Vector3 diff = destination - origin;
+        float dist = diff.magnitude;
+        if (dist <= 0.25f)
+        {
+            return true;
+        }
+
+        RaycastHit[] hits = Physics.RaycastAll(origin, diff / dist, dist, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Transform hitTransform = hits[i].transform;
+            if (hitTransform == null) continue;
+            if (hitTransform == transform || hitTransform.IsChildOf(transform)) continue;
+            if (hitTransform == target || hitTransform.IsChildOf(target)) continue;
+            if (hitTransform.GetComponentInParent<MMOMonsterAI>() != null) continue;
+            if (hitTransform.GetComponentInParent<MMOPlayerController>() != null) continue;
+            return false;
+        }
+
+        return true;
     }
 
     private void RotateTowards(Vector3 lookAtPoint, float turnSpeed, float dt)
@@ -1011,8 +1220,26 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
     private void PickNewPatrolPoint()
     {
-        Vector2 circle = Random.insideUnitCircle * patrolRadius;
-        _patrolPoint = _territoryCenter + new Vector3(circle.x, 0f, circle.y);
+        for (int attempt = 0; attempt < 6; attempt++)
+        {
+            Vector2 circle = Random.insideUnitCircle * patrolRadius;
+            Vector3 candidate = _territoryCenter + new Vector3(circle.x, 0f, circle.y);
+            if (_navMeshAgent != null && _navMeshAgent.enabled && _navMeshAgent.isOnNavMesh)
+            {
+                if (NavMesh.SamplePosition(candidate, out NavMeshHit hit, 2.5f, NavMesh.AllAreas))
+                {
+                    _patrolPoint = hit.position;
+                    return;
+                }
+            }
+            else
+            {
+                _patrolPoint = candidate;
+                return;
+            }
+        }
+
+        _patrolPoint = _territoryCenter;
     }
 
     private Transform FindNearestPlayerInAggroZone()

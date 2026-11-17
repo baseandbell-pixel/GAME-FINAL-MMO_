@@ -10,15 +10,15 @@ PrefabInstance:
     m_Modifications:
     - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       propertyPath: m_LocalScale.x
-      value: 4
+      value: 1.7062335
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       propertyPath: m_LocalScale.y
-      value: 4
+      value: 1.7062335
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       propertyPath: m_LocalScale.z
-      value: 4
+      value: 1.7062335
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       propertyPath: m_LocalPosition.x
@@ -82,6 +82,9 @@ PrefabInstance:
       addedObject: {fileID: 2994956930962096984}
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       insertIndex: -1
+      addedObject: {fileID: 4319978773695899069}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
       addedObject: {fileID: 5055086437025334615}
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       insertIndex: -1
@@ -139,10 +142,10 @@ CapsuleCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 2
-  m_Radius: 0.25
-  m_Height: 0.45027927
+  m_Radius: 0.26959968
+  m_Height: 1.05561
   m_Direction: 1
-  m_Center: {x: 0, y: 0.22513963, z: 0}
+  m_Center: {x: 0, y: 0.527805, z: 0}
 --- !u!114 &1726108052776393660
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -156,7 +159,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Targetable
   aimPoint: {fileID: 0}
-  fallbackAimOffset: {x: 0, y: 0.27917314, z: 0}
+  fallbackAimOffset: {x: 0, y: 0.6544782, z: 0}
   lockVisual: {fileID: 6105273478567910661}
   lockColor: {r: 1, g: 0.8, b: 0.1, a: 1}
 --- !u!114 &2994956930962096984
@@ -176,6 +179,28 @@ MonoBehaviour:
   navMeshAgent: {fileID: 0}
   autoReadNavMeshSpeed: 1
   evadeSpeedMultiplier: 1.35
+--- !u!195 &4319978773695899069
+NavMeshAgent:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_AgentTypeID: 0
+  m_Radius: 0.2813214
+  m_Speed: 3.8
+  m_Acceleration: 28
+  avoidancePriority: 50
+  m_AngularSpeed: 540
+  m_StoppingDistance: 1.7
+  m_AutoTraverseOffMeshLink: 1
+  m_AutoBraking: 1
+  m_AutoRepath: 1
+  m_Height: 1.05561
+  m_BaseOffset: 0
+  m_WalkableMask: 4294967295
+  m_ObstacleAvoidanceType: 4
 --- !u!114 &5055086437025334615
 MonoBehaviour:
   m_ObjectHideFlags: 0

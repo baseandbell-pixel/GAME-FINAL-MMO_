@@ -583,4 +583,55 @@ public sealed class MMOCombatVFX : MonoBehaviour
             Destroy(lightGo);
         }
     }
+
+    public static void SpawnDodgeBurst(Vector3 worldPos, Vector3 dashDirection)
+    {
+        if (!Application.isPlaying) return;
+        Instance.SpawnDodgeBurstInternal(worldPos, dashDirection);
+    }
+
+    private void SpawnDodgeBurstInternal(Vector3 worldPos, Vector3 dashDirection)
+    {
+        EnsureMaterials();
+        StartCoroutine(AnimateShockwaveRingRoutine(
+            worldPos + Vector3.up * 0.12f,
+            new Color(0.35f, 0.92f, 1f, 0.9f),
+            0.3f,
+            1.65f,
+            0.24f,
+            0.09f,
+            tiltRandom: false));
+
+        GameObject go = new GameObject("VFX_DodgeTrail");
+        Vector3 dir = dashDirection.sqrMagnitude > 0.01f ? dashDirection.normalized : Vector3.forward;
+        go.transform.position = worldPos + Vector3.up * 0.95f;
+        go.transform.rotation = Quaternion.LookRotation(-dir, Vector3.up);
+
+        ParticleSystem ps = go.AddComponent<ParticleSystem>();
+        ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        var main = ps.main;
+        main.playOnAwake = false;
+        main.duration = 0.25f;
+        main.loop = false;
+        main.startLifetime = new ParticleSystem.MinMaxCurve(0.18f, 0.34f);
+        main.startSpeed = new ParticleSystem.MinMaxCurve(2.2f, 5.2f);
+        main.startSize = new ParticleSystem.MinMaxCurve(0.08f, 0.18f);
+        main.startColor = new Color(0.45f, 0.95f, 1f, 0.95f);
+        main.gravityModifier = 0f;
+
+        var emission = ps.emission;
+        emission.SetBursts(new[] { new ParticleSystem.Burst(0f, 18) });
+        emission.rateOverTime = 0f;
+
+        var shape = ps.shape;
+        shape.shapeType = ParticleSystemShapeType.Cone;
+        shape.angle = 22f;
+        shape.radius = 0.25f;
+
+        var renderer = go.GetComponent<ParticleSystemRenderer>();
+        renderer.sharedMaterial = _particleMaterial;
+
+        ps.Play();
+        Destroy(go, 0.8f);
+    }
 }
