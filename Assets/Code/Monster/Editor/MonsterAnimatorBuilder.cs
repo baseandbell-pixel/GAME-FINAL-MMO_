@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Fusion;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
@@ -20,7 +21,10 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
     public const string UpperBodyMaskFileName = "Mask_Monster_UpperBody.mask";
     public const string DefaultMonsterFolder = "Assets/Characters/Model Enemy";
     public const string Map1ScenePath = "Assets/Scenes/Map1.unity";
+    public const string LobbyScenePath = "Assets/Scenes/Lobby.unity";
     public const string PlayerPrefabPath = "Assets/Prefabs/Player.prefab";
+    public const string PlayerControllerPath = "Assets/Characters/AC_Player.controller";
+    private const string PipelineVersionStampPath = "Temp/MonsterPipelineV3_Ready.stamp";
 
     public const string SlotSpawn = "Placeholder_Spawn";
     public const string SlotIdle = "Placeholder_Idle";
@@ -101,8 +105,12 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         Scene activeScene = SceneManager.GetActiveScene();
         bool map1Loaded = activeScene.IsValid() && activeScene.path == Map1ScenePath;
         bool map1HasMonsters = map1Loaded && FindObjectsByType<MMOMonsterAI>().Length >= 3;
+        bool needsV2Upgrade =
+            existingPrefab == null ||
+            existingPrefab.GetComponent<MMOMonsterNetwork>() == null ||
+            !File.Exists(PipelineVersionStampPath);
 
-        if (existingPrefab == null || (map1Loaded && !map1HasMonsters))
+        if ((needsV2Upgrade && !activeScene.isDirty) || (map1Loaded && !map1HasMonsters))
         {
             BuildFullPipelineAndPopulateMap1(silent: true);
         }
@@ -199,10 +207,19 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
                 createPrefab: true);
         }
 
-        // 4. Populate Map1.unity with MMOMap1CombatDirector + 3 Monsters with Territory Zones
+        // 4. Tune Player Animator (AC_Player.controller) & Player.prefab for crisp symmetrical transitions
+        TunePlayerAnimatorAndPrefab();
+
+        // 5. Populate Map1.unity with MMOMap1CombatDirector + 3 Monsters with Territory Zones
         PopulateMap1Scene(enemyPrefab, normalConfig);
 
-        // 5. Run Automated Verification Suite and write report
+        try
+        {
+            File.WriteAllText(PipelineVersionStampPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch { }
+
+        // 6. Run Automated Verification Suite and write report
         string testReport = RunAutomatedVerificationSuite();
 
         if (!silent)
@@ -318,20 +335,20 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
 
         AnimatorStateTransition locoToCombat = locomotionState.AddTransition(combatIdleState);
         locoToCombat.hasExitTime = false;
-        locoToCombat.duration = 0.15f;
+        locoToCombat.duration = 0.16f;
         locoToCombat.canTransitionToSelf = false;
         locoToCombat.AddCondition(AnimatorConditionMode.If, 0f, "IsCombat");
         locoToCombat.AddCondition(AnimatorConditionMode.Less, 0.2f, "Speed");
 
         AnimatorStateTransition combatToLocoOut = combatIdleState.AddTransition(locomotionState);
         combatToLocoOut.hasExitTime = false;
-        combatToLocoOut.duration = 0.15f;
+        combatToLocoOut.duration = 0.16f;
         combatToLocoOut.canTransitionToSelf = false;
         combatToLocoOut.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsCombat");
 
         AnimatorStateTransition combatToLocoMove = combatIdleState.AddTransition(locomotionState);
         combatToLocoMove.hasExitTime = false;
-        combatToLocoMove.duration = 0.15f;
+        combatToLocoMove.duration = 0.16f;
         combatToLocoMove.canTransitionToSelf = false;
         combatToLocoMove.AddCondition(AnimatorConditionMode.Greater, 0.2f, "Speed");
 
@@ -356,9 +373,9 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         AddAttackEntryTransition(locomotionState, attack02, 1);
         AddAttackEntryTransition(locomotionState, attack03, 2);
 
-        AddReturnToCombatIdleTransition(attack01, combatIdleState, 0.9f, 0.15f);
-        AddReturnToCombatIdleTransition(attack02, combatIdleState, 0.9f, 0.15f);
-        AddReturnToCombatIdleTransition(attack03, combatIdleState, 0.9f, 0.15f);
+        AddReturnToCombatIdleTransition(attack01, combatIdleState, 0.84f, 0.18f);
+        AddReturnToCombatIdleTransition(attack02, combatIdleState, 0.84f, 0.18f);
+        AddReturnToCombatIdleTransition(attack03, combatIdleState, 0.84f, 0.18f);
 
         // Sub-State Machine: Skills
         AnimatorStateMachine skillsSm = rootSm.AddStateMachine("Skills", new Vector3(820f, 180f, 0f));
@@ -395,8 +412,8 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         AddInstantSkillTransition(locomotionState, skillRelease01, 0);
         AddInstantSkillTransition(locomotionState, skillRelease02, 1);
 
-        AddReturnToCombatIdleTransition(skillRelease01, combatIdleState, 0.9f, 0.15f);
-        AddReturnToCombatIdleTransition(skillRelease02, combatIdleState, 0.9f, 0.15f);
+        AddReturnToCombatIdleTransition(skillRelease01, combatIdleState, 0.85f, 0.18f);
+        AddReturnToCombatIdleTransition(skillRelease02, combatIdleState, 0.85f, 0.18f);
 
         // Any State -> Hit_React, Stun, Death
         AnimatorState hitReactState = rootSm.AddState("Hit_React", new Vector3(260f, 200f, 0f));
@@ -410,7 +427,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         anyToHit.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsDead");
         anyToHit.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsStunned");
 
-        AddReturnToCombatIdleTransition(hitReactState, combatIdleState, 0.88f, 0.15f);
+        AddReturnToCombatIdleTransition(hitReactState, combatIdleState, 0.82f, 0.16f);
 
         AnimatorState stunState = rootSm.AddState("Stun", new Vector3(260f, 280f, 0f));
         stunState.motion = slots[SlotStun];
@@ -647,6 +664,8 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         cfg.flinchCooldown = 0.75f;
         cfg.walkSpeed = 1.5f;
         cfg.runSpeed = 3.8f;
+        cfg.speedDampTime = 0.14f;
+        cfg.skillCount = isBoss ? 1 : 0;
         cfg.attackCount = detectedAttackCount;
         cfg.attackWeights = detectedAttackCount switch
         {
@@ -656,6 +675,89 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         };
         EditorUtility.SetDirty(cfg);
         return cfg;
+    }
+
+    private static float MeasureObjectVisualHeight(
+        GameObject prefabAsset,
+        RuntimeAnimatorController fallbackController = null,
+        AnimationClip fallbackPoseClip = null)
+    {
+        if (prefabAsset == null) return 0f;
+
+        GameObject temp = Instantiate(prefabAsset, Vector3.zero, Quaternion.identity);
+        try
+        {
+            Animator anim = temp.GetComponentInChildren<Animator>(true);
+            if (anim != null)
+            {
+                if (anim.runtimeAnimatorController == null && fallbackController != null)
+                {
+                    anim.avatar = null;
+                    anim.runtimeAnimatorController = fallbackController;
+                }
+                anim.Rebind();
+                anim.Update(0f);
+            }
+
+            if (fallbackPoseClip != null)
+            {
+                fallbackPoseClip.SampleAnimation(temp, 0f);
+            }
+
+            SkinnedMeshRenderer[] skinned = temp.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            Bounds combined = default;
+            bool hasBounds = false;
+
+            for (int i = 0; i < skinned.Length; i++)
+            {
+                SkinnedMeshRenderer smr = skinned[i];
+                if (smr == null) continue;
+                smr.updateWhenOffscreen = true;
+                Mesh baked = new Mesh();
+                smr.BakeMesh(baked);
+                Bounds localB = baked.bounds;
+                DestroyImmediate(baked);
+
+                if (localB.size.sqrMagnitude > 0.0001f)
+                {
+                    Vector3 lossy = smr.transform.lossyScale;
+                    Vector3 worldMin = smr.transform.position + Vector3.Scale(localB.min, lossy);
+                    Vector3 worldMax = smr.transform.position + Vector3.Scale(localB.max, lossy);
+                    Bounds wb = new Bounds((worldMin + worldMax) * 0.5f, new Vector3(
+                        Mathf.Abs(worldMax.x - worldMin.x),
+                        Mathf.Abs(worldMax.y - worldMin.y),
+                        Mathf.Abs(worldMax.z - worldMin.z)));
+
+                    if (!hasBounds)
+                    {
+                        combined = wb;
+                        hasBounds = true;
+                    }
+                    else
+                    {
+                        combined.Encapsulate(wb);
+                    }
+                }
+            }
+
+            if (hasBounds && combined.size.y > 0.25f)
+            {
+                return combined.size.y;
+            }
+
+            Transform head = FindBoneRecursive(temp.transform, "mixamorig:HeadTop_End")
+                          ?? FindBoneRecursive(temp.transform, "mixamorig:Head");
+            if (head != null)
+            {
+                return Mathf.Max(0.5f, (head.position.y - temp.transform.position.y) + 0.18f);
+            }
+        }
+        finally
+        {
+            DestroyImmediate(temp);
+        }
+
+        return 0f;
     }
 
     private static GameObject CreateOrUpdateMonsterPrefab(
@@ -670,9 +772,22 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
             return null;
         }
 
+        GameObject playerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(PlayerPrefabPath);
+        float playerHeight = MeasureObjectVisualHeight(playerPrefab);
+        if (playerHeight < 0.5f) playerHeight = 1.80f;
+
+        Dictionary<string, AnimationClip> enemyClips = FindClipsInFolder(monsterFolder);
+        AnimationClip idleClip = MatchBestClip(enemyClips, "idle");
+
+        float rawEnemyHeight = MeasureObjectVisualHeight(baseModelPrefab, aoc, idleClip);
+        float heightMatchScale = (rawEnemyHeight > 0.25f)
+            ? Mathf.Clamp(playerHeight / rawEnemyHeight, 0.4f, 4.0f)
+            : 1.0f;
+
         string prefabPath = CombineAssetPath(monsterFolder, $"{safeName}_Monster.prefab");
         GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(baseModelPrefab);
         instance.name = $"{safeName}_Monster";
+        instance.transform.localScale = Vector3.one * heightMatchScale;
 
         try
         {
@@ -693,9 +808,10 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
             {
                 capsule = instance.AddComponent<CapsuleCollider>();
             }
-            capsule.center = new Vector3(0f, 1.0f, 0f);
-            capsule.radius = 0.48f;
-            capsule.height = 2.0f;
+            float localColliderHeight = playerHeight / Mathf.Max(0.1f, heightMatchScale);
+            capsule.center = new Vector3(0f, localColliderHeight * 0.5f, 0f);
+            capsule.radius = Mathf.Clamp(0.46f / Mathf.Max(0.1f, heightMatchScale), 0.25f, 1.2f);
+            capsule.height = localColliderHeight;
 
             // Wire Targetable + LockVisual renderer so CapsLock highlights the monster in yellow!
             Targetable targetable = instance.GetComponent<Targetable>();
@@ -710,16 +826,18 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
                 mainRenderer = instance.GetComponentInChildren<Renderer>(true);
             }
 
-            if (mainRenderer != null)
+            SerializedObject soTargetable = new SerializedObject(targetable);
+            SerializedProperty lockVisualProp = soTargetable.FindProperty("lockVisual");
+            if (lockVisualProp != null && mainRenderer != null)
             {
-                SerializedObject soTargetable = new SerializedObject(targetable);
-                SerializedProperty lockVisualProp = soTargetable.FindProperty("lockVisual");
-                if (lockVisualProp != null)
-                {
-                    lockVisualProp.objectReferenceValue = mainRenderer;
-                    soTargetable.ApplyModifiedPropertiesWithoutUndo();
-                }
+                lockVisualProp.objectReferenceValue = mainRenderer;
             }
+            SerializedProperty aimOffsetProp = soTargetable.FindProperty("fallbackAimOffset");
+            if (aimOffsetProp != null)
+            {
+                aimOffsetProp.vector3Value = new Vector3(0f, localColliderHeight * 0.62f, 0f);
+            }
+            soTargetable.ApplyModifiedPropertiesWithoutUndo();
 
             MonsterAnimatorBridge bridge = instance.GetComponent<MonsterAnimatorBridge>();
             if (bridge == null)
@@ -740,11 +858,155 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
             ai.territoryRadius = 13.5f;
             ai.patrolRadius = 3.5f;
 
+            // Photon Fusion Shared Mode components (safe no-op when running Standalone in Map1)
+            if (instance.GetComponent<NetworkObject>() == null)
+            {
+                instance.AddComponent<NetworkObject>();
+            }
+            if (instance.GetComponent<NetworkTransform>() == null)
+            {
+                instance.AddComponent<NetworkTransform>();
+            }
+            if (instance.GetComponent<MMOMonsterNetwork>() == null)
+            {
+                instance.AddComponent<MMOMonsterNetwork>();
+            }
+
             return PrefabUtility.SaveAsPrefabAsset(instance, prefabPath);
         }
         finally
         {
             DestroyImmediate(instance);
+        }
+    }
+
+    public static void TunePlayerAnimatorAndPrefab()
+    {
+        AnimatorController playerCtrl = AssetDatabase.LoadAssetAtPath<AnimatorController>(PlayerControllerPath);
+        if (playerCtrl != null && playerCtrl.layers.Length > 0)
+        {
+            AnimatorStateMachine sm = playerCtrl.layers[0].stateMachine;
+            AnimatorState locomotion = FindStateByName(sm, "Locomotion");
+            AnimatorState jump = FindStateByName(sm, "Jump");
+            AnimatorState attack1 = FindStateByName(sm, "Attack1");
+            AnimatorState attack2 = FindStateByName(sm, "Attack2");
+
+            if (attack1 != null) attack1.tag = "Attack";
+            if (attack2 != null) attack2.tag = "Attack";
+
+            if (locomotion != null)
+            {
+                for (int i = 0; i < locomotion.transitions.Length; i++)
+                {
+                    AnimatorStateTransition t = locomotion.transitions[i];
+                    if (t.destinationState == attack1)
+                    {
+                        t.hasExitTime = false;
+                        t.duration = 0.08f;
+                    }
+                    else if (t.destinationState == jump)
+                    {
+                        t.hasExitTime = false;
+                        t.duration = 0.08f;
+                    }
+                }
+            }
+
+            if (jump != null)
+            {
+                for (int i = 0; i < jump.transitions.Length; i++)
+                {
+                    AnimatorStateTransition t = jump.transitions[i];
+                    if (t.destinationState == locomotion)
+                    {
+                        t.duration = 0.14f;
+                    }
+                }
+            }
+
+            if (attack1 != null)
+            {
+                for (int i = 0; i < attack1.transitions.Length; i++)
+                {
+                    AnimatorStateTransition t = attack1.transitions[i];
+                    if (t.destinationState == attack2)
+                    {
+                        t.hasExitTime = false;
+                        t.duration = 0.10f;
+                    }
+                    else if (t.destinationState == locomotion)
+                    {
+                        t.hasExitTime = true;
+                        t.exitTime = 0.84f;
+                        t.duration = 0.18f;
+                    }
+                }
+            }
+
+            if (attack2 != null)
+            {
+                for (int i = 0; i < attack2.transitions.Length; i++)
+                {
+                    AnimatorStateTransition t = attack2.transitions[i];
+                    if (t.destinationState == locomotion)
+                    {
+                        t.hasExitTime = true;
+                        t.exitTime = 0.84f;
+                        t.duration = 0.18f;
+                    }
+                }
+            }
+
+            EditorUtility.SetDirty(playerCtrl);
+        }
+
+        if (File.Exists(PlayerPrefabPath))
+        {
+            GameObject playerRoot = PrefabUtility.LoadPrefabContents(PlayerPrefabPath);
+            try
+            {
+                MMOPlayerController pc = playerRoot.GetComponent<MMOPlayerController>();
+                if (pc != null)
+                {
+                    SerializedObject so = new SerializedObject(pc);
+                    SetSerializedFloat(so, "walkSpeed", 2.4f);
+                    SetSerializedFloat(so, "runSpeed", 5.4f);
+                    SetSerializedFloat(so, "animatorDampTime", 0.10f);
+                    SetSerializedFloat(so, "groundCheckRadius", 0.22f);
+                    SetSerializedFloat(so, "jumpHeight", 1.35f);
+                    SetSerializedFloat(so, "comboWindowStart", 0.40f);
+                    SetSerializedFloat(so, "comboWindowEnd", 0.88f);
+                    so.ApplyModifiedPropertiesWithoutUndo();
+                    PrefabUtility.SaveAsPrefabAsset(playerRoot, PlayerPrefabPath);
+                }
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(playerRoot);
+            }
+        }
+
+        AssetDatabase.SaveAssets();
+    }
+
+    private static AnimatorState FindStateByName(AnimatorStateMachine sm, string stateName)
+    {
+        for (int i = 0; i < sm.states.Length; i++)
+        {
+            if (sm.states[i].state != null && sm.states[i].state.name == stateName)
+            {
+                return sm.states[i].state;
+            }
+        }
+        return null;
+    }
+
+    private static void SetSerializedFloat(SerializedObject so, string propName, float value)
+    {
+        SerializedProperty prop = so.FindProperty(propName);
+        if (prop != null)
+        {
+            prop.floatValue = value;
         }
     }
 
@@ -767,6 +1029,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         }
 
         Scene activeScene = SceneManager.GetActiveScene();
+        string originalScenePath = activeScene.IsValid() ? activeScene.path : string.Empty;
         bool openedTempScene = false;
         Scene map1Scene = activeScene;
 
@@ -843,7 +1106,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
             maxDmg: 85,
             position: new Vector3(-14f, 0f, 16f),
             yaw: 145f,
-            scale: 1.08f,
+            scale: 1.06f,
             aggroRadius: 7.2f,
             territoryRadius: 13.5f,
             patrolRadius: 4.0f);
@@ -860,7 +1123,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
             maxDmg: 125,
             position: new Vector3(14f, 0f, 18f),
             yaw: -145f,
-            scale: 1.35f,
+            scale: 1.30f,
             aggroRadius: 8.2f,
             territoryRadius: 15.0f,
             patrolRadius: 3.5f);
@@ -868,9 +1131,9 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         EditorSceneManager.MarkSceneDirty(map1Scene);
         EditorSceneManager.SaveScene(map1Scene);
 
-        if (openedTempScene && activeScene.IsValid() && !string.IsNullOrEmpty(activeScene.path))
+        if (openedTempScene && !string.IsNullOrEmpty(originalScenePath) && File.Exists(originalScenePath))
         {
-            EditorSceneManager.OpenScene(activeScene.path, OpenSceneMode.Single);
+            EditorSceneManager.OpenScene(originalScenePath, OpenSceneMode.Single);
         }
     }
 
@@ -893,7 +1156,8 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
         GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(monsterPrefab);
         instance.name = objectName;
         instance.transform.SetPositionAndRotation(position, Quaternion.Euler(0f, yaw, 0f));
-        instance.transform.localScale = Vector3.one * scale;
+        float prefabBaseScale = Mathf.Max(0.1f, monsterPrefab.transform.localScale.x);
+        instance.transform.localScale = Vector3.one * (prefabBaseScale * scale);
 
         MonsterAnimatorBridge bridge = instance.GetComponent<MonsterAnimatorBridge>();
         if (bridge != null && config != null)
@@ -1009,15 +1273,28 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
                     AssertTest("Generic Rig Animation Curve Binding Moves Enemy Bones", angleDiff > 1.0f, $"RightArm rotated {angleDiff:0.0} deg during Attack_01");
                 }
 
-                // 4. Verify MonsterAnimatorBridge & MMOMonsterAI Combat + Crit + Territory Logic
+                // 4. Verify MonsterAnimatorBridge & MMOMonsterAI Combat + Crit + Territory + Network Logic
                 MonsterAnimatorBridge bridge = tempInstance.GetComponent<MonsterAnimatorBridge>();
                 MMOMonsterAI ai = tempInstance.GetComponent<MMOMonsterAI>();
                 Targetable targetable = tempInstance.GetComponent<Targetable>();
+                NetworkObject netObj = tempInstance.GetComponent<NetworkObject>();
+                NetworkTransform netTx = tempInstance.GetComponent<NetworkTransform>();
+                MMOMonsterNetwork monsterNet = tempInstance.GetComponent<MMOMonsterNetwork>();
 
                 AssertTest("Enemy Has MonsterAnimatorBridge + MMOMonsterAI + Targetable", bridge != null && ai != null && targetable != null);
+                AssertTest("Enemy Has Fusion NetworkObject + NetworkTransform + MMOMonsterNetwork", netObj != null && netTx != null && monsterNet != null);
+
+                // Verify Player vs Enemy Height Parity ("ขยายตัวละครให้เท่าคนเล่น")
+                GameObject playerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(PlayerPrefabPath);
+                float playerHeight = MeasureObjectVisualHeight(playerPrefab);
+                AnimationClip idleClipForTest = MatchBestClip(clips, "idle");
+                float enemyHeight = MeasureObjectVisualHeight(enemyPrefab, null, idleClipForTest);
+                bool heightMatched = playerHeight > 0.5f && enemyHeight > 0.5f && Mathf.Abs(playerHeight - enemyHeight) <= 0.18f;
+                AssertTest("Enemy Height Matches Player Height", heightMatched, $"Player={playerHeight:0.00}m, Enemy={enemyHeight:0.00}m (scale={enemyPrefab.transform.localScale.x:0.00})");
 
                 if (ai != null && bridge != null)
                 {
+                    ai.EnsureReferencesInitialized();
                     int startHp = ai.CurrentHealth;
                     ai.TakeDamage(150, isCritical: false, tempInstance.transform, tempInstance.transform.position);
                     int afterNormalHit = ai.CurrentHealth;
@@ -1032,6 +1309,11 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
 
                     ai.TakeDamage(99999, isCritical: true, null, tempInstance.transform.position);
                     AssertTest("Evading Monster Is Invulnerable During Return", ai.CurrentHealth == ai.MaxHealth);
+
+                    // Verify Normal Stun vs Boss Super Armor Resist
+                    string bossCfgPath = CombineAssetPath(DefaultMonsterFolder, "Config_Enemy_Boss.asset");
+                    MonsterAnimationConfig bossCfg = AssetDatabase.LoadAssetAtPath<MonsterAnimationConfig>(bossCfgPath);
+                    AssertTest("Boss Config Enables Super Armor + Skill", bossCfg != null && bossCfg.isBossOrElite && !bossCfg.canFlinch && bossCfg.skillCount >= 1);
                 }
             }
             finally
@@ -1040,11 +1322,51 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
             }
         }
 
-        // 5. Verify Map1 Scene Setup
+        // 5. Verify Player Animator Smoothness & Combo Window
+        AnimatorController playerCtrl = AssetDatabase.LoadAssetAtPath<AnimatorController>(PlayerControllerPath);
+        bool playerAnimOk = false;
+        if (playerCtrl != null && playerCtrl.layers.Length > 0)
+        {
+            AnimatorState attack1State = FindStateByName(playerCtrl.layers[0].stateMachine, "Attack1");
+            AnimatorState attack2State = FindStateByName(playerCtrl.layers[0].stateMachine, "Attack2");
+            playerAnimOk = attack1State != null && attack2State != null &&
+                           attack1State.tag == "Attack" && attack2State.tag == "Attack";
+        }
+        AssertTest("AC_Player.controller Has Attack Tags & Tuned States", playerAnimOk);
+
+        // 6. Verify Map1 Scene Setup + Lobby->Map1 Dual-Mode Compatibility
+        Scene activeScene = SceneManager.GetActiveScene();
+        string originalScenePath = activeScene.IsValid() ? activeScene.path : string.Empty;
+        bool openedTempMap1 = false;
+        if ((!activeScene.IsValid() || activeScene.path != Map1ScenePath) && !activeScene.isDirty && File.Exists(Map1ScenePath))
+        {
+            EditorSceneManager.OpenScene(Map1ScenePath, OpenSceneMode.Single);
+            openedTempMap1 = true;
+        }
+
         MMOMonsterAI[] sceneMonsters = FindObjectsByType<MMOMonsterAI>();
         MMOMap1CombatDirector sceneDirector = FindAnyObjectByType<MMOMap1CombatDirector>();
         AssertTest("Map1 Has MMOMap1CombatDirector + Player Prefab Assigned", sceneDirector != null && sceneDirector.playerPrefab != null);
         AssertTest("Map1 Has 3 Active Monsters with Territory Zones", sceneMonsters.Length >= 3, $"Count={sceneMonsters.Length}");
+
+        if (openedTempMap1 && !string.IsNullOrEmpty(originalScenePath) && File.Exists(originalScenePath))
+        {
+            EditorSceneManager.OpenScene(originalScenePath, OpenSceneMode.Single);
+        }
+
+        bool lobbyInBuild = false;
+        bool map1InBuild = false;
+        for (int i = 0; i < EditorBuildSettings.scenes.Length; i++)
+        {
+            string path = EditorBuildSettings.scenes[i].path;
+            if (EditorBuildSettings.scenes[i].enabled && path == LobbyScenePath) lobbyInBuild = true;
+            if (EditorBuildSettings.scenes[i].enabled && path == Map1ScenePath) map1InBuild = true;
+        }
+        AssertTest("Build Settings Include Enabled Lobby.unity & Map1.unity", lobbyInBuild && map1InBuild);
+
+        bool lobbyLinksToMap1 = File.Exists(LobbyScenePath) &&
+                                File.ReadAllText(LobbyScenePath).Contains("gameSceneName: Map1");
+        AssertTest("Lobby.unity LobbyNetwork Targets Map1", lobbyLinksToMap1);
 
         sb.AppendLine($"=== SUMMARY: {passed} PASSED, {failed} FAILED ===");
 
@@ -1194,7 +1516,7 @@ public sealed class MonsterAnimatorBuilder : EditorWindow
     {
         AnimatorStateTransition t = sourceState.AddTransition(targetAttackState);
         t.hasExitTime = false;
-        t.duration = 0.10f;
+        t.duration = 0.12f;
         t.canTransitionToSelf = false;
         t.AddCondition(AnimatorConditionMode.If, 0f, "Attack");
         t.AddCondition(AnimatorConditionMode.Equals, attackIndex, "AttackIndex");

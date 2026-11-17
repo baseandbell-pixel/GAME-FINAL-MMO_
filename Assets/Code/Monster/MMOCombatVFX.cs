@@ -331,6 +331,170 @@ public sealed class MMOCombatVFX : MonoBehaviour
             tiltRandom: false));
     }
 
+    /// <summary>
+    /// Spawns a sweeping sword slash arc VFX in front of the attacker.
+    /// Attack1 sweeps right-to-left; Attack2 sweeps symmetrically left-to-right at a steeper diagonal.
+    /// </summary>
+    public static void SpawnSlashArc(Vector3 origin, Vector3 forward, float radius = 2.2f, bool isComboFinisher = false, Color? customColor = null)
+    {
+        if (!Application.isPlaying) return;
+        Instance.StartCoroutine(Instance.AnimateSlashArcRoutine(origin, forward, radius, isComboFinisher, customColor));
+    }
+
+    /// <summary>
+    /// Spawns an expanding ground AoE warning telegraph ring (used for Boss special skills).
+    /// </summary>
+    public static void SpawnGroundTelegraph(Vector3 center, float radius, float duration, Color color)
+    {
+        if (!Application.isPlaying) return;
+        Instance.StartCoroutine(Instance.AnimateGroundTelegraphRoutine(center, radius, duration, color));
+    }
+
+    private IEnumerator AnimateSlashArcRoutine(
+        Vector3 origin,
+        Vector3 forward,
+        float radius,
+        bool isComboFinisher,
+        Color? customColor)
+    {
+        EnsureMaterials();
+
+        Vector3 flatForward = new Vector3(forward.x, 0f, forward.z);
+        if (flatForward.sqrMagnitude < 0.0001f) flatForward = Vector3.forward;
+        flatForward.Normalize();
+
+        GameObject arcGo = new GameObject(isComboFinisher ? "VFX_SlashArc_Finisher" : "VFX_SlashArc");
+        arcGo.transform.position = origin + Vector3.up * 1.15f + flatForward * 0.35f;
+
+        float tiltAngle = isComboFinisher ? -22f : 18f;
+        arcGo.transform.rotation = Quaternion.LookRotation(flatForward, Vector3.up) * Quaternion.Euler(0f, 0f, tiltAngle);
+
+        LineRenderer lr = arcGo.AddComponent<LineRenderer>();
+        lr.useWorldSpace = false;
+        lr.loop = false;
+        const int segments = 20;
+        lr.positionCount = segments;
+        lr.sharedMaterial = _ringMaterial;
+        lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        lr.receiveShadows = false;
+        lr.numCapVertices = 4;
+
+        Color baseColor = customColor ?? (isComboFinisher
+            ? new Color(1f, 0.78f, 0.2f, 0.95f)
+            : new Color(0.45f, 0.88f, 1f, 0.92f));
+
+        float duration = isComboFinisher ? 0.22f : 0.18f;
+        float sweepDir = isComboFinisher ? -1f : 1f;
+        float arcSpanDeg = isComboFinisher ? 155f : 125f;
+        float maxWidth = isComboFinisher ? 0.36f : 0.24f;
+
+        AnimationCurve widthCurve = new AnimationCurve(
+            new Keyframe(0f, 0.08f),
+            new Keyframe(0.55f, 1f),
+            new Keyframe(1f, 0.05f));
+        lr.widthCurve = widthCurve;
+
+        float elapsed = 0f;
+        while (elapsed < duration && arcGo != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            float headProgress = Mathf.SmoothStep(0f, 1f, Mathf.Min(1f, t * 1.45f));
+            float tailProgress = Mathf.SmoothStep(0f, 1f, Mathf.Max(0f, (t - 0.18f) * 1.25f));
+
+            float startAngle = Mathf.Lerp(-arcSpanDeg * 0.5f, arcSpanDeg * 0.5f, tailProgress) * sweepDir;
+            float endAngle = Mathf.Lerp(-arcSpanDeg * 0.5f, arcSpanDeg * 0.5f, headProgress) * sweepDir;
+
+            for (int i = 0; i < segments; i++)
+            {
+                float segT = (float)i / (segments - 1);
+                float deg = Mathf.Lerp(startAngle, endAngle, segT);
+                float rad = deg * Mathf.Deg2Rad;
+                lr.SetPosition(i, new Vector3(Mathf.Sin(rad) * radius, 0f, Mathf.Cos(rad) * radius));
+            }
+
+            float alpha = t < 0.55f ? 1f : Mathf.InverseLerp(1f, 0.55f, t);
+            Color c = baseColor;
+            c.a = baseColor.a * alpha;
+            lr.widthMultiplier = maxWidth * Mathf.Lerp(1f, 0.35f, t);
+            lr.startColor = new Color(c.r, c.g, c.b, c.a * 0.2f);
+            lr.endColor = c;
+
+            yield return null;
+        }
+
+        if (arcGo != null)
+        {
+            Destroy(arcGo);
+        }
+    }
+
+    private IEnumerator AnimateGroundTelegraphRoutine(Vector3 center, float radius, float duration, Color color)
+    {
+        EnsureMaterials();
+
+        GameObject root = new GameObject("VFX_BossGroundTelegraph");
+        root.transform.position = center + Vector3.up * 0.08f;
+
+        LineRenderer outerRing = CreateTelegraphRing(root.transform, "OuterBoundary", 48, 0.14f, color);
+        LineRenderer innerRing = CreateTelegraphRing(root.transform, "InnerFill", 48, 0.10f, new Color(color.r, color.g, color.b, color.a * 0.85f));
+        SetRingRadius(outerRing, radius);
+
+        float elapsed = 0f;
+        while (elapsed < duration && root != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / Mathf.Max(0.05f, duration));
+            SetRingRadius(innerRing, Mathf.Lerp(0.25f, radius, t));
+
+            float pulse = 0.65f + 0.35f * Mathf.Sin(elapsed * 18f);
+            Color oc = color;
+            oc.a = color.a * pulse;
+            outerRing.startColor = oc;
+            outerRing.endColor = oc;
+
+            Color ic = color;
+            ic.a = Mathf.Lerp(0.35f, 0.95f, t);
+            innerRing.startColor = ic;
+            innerRing.endColor = ic;
+
+            yield return null;
+        }
+
+        if (root != null)
+        {
+            Destroy(root);
+        }
+    }
+
+    private LineRenderer CreateTelegraphRing(Transform parent, string ringName, int segments, float width, Color color)
+    {
+        GameObject go = new GameObject(ringName);
+        go.transform.SetParent(parent, false);
+        LineRenderer lr = go.AddComponent<LineRenderer>();
+        lr.useWorldSpace = false;
+        lr.loop = true;
+        lr.positionCount = segments;
+        lr.startWidth = width;
+        lr.endWidth = width;
+        lr.sharedMaterial = _ringMaterial;
+        lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        lr.receiveShadows = false;
+        lr.startColor = color;
+        lr.endColor = color;
+        return lr;
+    }
+
+    private static void SetRingRadius(LineRenderer lr, float radius)
+    {
+        int count = lr.positionCount;
+        for (int i = 0; i < count; i++)
+        {
+            float angle = i * Mathf.PI * 2f / count;
+            lr.SetPosition(i, new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius));
+        }
+    }
+
     private IEnumerator AnimateShockwaveRingRoutine(
         Vector3 center,
         Color color,

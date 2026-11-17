@@ -195,6 +195,22 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         SetState(State.Idle, "Left the room.");
     }
 
+    /// <summary>
+    /// Leaves the active Fusion session (if any) and returns cleanly to the Lobby scene.
+    /// </summary>
+    public async void ReturnToLobbyScene()
+    {
+        if (Runner != null && Runner.IsRunning)
+        {
+            await Runner.Shutdown();
+        }
+
+        _localGameplayPlayer = null;
+        _localGameplayPlayerSpawned = false;
+        SetState(State.Idle, "Returned to Lobby.");
+        SceneManager.LoadScene("Lobby", LoadSceneMode.Single);
+    }
+
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { }
     public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
@@ -267,6 +283,7 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         {
             int spawnSlot = Runner.LocalPlayer.PlayerId % MaxPlayers;
             Vector3 spawnPosition = gameplaySpawnPosition + gameplaySpawnOffsetPerPlayer * spawnSlot;
+            spawnPosition.y = Mathf.Max(0.1f, spawnPosition.y);
 
             _localGameplayPlayer = Runner.Spawn(
                 gameplayPlayerPrefab,

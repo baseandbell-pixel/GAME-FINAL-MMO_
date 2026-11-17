@@ -26,6 +26,12 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
 
     [Networked] public int NetworkActionSequence { get; set; }
 
+    [Networked] public int NetworkHealth { get; set; }
+
+    [Networked] public int NetworkMaxHealth { get; set; }
+
+    [Networked] public int NetworkLevel { get; set; }
+
     // ---------------------------------------------------------
     // NETWORKED PLAYER IDENTITY
     // ---------------------------------------------------------
@@ -61,13 +67,13 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
 
     private MMOPlayerController playerController;
 
+    private MMOPlayerCombat playerCombat;
+
     private Transform nameLabelTransform;
 
     private bool isLocalPlayer;
 
     private string appliedNickname;
-
-    private int lastAppliedAvatar = -1;
 
     private const string DefaultPlayerName = "Player";
 
@@ -86,6 +92,7 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
     private void Awake()
     {
         playerController = GetComponent<MMOPlayerController>();
+        playerCombat = GetComponent<MMOPlayerCombat>();
 
         if (nameLabel == null)
         {
@@ -141,7 +148,7 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
         if (cameraController == null)
         {
             cameraController =
-                FindObjectOfType<MMOCameraController>();
+                FindAnyObjectByType<MMOCameraController>();
         }
 
         // Enable input only for the owner.
@@ -153,6 +160,12 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
         if (isLocalPlayer && cameraController != null)
         {
             cameraController.SetTarget(transform);
+
+            if (LobbyNetwork.Instance != null &&
+                LobbyNetwork.Instance.CurrentState == LobbyNetwork.State.InGame)
+            {
+                cameraController.SetGameplayEnabled(true);
+            }
         }
 
         if (Object.HasStateAuthority)
@@ -161,6 +174,9 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
             NetworkGrounded = true;
             NetworkAction = 0;
             NetworkActionSequence = 0;
+            NetworkHealth = 1200;
+            NetworkMaxHealth = 1200;
+            NetworkLevel = 5;
         }
 
         ApplyPlayerName();
@@ -241,6 +257,18 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
 
         NetworkActionSequence =
             playerController.NetworkActionSequence;
+
+        if (playerCombat == null)
+        {
+            playerCombat = GetComponent<MMOPlayerCombat>();
+        }
+
+        if (playerCombat != null)
+        {
+            NetworkHealth = playerCombat.CurrentHealth;
+            NetworkMaxHealth = playerCombat.MaxHealth;
+            NetworkLevel = playerCombat.playerLevel;
+        }
     }
 
     // ---------------------------------------------------------
@@ -292,6 +320,10 @@ public sealed class MMOPlayerFusion : NetworkBehaviour
         if (isLocalPlayer && showYouSuffix)
         {
             nickname += " (You)";
+        }
+        else if (!isLocalPlayer && Object != null && Object.IsValid && NetworkLevel > 0)
+        {
+            nickname = $"Lv.{NetworkLevel} {nickname}";
         }
 
         if (appliedNickname != nickname)

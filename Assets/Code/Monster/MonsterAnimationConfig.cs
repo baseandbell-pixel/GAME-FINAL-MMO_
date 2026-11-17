@@ -29,7 +29,7 @@ public sealed class MonsterAnimationConfig : ScriptableObject
 
     [Tooltip("Smoothing time (seconds) applied to the Animator Speed parameter.")]
     [Range(0.01f, 0.5f)]
-    public float speedDampTime = 0.1f;
+    public float speedDampTime = 0.14f;
 
     [Header("Basic Attacks")]
     [Tooltip("Number of basic attack animations available for this monster (1 to 3). Model Enemy has 2 (Attack_01, Attack_02).")]
@@ -123,6 +123,27 @@ public sealed class MonsterAnimationConfig : ScriptableObject
         }
 
         return count - 1;
+    }
+
+    /// <summary>
+    /// Picks the next AttackIndex (0..attackCount-1) with a symmetrical alternating bias
+    /// so consecutive swings flow naturally (e.g., Attack_01 -> Attack_02 -> Attack_01)
+    /// rather than repeating the same side awkwardly.
+    /// </summary>
+    public int PickNextAttackIndex(int lastAttackIndex)
+    {
+        int count = Mathf.Clamp(attackCount, 1, 3);
+        if (count == 1)
+        {
+            return 0;
+        }
+
+        if (lastAttackIndex >= 0 && lastAttackIndex < count && UnityEngine.Random.value < 0.78f)
+        {
+            return (lastAttackIndex + 1) % count;
+        }
+
+        return PickRandomAttackIndex();
     }
 
     private void OnValidate()

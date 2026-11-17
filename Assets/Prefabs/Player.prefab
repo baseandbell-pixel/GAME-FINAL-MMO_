@@ -386,19 +386,19 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 64
   allowStandaloneInput: 1
-  walkSpeed: 2.2
-  runSpeed: 4.2
+  walkSpeed: 2.4
+  runSpeed: 5.4
   accelerationSmoothTime: 0.12
   turnSmoothTime: 0.1
   attackTurnSmoothTime: 0.045
-  animatorDampTime: 0.12
-  groundCheckRadius: 0.1
-  jumpHeight: 0.5
+  animatorDampTime: 0.1
+  groundCheckRadius: 0.22
+  jumpHeight: 1.35
   gravity: -25
   groundStickForce: 2.5
   jumpLockSafetyTimeout: 5
-  comboWindowStart: 0.7
-  comboWindowEnd: 0.8
+  comboWindowStart: 0.4
+  comboWindowEnd: 0.88
   attackStartGraceTime: 0.25
   attackEntryTimeout: 1
   attackSafetyTimeout: 5
@@ -419,6 +419,9 @@ MonoBehaviour:
     RawValue: 0
   _NetworkAction: 0
   _NetworkActionSequence: 0
+  _NetworkHealth: 0
+  _NetworkMaxHealth: 0
+  _NetworkLevel: 0
   _AvatarIndex: 0
   _Nick:
     _length: 0

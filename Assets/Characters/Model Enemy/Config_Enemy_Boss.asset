@@ -16,13 +16,13 @@ MonoBehaviour:
   isBossOrElite: 1
   walkSpeed: 1.5
   runSpeed: 3.8
-  speedDampTime: 0.1
+  speedDampTime: 0.14
   attackCount: 2
   attackWeights:
   - 0.55
   - 0.45
   - 0
-  skillCount: 0
+  skillCount: 1
   canFlinch: 0
   canFlinchDuringAttack: 0
   flinchCooldown: 0.75

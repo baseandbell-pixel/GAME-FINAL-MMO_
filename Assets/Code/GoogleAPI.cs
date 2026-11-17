@@ -12,6 +12,8 @@ public class PlayerData
 {
     [FirestoreProperty] public string name { get; set; }
     [FirestoreProperty] public int avatarId { get; set; }
+    [FirestoreProperty] public int level { get; set; }
+    [FirestoreProperty] public int exp { get; set; }
 }
 
 public class GoogleAPI : MonoBehaviour
@@ -26,6 +28,8 @@ public class GoogleAPI : MonoBehaviour
     
     //new
     public int avatarId = 0;
+    public int level = 5;
+    public int exp = 0;
 
 
     public bool profileLoaded;
@@ -90,6 +94,8 @@ public class GoogleAPI : MonoBehaviour
                     {
                         username = ClampName(saved.name);
                         avatarId = Mathf.Clamp(saved.avatarId, 0, LobbyNetwork.AvatarCount - 1);
+                        level = saved.level >= 1 ? saved.level : 5;
+                        exp = Mathf.Max(0, saved.exp);
                         loaded = true;
                     }
                 }
@@ -104,6 +110,8 @@ public class GoogleAPI : MonoBehaviour
         {
             username = ClampName(string.IsNullOrEmpty(fallbackName) ? "Player" : fallbackName);
             avatarId = UnityEngine.Random.Range(0, LobbyNetwork.AvatarCount);
+            level = 5;
+            exp = 0;
             await SaveProfileAsync();
         }
 
@@ -120,6 +128,8 @@ public class GoogleAPI : MonoBehaviour
             {
                 name = username,
                 avatarId = avatarId,
+                level = level,
+                exp = exp,
             };
             await Doc.SetAsync(toSave, SetOptions.MergeAll);
             return true;
@@ -128,6 +138,16 @@ public class GoogleAPI : MonoBehaviour
         {
             Debug.LogError("[GoogleAPI] Profile save failed: " + ex);
             return false;
+        }
+    }
+
+    public void SaveProgression(int newLevel, int newExp)
+    {
+        level = Mathf.Max(1, newLevel);
+        exp = Mathf.Max(0, newExp);
+        if (!string.IsNullOrEmpty(uuid))
+        {
+            _ = SaveProfileAsync();
         }
     }
 

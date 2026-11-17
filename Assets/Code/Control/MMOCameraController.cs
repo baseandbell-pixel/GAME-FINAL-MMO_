@@ -99,6 +99,11 @@ public sealed class MMOCameraController : MonoBehaviour
         _gameplayEnabled && !_altHeld && Cursor.lockState == CursorLockMode.Locked;
     public Targetable LockedTarget => _lockedTarget; // <--- จุดที่แก้ไข/เพิ่มเติม
     public bool HasLockedTarget => _lockedTarget != null;
+    public float MouseSensitivity
+    {
+        get => mouseSensitivity;
+        set => mouseSensitivity = Mathf.Clamp(value, 0.2f, 10f);
+    }
 
     /// <summary>Horizontal direction the camera is aiming toward.</summary>
     public Vector3 PlanarAimDirection

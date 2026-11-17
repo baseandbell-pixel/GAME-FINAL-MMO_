@@ -167,6 +167,10 @@ public sealed class MMOPlayerController : MonoBehaviour
 
     private bool _isGrounded;
 
+    private bool _isDead;
+
+    private float _nextFootstepTime;
+
     // =========================================================
     // JUMP LOCK STATE
     // =========================================================
@@ -250,6 +254,8 @@ public sealed class MMOPlayerController : MonoBehaviour
     /// 1 = Jump
     /// 2 = Attack1
     /// 3 = Attack2
+    /// 4 = SkillE (Heavy Stun Strike)
+    /// 5 = SkillR (Heal)
     /// </summary>
 
     public int NetworkActionCode =>
@@ -273,8 +279,43 @@ public sealed class MMOPlayerController : MonoBehaviour
     public bool IsAttacking =>
         _attackActive;
 
+    public bool IsDead =>
+        _isDead;
+
     public int CurrentAttackStep =>
         _attackStep;
+
+    public void SetDead(bool dead)
+    {
+        _isDead = dead;
+        if (dead)
+        {
+            _cachedMoveInput = Vector2.zero;
+            _cachedSprintHeld = false;
+            _jumpPressed = false;
+            _attackPressed = false;
+            _currentMoveSpeed = 0f;
+            _speedSmoothVelocity = 0f;
+            if (_attackActive)
+            {
+                FinishAttack();
+            }
+        }
+    }
+
+    public void TriggerSkillAction(int actionCode)
+    {
+        if (_isDead) return;
+
+        _networkActionCode = actionCode;
+        _networkActionSequence++;
+
+        if (actionCode == 4 && _hasAttack2Parameter)
+        {
+            animator.ResetTrigger(Attack2Hash);
+            animator.SetTrigger(Attack2Hash);
+        }
+    }
 
     /// <summary>
     /// Fired when Attack1 (step = 1) or Attack2 (step = 2) begins on the local player.
@@ -387,9 +428,10 @@ public sealed class MMOPlayerController : MonoBehaviour
         }
 
         bool gameplayInputAllowed =
-            _cameraController == null
+            !_isDead &&
+            (_cameraController == null
                 ? allowStandaloneInput
-                : _cameraController.GameplayEnabled;
+                : _cameraController.GameplayEnabled);
 
         // =====================================================
         // INPUT
@@ -589,25 +631,33 @@ public sealed class MMOPlayerController : MonoBehaviour
         );
 
         // =====================================================
-        // ANIMATION SPEED
+        // ANIMATION SPEED (Continuous Smooth Blending)
         // =====================================================
 
-        if (_attackActive || !hasMoveInput)
+        if (_attackActive || _isDead)
         {
             _networkAnimationSpeed = 0f;
         }
-        else if (isMovingBackward)
+        else if (isMovingBackward && hasMoveInput)
         {
-            // Negative value selects Backward Walk.
-            _networkAnimationSpeed = -1f;
+            // Negative value selects Backward Walk proportionally to speed.
+            float backRatio = Mathf.Clamp01(_currentMoveSpeed / Mathf.Max(0.1f, walkSpeed));
+            _networkAnimationSpeed = -backRatio;
+        }
+        else if (_currentMoveSpeed <= 0.05f && !hasMoveInput)
+        {
+            _networkAnimationSpeed = 0f;
+        }
+        else if (_currentMoveSpeed <= walkSpeed)
+        {
+            _networkAnimationSpeed = Mathf.InverseLerp(0f, Mathf.Max(0.1f, walkSpeed), _currentMoveSpeed);
         }
         else
         {
-            // 1 = Walk
-            // 2 = Run
-
-            _networkAnimationSpeed =
-                shouldRun ? 2f : 1f;
+            _networkAnimationSpeed = 1f + Mathf.InverseLerp(
+                walkSpeed,
+                Mathf.Max(walkSpeed + 0.1f, runSpeed),
+                _currentMoveSpeed);
         }
 
         if (_hasSpeedParameter)
@@ -626,6 +676,14 @@ public sealed class MMOPlayerController : MonoBehaviour
                 IsGroundedHash,
                 _isGrounded
             );
+        }
+
+        // Play rhythmic footsteps synced to player movement speed
+        if (_isGrounded && !_attackActive && !_isDead && _currentMoveSpeed > 0.65f && Time.time >= _nextFootstepTime)
+        {
+            float cadence = Mathf.Lerp(0.50f, 0.30f, Mathf.InverseLerp(1.0f, runSpeed, _currentMoveSpeed));
+            _nextFootstepTime = Time.time + cadence;
+            MMOAudioManager.PlayFootstep(transform.position, 0.20f);
         }
     }
 
@@ -1093,6 +1151,19 @@ public sealed class MMOPlayerController : MonoBehaviour
             return;
         }
 
+        // Allow smooth movement-cancel out of late attack recovery once the strike has landed.
+        if (_attackStateEntered &&
+            !_comboQueued &&
+            _cachedMoveInput.sqrMagnitude > 0.05f &&
+            TryGetAttackStateInfo(out AnimatorStateInfo activeAttackInfo) &&
+            !animator.IsInTransition(0) &&
+            activeAttackInfo.normalizedTime >= 0.78f)
+        {
+            animator.CrossFade("Locomotion", 0.14f, 0);
+            FinishAttack();
+            return;
+        }
+
         // Only unlock after leaving both attack states.
 
         if (!attackStateIsPlaying &&
@@ -1404,6 +1475,7 @@ public sealed class MMOPlayerController : MonoBehaviour
                 break;
 
             case 3:
+            case 4:
 
                 if (_hasAttack2Parameter)
                 {
@@ -1413,6 +1485,24 @@ public sealed class MMOPlayerController : MonoBehaviour
                 }
 
                 break;
+        }
+
+        if (actionCode == 2 || actionCode == 3)
+        {
+            bool finisher = actionCode == 3;
+            MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, 2.25f, finisher);
+            MMOAudioManager.PlaySwordSwing(transform.position, finisher);
+        }
+        else if (actionCode == 4)
+        {
+            Vector3 burstCenter = transform.position + Vector3.up * 1.0f + transform.forward * 1.5f;
+            MMOCombatVFX.SpawnHitEffect(burstCenter, isCritical: true, new Color(1f, 0.88f, 0.15f, 1f));
+            MMOAudioManager.PlayStunStrike(burstCenter);
+        }
+        else if (actionCode == 5)
+        {
+            MMOCombatVFX.SpawnRespawnEffect(transform.position);
+            MMOAudioManager.PlayHeal(transform.position);
         }
     }
 

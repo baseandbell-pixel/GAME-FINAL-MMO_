@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 /// <summary>
 /// Player MMORPG Combat Controller:
@@ -47,6 +48,10 @@ public sealed class MMOPlayerCombat : MonoBehaviour
     private int _expToNextLevel = 500;
     private float _nextStunSkillTime;
     private float _nextHealTime;
+    private bool _isDead;
+    private bool _pauseMenuOpen;
+    private float _respawnCountdown;
+    private Vector3 _spawnOrigin;
     private MMOMonsterAI _lastHitMonster;
     private string _lastCombatBanner = "";
     private float _lastCombatBannerUntil;
@@ -55,6 +60,7 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
     public int CurrentHealth => _currentHealth;
     public int MaxHealth => maxHealth;
+    public bool IsDead => _isDead;
 
     private void Awake()
     {
@@ -85,6 +91,30 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
     private void Start()
     {
+        _spawnOrigin = transform.position;
+        GameObject spawnMarker = GameObject.Find("Spawn");
+        if (spawnMarker != null)
+        {
+            _spawnOrigin = spawnMarker.transform.position;
+        }
+
+        if (GoogleAPI.instance != null && GoogleAPI.instance.profileLoaded)
+        {
+            int savedLv = Mathf.Max(5, GoogleAPI.instance.level);
+            int extraLevels = savedLv - playerLevel;
+            if (extraLevels > 0)
+            {
+                playerLevel = savedLv;
+                maxHealth += extraLevels * 150;
+                attack1MinDamage += extraLevels * 15;
+                attack1MaxDamage += extraLevels * 20;
+                attack2MinDamage += extraLevels * 25;
+                attack2MaxDamage += extraLevels * 30;
+                _currentHealth = maxHealth;
+            }
+            _currentExp = Mathf.Clamp(GoogleAPI.instance.exp, 0, _expToNextLevel - 1);
+        }
+
         _cameraController = MMOCameraController.Instance;
         if (_cameraController == null)
         {
@@ -99,6 +129,22 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             return;
         }
 
+        if (Input.GetKeyDown(KeyCode.Escape))
+        {
+            TogglePauseMenu();
+        }
+
+        if (_pauseMenuOpen)
+        {
+            return;
+        }
+
+        if (_isDead)
+        {
+            _respawnCountdown = Mathf.Max(0f, _respawnCountdown - Time.deltaTime);
+            return;
+        }
+
         // Passive out-of-combat health regen
         if (_currentHealth < maxHealth && Time.frameCount % 60 == 0)
         {
@@ -106,21 +152,40 @@ public sealed class MMOPlayerCombat : MonoBehaviour
         }
 
         // Skill [E]: Heavy Critical Stun Strike
-        if (Input.GetKeyDown(KeyCode.E) && Time.time >= _nextStunSkillTime)
+        if (Input.GetKeyDown(KeyCode.E) && Time.time >= _nextStunSkillTime && !_playerController.IsAttacking)
         {
             ExecuteStunStrikeSkill();
         }
 
         // Potion [R]: Self Heal
-        if (Input.GetKeyDown(KeyCode.R) && Time.time >= _nextHealTime)
+        if (Input.GetKeyDown(KeyCode.R) && Time.time >= _nextHealTime && _currentHealth < maxHealth)
         {
             ExecuteHealPotion();
         }
     }
 
+    private void TogglePauseMenu()
+    {
+        _pauseMenuOpen = !_pauseMenuOpen;
+        if (_cameraController == null) _cameraController = MMOCameraController.Instance;
+        if (_cameraController != null)
+        {
+            _cameraController.SetGameplayEnabled(!_pauseMenuOpen);
+        }
+        else
+        {
+            Cursor.lockState = _pauseMenuOpen ? CursorLockMode.None : CursorLockMode.Locked;
+            Cursor.visible = _pauseMenuOpen;
+        }
+    }
+
     private void OnPlayerAttackStepStarted(int attackStep)
     {
-        float delay = attackStep == 2 ? attack2ImpactDelay : attack1ImpactDelay;
+        bool isFinisher = attackStep >= 2;
+        MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, attackRange * 0.72f, isFinisher);
+        MMOAudioManager.PlaySwordSwing(transform.position, isFinisher);
+
+        float delay = isFinisher ? attack2ImpactDelay : attack1ImpactDelay;
         StartCoroutine(PerformMeleeSwingHitRoutine(attackStep, delay));
     }
 
@@ -159,10 +224,9 @@ public sealed class MMOPlayerCombat : MonoBehaviour
                 : rawDamage;
 
             Vector3 hitPoint = monster.transform.position + Vector3.up * 1.25f;
-            bool landed = monster.TakeDamage(finalDamage, isCrit, transform, hitPoint);
-
-            if (landed)
+            if (!monster.IsEvading)
             {
+                monster.RequestDamage(finalDamage, isCrit, transform, hitPoint);
                 _lastHitMonster = monster;
 
                 if (isCrit)
@@ -185,9 +249,12 @@ public sealed class MMOPlayerCombat : MonoBehaviour
     private void ExecuteStunStrikeSkill()
     {
         _nextStunSkillTime = Time.time + stunSkillCooldown;
+        _playerController.TriggerSkillAction(4);
 
         Vector3 burstCenter = transform.position + Vector3.up * 1.0f + transform.forward * 1.5f;
+        MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, attackRange * 0.9f, true, new Color(1f, 0.88f, 0.15f, 1f));
         MMOCombatVFX.SpawnHitEffect(burstCenter, isCritical: true, new Color(1f, 0.88f, 0.15f, 1f));
+        MMOAudioManager.PlayStunStrike(burstCenter);
 
         List<MMOMonsterAI> targets = FindMonstersInMeleeArc(attackRange + 1.2f, 180f);
         for (int i = 0; i < targets.Count; i++)
@@ -201,8 +268,8 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             int critDmg = Mathf.RoundToInt(Random.Range(attack2MinDamage, attack2MaxDamage + 1) * critDamageMultiplier);
             Vector3 hitPoint = monster.transform.position + Vector3.up * 1.25f;
 
-            monster.TakeDamage(critDmg, isCritical: true, transform, hitPoint);
-            monster.ApplyStun(stunDuration);
+            monster.RequestDamage(critDmg, isCritical: true, transform, hitPoint);
+            monster.RequestStun(stunDuration);
             _lastHitMonster = monster;
         }
 
@@ -219,10 +286,12 @@ public sealed class MMOPlayerCombat : MonoBehaviour
     private void ExecuteHealPotion()
     {
         _nextHealTime = Time.time + healPotionCooldown;
+        _playerController.TriggerSkillAction(5);
         int healAmount = Mathf.RoundToInt(maxHealth * 0.45f);
         _currentHealth = Mathf.Min(maxHealth, _currentHealth + healAmount);
 
         MMOCombatVFX.SpawnRespawnEffect(transform.position);
+        MMOAudioManager.PlayHeal(transform.position);
         MMOCombatVFX.SpawnStatusPopup(
             transform.position + Vector3.up * 2.2f,
             $"+{healAmount} HP",
@@ -232,29 +301,63 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
     public void TakeDamageFromMonster(int damage, bool isCrit, MMOMonsterAI attacker)
     {
+        if (_isDead)
+        {
+            return;
+        }
+
         int actual = Mathf.Max(1, damage);
         _currentHealth = Mathf.Max(0, _currentHealth - actual);
 
         Vector3 hitPos = transform.position + Vector3.up * 1.3f;
         MMOCombatVFX.SpawnHitEffect(hitPos, isCrit, new Color(1f, 0.25f, 0.2f, 1f));
         MMOCombatVFX.SpawnDamagePopup(hitPos + Vector3.up * 0.4f, actual, isCrit, isPlayerDamage: true);
+        MMOAudioManager.PlayHitImpact(hitPos, isCrit);
 
         if (_currentHealth <= 0)
         {
-            // Revive player at full HP so testing is uninterrupted
-            _currentHealth = maxHealth;
-            MMOCombatVFX.SpawnRespawnEffect(transform.position);
-            MMOCombatVFX.SpawnStatusPopup(
-                transform.position + Vector3.up * 2.3f,
-                "SECOND WIND (Full HP!)",
-                new Color(0.3f, 0.95f, 1f, 1f),
-                1.1f);
+            StartCoroutine(PlayerRespawnRoutine());
         }
+    }
+
+    private IEnumerator PlayerRespawnRoutine()
+    {
+        _isDead = true;
+        _respawnCountdown = 2.5f;
+        _playerController.SetDead(true);
+
+        MMOAudioManager.PlayDeath(transform.position);
+        MMOCombatVFX.SpawnStatusPopup(
+            transform.position + Vector3.up * 2.3f,
+            "DEFEATED!",
+            new Color(1f, 0.25f, 0.25f, 1f),
+            1.25f);
+
+        yield return new WaitForSeconds(2.5f);
+
+        CharacterController cc = GetComponent<CharacterController>();
+        bool ccWasEnabled = cc != null && cc.enabled;
+        if (cc != null) cc.enabled = false;
+        transform.position = _spawnOrigin + Vector3.up * 0.1f;
+        if (cc != null) cc.enabled = ccWasEnabled;
+
+        _currentHealth = maxHealth;
+        _isDead = false;
+        _playerController.SetDead(false);
+
+        MMOCombatVFX.SpawnRespawnEffect(transform.position);
+        MMOAudioManager.PlayHeal(transform.position);
+        MMOCombatVFX.SpawnStatusPopup(
+            transform.position + Vector3.up * 2.3f,
+            "RESPAWNED (Full HP!)",
+            new Color(0.3f, 0.95f, 1f, 1f),
+            1.1f);
     }
 
     public void AwardKillExp(int exp, MMOMonsterAI defeatedMonster)
     {
         _currentExp += exp;
+        bool leveledUp = false;
         while (_currentExp >= _expToNextLevel)
         {
             _currentExp -= _expToNextLevel;
@@ -265,6 +368,7 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             attack1MaxDamage += 20;
             attack2MinDamage += 25;
             attack2MaxDamage += 30;
+            leveledUp = true;
 
             MMOCombatVFX.SpawnRespawnEffect(transform.position);
             MMOCombatVFX.SpawnStatusPopup(
@@ -273,6 +377,13 @@ public sealed class MMOPlayerCombat : MonoBehaviour
                 new Color(1f, 0.92f, 0.2f, 1f),
                 1.35f);
         }
+
+        if (leveledUp)
+        {
+            MMOAudioManager.PlayLevelUp(transform.position);
+        }
+
+        GoogleAPI.instance?.SaveProgression(playerLevel, _currentExp);
     }
 
     private List<MMOMonsterAI> FindMonstersInMeleeArc(float maxDist, float maxArcDeg)
@@ -354,6 +465,10 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
         DrawTargetMonsterFrame();
         DrawPlayerCombatHUD();
+        if (_pauseMenuOpen)
+        {
+            DrawPauseMenu();
+        }
     }
 
     private void DrawTargetMonsterFrame()
@@ -421,10 +536,22 @@ public sealed class MMOPlayerCombat : MonoBehaviour
 
     private void DrawPlayerCombatHUD()
     {
-        float width = 500f;
-        float height = 82f;
+        float width = 520f;
+        float height = 100f;
         float x = (Screen.width - width) * 0.5f;
-        float y = Screen.height - height - 18f;
+        float y = Screen.height - height - 16f;
+
+        if (_isDead)
+        {
+            GUIStyle deadStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 24,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(1f, 0.3f, 0.3f) }
+            };
+            GUI.Label(new Rect(x, Screen.height * 0.36f, width, 40f), $"DEFEATED — Respawning in {_respawnCountdown:0.0}s...", deadStyle);
+        }
 
         // Critical Hit Banner above player HUD
         if (Time.time < _lastCombatBannerUntil && !string.IsNullOrEmpty(_lastCombatBanner))
@@ -456,6 +583,12 @@ public sealed class MMOPlayerCombat : MonoBehaviour
         };
         GUI.Label(hpBg, $"PLAYER Lv.{playerLevel}   |   HP: {_currentHealth}/{maxHealth}   |   CRIT: {Mathf.RoundToInt(baseCritChance * 100f)}% (x{critDamageMultiplier:0.0})", barLabel);
 
+        // Player EXP Bar
+        float expRatio = _expToNextLevel > 0 ? Mathf.Clamp01((float)_currentExp / _expToNextLevel) : 0f;
+        Rect expBg = new Rect(x + 12f, y + 36f, width - 24f, 10f);
+        DrawRect(expBg, new Color(0.12f, 0.12f, 0.22f, 1f));
+        DrawRect(new Rect(expBg.x, expBg.y, expBg.width * expRatio, expBg.height), new Color(0.42f, 0.58f, 1f, 1f));
+
         // Cooldowns & Controls line
         float stunCd = Mathf.Max(0f, _nextStunSkillTime - Time.time);
         float healCd = Mathf.Max(0f, _nextHealTime - Time.time);
@@ -469,8 +602,75 @@ public sealed class MMOPlayerCombat : MonoBehaviour
             normal = { textColor = new Color(0.82f, 0.88f, 0.96f) }
         };
 
-        GUI.Label(new Rect(x + 10f, y + 36f, width - 20f, 20f), $"[Left Click] 2-Hit Combo   |   {stunStr}   |   {healStr}", hintStyle);
-        GUI.Label(new Rect(x + 10f, y + 56f, width - 20f, 20f), "[WASD + Shift] Move/Run   |   [CapsLock] Lock Target   |   [V] Camera Mode   |   [Left Alt] Cursor", hintStyle);
+        GUI.Label(new Rect(x + 10f, y + 51f, width - 20f, 20f), $"[Left Click] 2-Hit Combo   |   {stunStr}   |   {healStr}", hintStyle);
+        GUI.Label(new Rect(x + 10f, y + 71f, width - 20f, 20f), "[WASD+Shift] Move/Run | [CapsLock] Lock | [V] Cam | [Alt] Cursor | [ESC] Menu", hintStyle);
+    }
+
+    private void DrawPauseMenu()
+    {
+        DrawRect(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.55f));
+
+        float w = 340f;
+        float h = 270f;
+        float x = (Screen.width - w) * 0.5f;
+        float y = (Screen.height - h) * 0.5f;
+
+        DrawRect(new Rect(x - 3f, y - 3f, w + 6f, h + 6f), new Color(0.25f, 0.55f, 0.95f, 0.85f));
+        DrawRect(new Rect(x, y, w, h), new Color(0.08f, 0.10f, 0.14f, 0.96f));
+
+        GUIStyle headerStyle = new GUIStyle(GUI.skin.label)
+        {
+            alignment = TextAnchor.MiddleCenter,
+            fontSize = 18,
+            fontStyle = FontStyle.Bold,
+            normal = { textColor = Color.white }
+        };
+        GUI.Label(new Rect(x, y + 12f, w, 28f), "GAME MENU", headerStyle);
+
+        if (_cameraController == null) _cameraController = MMOCameraController.Instance;
+        if (_cameraController != null)
+        {
+            GUI.Label(new Rect(x + 20f, y + 48f, w - 40f, 20f), $"Mouse Sensitivity: {_cameraController.MouseSensitivity:0.0}");
+            _cameraController.MouseSensitivity = GUI.HorizontalSlider(
+                new Rect(x + 20f, y + 70f, w - 40f, 18f),
+                _cameraController.MouseSensitivity,
+                0.5f,
+                6.0f);
+        }
+
+        GUI.Label(new Rect(x + 20f, y + 96f, w - 40f, 20f), $"SFX Volume: {Mathf.RoundToInt(MMOAudioManager.MasterSfxVolume * 100f)}%");
+        MMOAudioManager.MasterSfxVolume = GUI.HorizontalSlider(
+            new Rect(x + 20f, y + 118f, w - 40f, 18f),
+            MMOAudioManager.MasterSfxVolume,
+            0f,
+            1f);
+
+        string camPresetName = _cameraController != null ? _cameraController.CurrentPreset.ToString() : "StandardMMO";
+        if (GUI.Button(new Rect(x + 20f, y + 146f, w - 40f, 30f), $"Camera Mode: {camPresetName} (Cycle)"))
+        {
+            _cameraController?.CyclePreset();
+        }
+
+        if (GUI.Button(new Rect(x + 20f, y + 184f, w - 40f, 32f), "Resume Game (ESC)"))
+        {
+            TogglePauseMenu();
+        }
+
+        if (GUI.Button(new Rect(x + 20f, y + 222f, w - 40f, 32f), "Return to Lobby"))
+        {
+            _pauseMenuOpen = false;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+
+            if (LobbyNetwork.Instance != null)
+            {
+                LobbyNetwork.Instance.ReturnToLobbyScene();
+            }
+            else
+            {
+                SceneManager.LoadScene("Lobby", LoadSceneMode.Single);
+            }
+        }
     }
 
     private MMOMonsterAI GetActiveTargetMonster()

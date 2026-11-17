@@ -9,6 +9,8 @@ using UnityEngine.UI;
 /// </summary>
 public sealed class GUIControl : MonoBehaviour
 {
+    public static GUIControl Instance { get; private set; }
+
     private GoogleAPI api;
 
     [Header("Google OAuth")]
@@ -36,6 +38,13 @@ public sealed class GUIControl : MonoBehaviour
 
     private void Awake()
     {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(transform.root.gameObject);
+            return;
+        }
+        Instance = this;
+
         if (persistAcrossScenes)
         {
             // Keep this component and its UI references alive when Fusion loads the game scene.
@@ -230,9 +239,12 @@ public sealed class GUIControl : MonoBehaviour
         {
             if (menuPanel) menuPanel.SetActive(false);
             if (lobbyPanel) lobbyPanel.SetActive(false);
+            if (debug) debug.gameObject.SetActive(false);
             SetGameplayMode(true);
             return;
         }
+
+        if (debug) debug.gameObject.SetActive(true);
 
         // Login, connecting, menu, joining, lobby, loading, and failure states never accept gameplay input.
         SetGameplayMode(false);
@@ -262,7 +274,7 @@ public sealed class GUIControl : MonoBehaviour
 
         if (mmoCameraController == null)
         {
-            mmoCameraController = FindObjectOfType<MMOCameraController>();
+            mmoCameraController = FindAnyObjectByType<MMOCameraController>();
         }
 
         if (mmoCameraController != null)
@@ -284,8 +296,13 @@ public sealed class GUIControl : MonoBehaviour
         }
     }
 
-    public void QuitApplicatio()
+    public void QuitApplication()
     {
         Application.Quit();
+    }
+
+    public void QuitApplicatio()
+    {
+        QuitApplication();
     }
 }

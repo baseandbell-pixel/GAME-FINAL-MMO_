@@ -58,11 +58,17 @@ public sealed class MMOMonsterAI : MonoBehaviour
     [Range(0.1f, 1.2f)] public float attackHitDelay = 0.45f;
     [Min(1.0f)] public float respawnDelay = 5.5f;
 
+    [Header("Boss / Elite Skill")]
+    [Min(2.0f)] public float bossSkillRadius = 4.6f;
+    [Min(0.4f)] public float bossSkillCastTime = 1.05f;
+    [Min(4.0f)] public float bossSkillCooldown = 8.5f;
+
     // =========================================================
     // RUNTIME STATE
     // =========================================================
 
     private MonsterAnimatorBridge _bridge;
+    private MMOMonsterNetwork _network;
     private CharacterController _characterController;
     private CapsuleCollider _capsuleCollider;
     private Renderer[] _renderers;
@@ -77,7 +83,12 @@ public sealed class MMOMonsterAI : MonoBehaviour
     private Vector3 _patrolPoint;
     private float _patrolWaitTimer;
     private float _nextAttackAllowedTime;
+    private float _nextBossSkillTime;
     private float _stunRemainingTimer;
+    private float _currentWorldSpeed;
+    private int _lastAttackIndex = -1;
+    private int _attacksSinceSkill;
+    private bool _isExecutingBossSkill;
     private Coroutine _activeAttackCoroutine;
     private Coroutine _hitFlashCoroutine;
 
@@ -103,6 +114,8 @@ public sealed class MMOMonsterAI : MonoBehaviour
     public float HealthRatio => maxHealth > 0 ? Mathf.Clamp01((float)_currentHealth / maxHealth) : 0f;
     public bool IsDead => _state == AIState.Dead;
     public bool IsEvading => _state == AIState.EvadeReturn;
+    public bool IsStunned => _stunRemainingTimer > 0f;
+    public float CurrentWorldSpeed => _currentWorldSpeed;
     public Vector3 TerritoryCenter => _territoryCenter;
     public MonsterAnimatorBridge Bridge => _bridge;
 
@@ -139,6 +152,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
     public void EnsureReferencesInitialized()
     {
         if (_bridge == null) _bridge = GetComponent<MonsterAnimatorBridge>();
+        if (_network == null) _network = GetComponent<MMOMonsterNetwork>();
         if (_capsuleCollider == null) _capsuleCollider = GetComponent<CapsuleCollider>();
         if (_characterController == null) _characterController = GetComponent<CharacterController>();
         if (_renderers == null || _renderers.Length == 0) _renderers = GetComponentsInChildren<Renderer>(true);
@@ -183,17 +197,34 @@ public sealed class MMOMonsterAI : MonoBehaviour
     private void Update()
     {
         float dt = Time.deltaTime;
+        bool isNetworked = _network != null && _network.IsNetworkedActive;
+
+        if (!isNetworked)
+        {
+            SimulateAuthoritativeStep(dt);
+        }
+
+        UpdateOverheadUI(dt);
+        UpdateTerritoryRingsVisual(dt);
+    }
+
+    public void SimulateAuthoritativeStep(float dt)
+    {
+        if (_network != null && !_network.HasSimulationAuthority)
+        {
+            return;
+        }
 
         if (_stunRemainingTimer > 0f && _state != AIState.Dead)
         {
             _stunRemainingTimer -= dt;
+            _currentWorldSpeed = 0f;
             _bridge.SetWorldSpeed(0f);
             if (_stunRemainingTimer <= 0f)
             {
+                _stunRemainingTimer = 0f;
                 _bridge.SetStunned(false);
             }
-            UpdateOverheadUI(dt);
-            UpdateTerritoryRingsVisual(dt);
             return;
         }
 
@@ -216,12 +247,95 @@ public sealed class MMOMonsterAI : MonoBehaviour
                 break;
 
             case AIState.Dead:
+                _currentWorldSpeed = 0f;
                 _bridge.SetWorldSpeed(0f);
                 break;
         }
+    }
 
-        UpdateOverheadUI(dt);
-        UpdateTerritoryRingsVisual(dt);
+    public void ApplyNetworkSnapshot(int health, int maxHp, AIState netState, float worldSpeed, bool stunned)
+    {
+        EnsureReferencesInitialized();
+        if (maxHp > 0)
+        {
+            maxHealth = maxHp;
+        }
+        _currentHealth = Mathf.Clamp(health, 0, maxHealth);
+        _currentWorldSpeed = worldSpeed;
+
+        if (_state != netState)
+        {
+            _state = netState;
+            if (_capsuleCollider != null)
+            {
+                _capsuleCollider.enabled = _state != AIState.Dead;
+            }
+
+            if (_bridge != null)
+            {
+                _bridge.SetCombat(_state == AIState.AggroChase || _state == AIState.Attacking);
+                _bridge.SetEvading(_state == AIState.EvadeReturn);
+                _bridge.SetDead(_state == AIState.Dead);
+                if (_state != AIState.Dead && _state != AIState.EvadeReturn && _state != AIState.IdlePatrol && !_bridge.IsDead)
+                {
+                    MMOAudioManager.PlayAggro(transform.position);
+                }
+            }
+        }
+
+        if (_bridge != null && _state != AIState.Dead)
+        {
+            _bridge.SetStunned(stunned);
+            _bridge.SetWorldSpeed(worldSpeed);
+        }
+
+        _stunRemainingTimer = stunned ? 0.5f : 0f;
+    }
+
+    public void ApplyNetworkAction(int actionCode)
+    {
+        if (_bridge == null || _state == AIState.Dead)
+        {
+            return;
+        }
+
+        switch (actionCode)
+        {
+            case MMOMonsterNetwork.ActionAttack0:
+                _bridge.TriggerAttack(0);
+                MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, attackRange * 0.9f, false, new Color(1f, 0.4f, 0.25f, 0.85f));
+                break;
+
+            case MMOMonsterNetwork.ActionAttack1:
+                _bridge.TriggerAttack(1);
+                MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, attackRange * 0.9f, true, new Color(1f, 0.4f, 0.25f, 0.85f));
+                break;
+
+            case MMOMonsterNetwork.ActionAttack2:
+                _bridge.TriggerAttack(2);
+                MMOCombatVFX.SpawnSlashArc(transform.position, transform.forward, attackRange * 0.95f, true, new Color(1f, 0.4f, 0.25f, 0.85f));
+                break;
+
+            case MMOMonsterNetwork.ActionSkillCast:
+                _bridge.TriggerSkill(0, startCastingLoop: true);
+                break;
+
+            case MMOMonsterNetwork.ActionSkillRelease:
+                _bridge.ReleaseCastSkill();
+                break;
+
+            case MMOMonsterNetwork.ActionHitReact:
+                _bridge.TriggerHit();
+                break;
+        }
+    }
+
+    public void PlayRemoteHitVisuals(int damage, bool isCritical, Vector3 hitWorldPoint)
+    {
+        MMOCombatVFX.SpawnHitEffect(hitWorldPoint, isCritical);
+        MMOCombatVFX.SpawnDamagePopup(hitWorldPoint + Vector3.up * 0.35f, damage, isCritical, isPlayerDamage: false);
+        MMOAudioManager.PlayHitImpact(hitWorldPoint, isCritical);
+        TriggerHitMaterialFlash(isCritical);
     }
 
     // =========================================================
@@ -242,6 +356,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
         if (_patrolWaitTimer > 0f)
         {
             _patrolWaitTimer -= dt;
+            _currentWorldSpeed = 0f;
             _bridge.SetWorldSpeed(0f);
             return;
         }
@@ -251,6 +366,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         if (toPatrol.magnitude <= 0.35f)
         {
+            _currentWorldSpeed = 0f;
             _bridge.SetWorldSpeed(0f);
             _patrolWaitTimer = Random.Range(2.2f, 4.2f);
             PickNewPatrolPoint();
@@ -282,6 +398,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
         if (distToPlayer <= attackRange)
         {
             _state = AIState.Attacking;
+            _currentWorldSpeed = 0f;
             _bridge.SetWorldSpeed(0f);
             return;
         }
@@ -308,7 +425,13 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         // Smoothly face the player
         RotateTowards(_targetPlayer.position, 10f, dt);
+        _currentWorldSpeed = 0f;
         _bridge.SetWorldSpeed(0f);
+
+        if (_isExecutingBossSkill)
+        {
+            return;
+        }
 
         // If player ran out of melee range and we aren't mid-swing, resume chasing
         if (distToPlayer > attackRange + 0.55f && !_bridge.IsActionInProgress)
@@ -317,11 +440,53 @@ public sealed class MMOMonsterAI : MonoBehaviour
             return;
         }
 
-        // Execute attack when cooldown is ready
+        // Boss / Elite Special AoE Slam Skill every 3rd attack when off cooldown
+        bool canUseBossSkill =
+            _bridge != null &&
+            _bridge.Config != null &&
+            (_bridge.Config.isBossOrElite || _bridge.Config.skillCount > 0) &&
+            _attacksSinceSkill >= 2 &&
+            Time.time >= _nextBossSkillTime;
+
+        if (canUseBossSkill && Time.time >= _nextAttackAllowedTime)
+        {
+            _attacksSinceSkill = 0;
+            _nextBossSkillTime = Time.time + bossSkillCooldown;
+            _nextAttackAllowedTime = Time.time + attackCooldown + bossSkillCastTime;
+
+            if (_activeAttackCoroutine != null)
+            {
+                StopCoroutine(_activeAttackCoroutine);
+            }
+            _activeAttackCoroutine = StartCoroutine(ExecuteBossSkillRoutine());
+            return;
+        }
+
+        // Execute alternating symmetrical basic attack when cooldown is ready
         if (Time.time >= _nextAttackAllowedTime)
         {
             _nextAttackAllowedTime = Time.time + attackCooldown;
-            _bridge.TriggerRandomAttack();
+            _attacksSinceSkill++;
+            _lastAttackIndex = _bridge.TriggerNextAttack(_lastAttackIndex);
+
+            int actionCode = _lastAttackIndex switch
+            {
+                1 => MMOMonsterNetwork.ActionAttack1,
+                2 => MMOMonsterNetwork.ActionAttack2,
+                _ => MMOMonsterNetwork.ActionAttack0
+            };
+            _network?.PublishAction(actionCode);
+
+            if (Application.isPlaying)
+            {
+                MMOCombatVFX.SpawnSlashArc(
+                    transform.position,
+                    transform.forward,
+                    attackRange * 0.9f,
+                    _lastAttackIndex > 0,
+                    new Color(1f, 0.4f, 0.25f, 0.85f));
+                MMOAudioManager.PlaySwordSwing(transform.position, _lastAttackIndex > 0);
+            }
 
             if (_activeAttackCoroutine != null)
             {
@@ -331,12 +496,84 @@ public sealed class MMOMonsterAI : MonoBehaviour
         }
     }
 
+    private IEnumerator ExecuteBossSkillRoutine()
+    {
+        _isExecutingBossSkill = true;
+        Vector3 slamCenter = transform.position;
+
+        _bridge.TriggerSkill(0, startCastingLoop: true);
+        _network?.PublishAction(MMOMonsterNetwork.ActionSkillCast);
+        _network?.BroadcastBossTelegraph(slamCenter, bossSkillRadius, bossSkillCastTime);
+
+        if (Application.isPlaying)
+        {
+            MMOCombatVFX.SpawnGroundTelegraph(
+                slamCenter,
+                bossSkillRadius,
+                bossSkillCastTime,
+                new Color(1f, 0.25f, 0.12f, 0.95f));
+            MMOCombatVFX.SpawnStatusPopup(
+                transform.position + Vector3.up * 2.7f,
+                "⚡ WARLORD SLAM!",
+                new Color(1f, 0.45f, 0.12f, 1f),
+                1.15f);
+            MMOAudioManager.PlayBossCast(transform.position);
+        }
+
+        yield return new WaitForSeconds(bossSkillCastTime);
+
+        if (_state == AIState.Dead || _state == AIState.EvadeReturn || _stunRemainingTimer > 0f)
+        {
+            _isExecutingBossSkill = false;
+            _activeAttackCoroutine = null;
+            yield break;
+        }
+
+        _bridge.ReleaseCastSkill();
+        _network?.PublishAction(MMOMonsterNetwork.ActionSkillRelease);
+        _network?.BroadcastBossSlamBurst(slamCenter);
+
+        if (Application.isPlaying)
+        {
+            MMOCombatVFX.SpawnHitEffect(slamCenter + Vector3.up * 0.35f, isCritical: true, new Color(1f, 0.35f, 0.1f, 1f));
+            MMOAudioManager.PlayStunStrike(slamCenter);
+        }
+
+        // Hit all players inside the telegraphed AoE radius
+        MMOPlayerCombat[] players = FindObjectsByType<MMOPlayerCombat>();
+        for (int i = 0; i < players.Length; i++)
+        {
+            MMOPlayerCombat pc = players[i];
+            if (pc == null || !pc.gameObject.activeInHierarchy || pc.IsDead)
+            {
+                continue;
+            }
+
+            if (PlanarDistance(slamCenter, pc.transform.position) <= bossSkillRadius)
+            {
+                int slamDmg = Mathf.RoundToInt(Random.Range(minAttackDamage, maxAttackDamage + 1) * 1.65f);
+                if (_network != null && _network.IsNetworkedActive)
+                {
+                    _network.DeliverDamageToPlayer(pc.transform, slamDmg, true);
+                }
+                else
+                {
+                    pc.TakeDamageFromMonster(slamDmg, true, this);
+                }
+            }
+        }
+
+        _isExecutingBossSkill = false;
+        _activeAttackCoroutine = null;
+    }
+
     private void UpdateEvadeReturn(float dt)
     {
         float distToHome = PlanarDistance(transform.position, _territoryCenter);
         if (distToHome <= 0.45f)
         {
             transform.position = new Vector3(_territoryCenter.x, transform.position.y, _territoryCenter.z);
+            _currentWorldSpeed = 0f;
             _bridge.SetWorldSpeed(0f);
             _bridge.SetEvading(false);
             _bridge.SetCombat(false);
@@ -372,13 +609,12 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         if (wasIdle && Application.isPlaying)
         {
-            MMOCombatVFX.SpawnStatusPopup(
-                transform.position + Vector3.up * 2.4f,
-                "! AGGRO !",
-                new Color(1f, 0.25f, 0.15f, 1f),
-                scale: 1.15f);
-
+            Color aggroColor = new Color(1f, 0.25f, 0.15f, 1f);
+            Vector3 popupPos = transform.position + Vector3.up * 2.4f;
+            MMOCombatVFX.SpawnStatusPopup(popupPos, "! AGGRO !", aggroColor, scale: 1.15f);
             MMOCombatVFX.SpawnAggroPulse(transform.position);
+            MMOAudioManager.PlayAggro(transform.position);
+            _network?.BroadcastStatusPopup(popupPos, "! AGGRO !", aggroColor, 1.15f);
         }
     }
 
@@ -396,6 +632,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
             _activeAttackCoroutine = null;
         }
 
+        _isExecutingBossSkill = false;
         _targetPlayer = null;
         _state = AIState.EvadeReturn;
         _currentHealth = maxHealth;
@@ -406,17 +643,46 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         if (Application.isPlaying)
         {
-            MMOCombatVFX.SpawnStatusPopup(
-                transform.position + Vector3.up * 2.4f,
-                "EVADE (Reset)",
-                new Color(0.25f, 0.9f, 1f, 1f),
-                scale: 1.0f);
+            Color evadeColor = new Color(0.25f, 0.9f, 1f, 1f);
+            Vector3 popupPos = transform.position + Vector3.up * 2.4f;
+            MMOCombatVFX.SpawnStatusPopup(popupPos, "EVADE (Reset)", evadeColor, scale: 1.0f);
+            _network?.BroadcastStatusPopup(popupPos, "EVADE (Reset)", evadeColor, 1.0f);
         }
     }
 
     // =========================================================
     // COMBAT: RECEIVING & DEALING DAMAGE
     // =========================================================
+
+    /// <summary>
+    /// Network-safe entry point called by player combat (routes via RPC if remote in Photon Fusion).
+    /// </summary>
+    public void RequestDamage(int amount, bool isCritical, Transform attacker, Vector3 hitWorldPoint)
+    {
+        EnsureReferencesInitialized();
+        if (_network != null && _network.IsNetworkedActive)
+        {
+            _network.RequestDamageFromClient(amount, isCritical, attacker, hitWorldPoint);
+            return;
+        }
+
+        TakeDamage(amount, isCritical, attacker, hitWorldPoint);
+    }
+
+    /// <summary>
+    /// Network-safe entry point for applying Stun (routes via RPC if remote in Photon Fusion).
+    /// </summary>
+    public void RequestStun(float duration)
+    {
+        EnsureReferencesInitialized();
+        if (_network != null && _network.IsNetworkedActive)
+        {
+            _network.RequestStunFromClient(duration);
+            return;
+        }
+
+        ApplyStun(duration);
+    }
 
     /// <summary>
     /// Applies damage from a player attack, spawns Floating Damage / Critical Hit numbers & VFX,
@@ -447,9 +713,11 @@ public sealed class MMOMonsterAI : MonoBehaviour
             // Spawn Hit Sparks & Floating Damage Popup
             MMOCombatVFX.SpawnHitEffect(hitWorldPoint, isCritical);
             MMOCombatVFX.SpawnDamagePopup(hitWorldPoint + Vector3.up * 0.35f, finalDamage, isCritical, isPlayerDamage: false);
+            MMOAudioManager.PlayHitImpact(hitWorldPoint, isCritical);
 
             // Flash monster material briefly
             TriggerHitMaterialFlash(isCritical);
+            _network?.BroadcastHitFeedback(finalDamage, isCritical, hitWorldPoint);
         }
 
         // Aggro onto the attacker if not already in combat
@@ -481,6 +749,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
             if (flinched)
             {
                 _nextAttackAllowedTime = Mathf.Max(_nextAttackAllowedTime, Time.time + 0.65f);
+                _network?.PublishAction(MMOMonsterNetwork.ActionHitReact);
             }
         }
 
@@ -499,28 +768,36 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         if (_bridge != null && _bridge.Config != null && _bridge.Config.isBossOrElite)
         {
-            MMOCombatVFX.SpawnStatusPopup(
-                transform.position + Vector3.up * 2.3f,
-                "RESIST (BOSS)",
-                new Color(1f, 0.65f, 0.15f),
-                0.9f);
+            Color resistColor = new Color(1f, 0.65f, 0.15f);
+            Vector3 resistPos = transform.position + Vector3.up * 2.3f;
+            if (Application.isPlaying)
+            {
+                MMOCombatVFX.SpawnStatusPopup(resistPos, "RESIST (BOSS)", resistColor, 0.9f);
+                _network?.BroadcastStatusPopup(resistPos, "RESIST (BOSS)", resistColor, 0.9f);
+            }
             return false;
         }
 
-        if (_activeAttackCoroutine != null)
+        if (_activeAttackCoroutine != null && Application.isPlaying)
         {
             StopCoroutine(_activeAttackCoroutine);
             _activeAttackCoroutine = null;
         }
 
+        _isExecutingBossSkill = false;
         _stunRemainingTimer = Mathf.Max(_stunRemainingTimer, duration);
-        _bridge.SetStunned(true);
+        if (_bridge != null && Application.isPlaying)
+        {
+            _bridge.SetStunned(true);
+        }
 
-        MMOCombatVFX.SpawnStatusPopup(
-            transform.position + Vector3.up * 2.3f,
-            "STUNNED!",
-            new Color(1f, 0.92f, 0.2f),
-            1.05f);
+        if (Application.isPlaying)
+        {
+            Color stunColor = new Color(1f, 0.92f, 0.2f);
+            Vector3 stunPos = transform.position + Vector3.up * 2.3f;
+            MMOCombatVFX.SpawnStatusPopup(stunPos, "STUNNED!", stunColor, 1.05f);
+            _network?.BroadcastStatusPopup(stunPos, "STUNNED!", stunColor, 1.05f);
+        }
 
         return true;
     }
@@ -538,6 +815,11 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
     private void OnAnimationAttackHit()
     {
+        if (_isExecutingBossSkill)
+        {
+            return;
+        }
+
         // If the FBX clip also has an embedded OnAttackHit AnimationEvent, avoid double-hitting
         if (_activeAttackCoroutine != null)
         {
@@ -560,17 +842,24 @@ public sealed class MMOMonsterAI : MonoBehaviour
             return;
         }
 
-        MMOPlayerCombat playerCombat = _targetPlayer.GetComponent<MMOPlayerCombat>();
-        if (playerCombat != null)
+        bool isCrit = Random.value < monsterCritChance;
+        int dmg = Random.Range(minAttackDamage, maxAttackDamage + 1);
+        if (isCrit)
         {
-            bool isCrit = Random.value < monsterCritChance;
-            int dmg = Random.Range(minAttackDamage, maxAttackDamage + 1);
-            if (isCrit)
-            {
-                dmg = Mathf.RoundToInt(dmg * 1.6f);
-            }
+            dmg = Mathf.RoundToInt(dmg * 1.6f);
+        }
 
-            playerCombat.TakeDamageFromMonster(dmg, isCrit, this);
+        if (_network != null && _network.IsNetworkedActive)
+        {
+            _network.DeliverDamageToPlayer(_targetPlayer, dmg, isCrit);
+        }
+        else
+        {
+            MMOPlayerCombat playerCombat = _targetPlayer.GetComponent<MMOPlayerCombat>();
+            if (playerCombat != null)
+            {
+                playerCombat.TakeDamageFromMonster(dmg, isCrit, this);
+            }
         }
     }
 
@@ -578,6 +867,8 @@ public sealed class MMOMonsterAI : MonoBehaviour
     {
         _state = AIState.Dead;
         _stunRemainingTimer = 0f;
+        _isExecutingBossSkill = false;
+        _currentWorldSpeed = 0f;
 
         if (_activeAttackCoroutine != null && Application.isPlaying)
         {
@@ -597,18 +888,25 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         if (Application.isPlaying)
         {
-            MMOCombatVFX.SpawnStatusPopup(
-                transform.position + Vector3.up * 2.2f,
-                $"SLAIN! +{expReward} EXP",
-                new Color(1f, 0.88f, 0.22f),
-                1.15f);
+            Color slainColor = new Color(1f, 0.88f, 0.22f);
+            Vector3 slainPos = transform.position + Vector3.up * 2.2f;
+            MMOCombatVFX.SpawnStatusPopup(slainPos, $"SLAIN! +{expReward} EXP", slainColor, 1.15f);
+            MMOAudioManager.PlayDeath(transform.position);
+            _network?.BroadcastStatusPopup(slainPos, $"SLAIN! +{expReward} EXP", slainColor, 1.15f);
 
             if (killer != null)
             {
-                MMOPlayerCombat pc = killer.GetComponent<MMOPlayerCombat>();
-                if (pc != null)
+                if (_network != null && _network.IsNetworkedActive)
                 {
-                    pc.AwardKillExp(expReward, this);
+                    _network.AwardKillExpToKiller(killer, expReward);
+                }
+                else
+                {
+                    MMOPlayerCombat pc = killer.GetComponent<MMOPlayerCombat>();
+                    if (pc != null)
+                    {
+                        pc.AwardKillExp(expReward, this);
+                    }
                 }
             }
 
@@ -629,6 +927,8 @@ public sealed class MMOMonsterAI : MonoBehaviour
         _targetPlayer = null;
         _state = AIState.IdlePatrol;
         _patrolWaitTimer = 1.5f;
+        _attacksSinceSkill = 0;
+        _isExecutingBossSkill = false;
         PickNewPatrolPoint();
 
         if (_capsuleCollider != null)
@@ -641,12 +941,11 @@ public sealed class MMOMonsterAI : MonoBehaviour
             _bridge.ResetForPoolSpawn();
         }
 
+        Color respawnColor = new Color(0.3f, 1f, 0.65f);
+        Vector3 respawnPos = transform.position + Vector3.up * 2.2f;
         MMOCombatVFX.SpawnRespawnEffect(transform.position);
-        MMOCombatVFX.SpawnStatusPopup(
-            transform.position + Vector3.up * 2.2f,
-            "RESPAWNED",
-            new Color(0.3f, 1f, 0.65f),
-            0.95f);
+        MMOCombatVFX.SpawnStatusPopup(respawnPos, "RESPAWNED", respawnColor, 0.95f);
+        _network?.BroadcastStatusPopup(respawnPos, "RESPAWNED", respawnColor, 0.95f);
     }
 
     // =========================================================
@@ -660,6 +959,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
         if (delta.sqrMagnitude < 0.001f)
         {
+            _currentWorldSpeed = 0f;
             _bridge.SetWorldSpeed(0f);
             return;
         }
@@ -678,6 +978,7 @@ public sealed class MMOMonsterAI : MonoBehaviour
             SnapToGround();
         }
 
+        _currentWorldSpeed = speed;
         _bridge.SetWorldSpeed(speed);
     }
 
@@ -728,6 +1029,12 @@ public sealed class MMOMonsterAI : MonoBehaviour
                 continue;
             }
 
+            MMOPlayerCombat combat = p.GetComponent<MMOPlayerCombat>();
+            if (combat != null && combat.IsDead)
+            {
+                continue;
+            }
+
             float distToMonster = PlanarDistance(transform.position, p.transform.position);
             float distToHome = PlanarDistance(_territoryCenter, p.transform.position);
 
@@ -743,7 +1050,13 @@ public sealed class MMOMonsterAI : MonoBehaviour
 
     private bool IsTargetPlayerValid()
     {
-        return _targetPlayer != null && _targetPlayer.gameObject.activeInHierarchy;
+        if (_targetPlayer == null || !_targetPlayer.gameObject.activeInHierarchy)
+        {
+            return false;
+        }
+
+        MMOPlayerCombat combat = _targetPlayer.GetComponent<MMOPlayerCombat>();
+        return combat == null || !combat.IsDead;
     }
 
     private static float PlanarDistance(Vector3 a, Vector3 b)
@@ -878,7 +1191,11 @@ public sealed class MMOMonsterAI : MonoBehaviour
     {
         GameObject root = new GameObject("MonsterOverheadUI");
         root.transform.SetParent(transform, false);
-        root.transform.localPosition = new Vector3(0f, 2.35f, 0f);
+        float scaleY = Mathf.Max(0.25f, transform.localScale.y);
+        float localHeight = (_capsuleCollider != null ? _capsuleCollider.height : 2.0f) + (0.45f / scaleY);
+        root.transform.localPosition = new Vector3(0f, localHeight, 0f);
+        float inverseScale = 1f / scaleY;
+        root.transform.localScale = Vector3.one * inverseScale;
         _overheadRoot = root.transform;
 
         // Nameplate TextMeshPro
@@ -927,6 +1244,17 @@ public sealed class MMOMonsterAI : MonoBehaviour
     private void UpdateOverheadUI(float dt)
     {
         if (_overheadRoot == null)
+        {
+            return;
+        }
+
+        bool showBar = _state != AIState.Dead;
+        if (_overheadRoot.gameObject.activeSelf != showBar)
+        {
+            _overheadRoot.gameObject.SetActive(showBar);
+        }
+
+        if (!showBar)
         {
             return;
         }

@@ -29,6 +29,13 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
     public static readonly int IsStunnedHash = Animator.StringToHash("IsStunned");
     public static readonly int IsDeadHash = Animator.StringToHash("IsDead");
 
+    private static readonly int Attack01StateHash = Animator.StringToHash("Attack_01");
+    private static readonly int Attack02StateHash = Animator.StringToHash("Attack_02");
+    private static readonly int Attack03StateHash = Animator.StringToHash("Attack_03");
+    private static readonly int SkillCastStateHash = Animator.StringToHash("Skill_Cast");
+    private static readonly int SkillRelease01StateHash = Animator.StringToHash("Skill_Release_01");
+    private static readonly int SkillRelease02StateHash = Animator.StringToHash("Skill_Release_02");
+
     public const string UpperBodyLayerName = "UpperBody";
 
     // =========================================================
@@ -83,7 +90,11 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
     private bool _isDead;
     private bool _isEvading;
     private bool _isActionInProgress;
+    private bool _actionEnteredAnimatorState;
+    private float _actionStartedAt;
     private float _lastFlinchTime = -999f;
+    private float _nextProceduralFootstepTime;
+    private const float ActionFallbackTimeout = 1.65f;
 
     // =========================================================
     // PUBLIC PROPERTIES
@@ -140,6 +151,60 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
 
         UpdateLocomotionSpeed(Time.deltaTime);
         UpdateUpperBodyLayerWeight(Time.deltaTime);
+        UpdateActionProgress();
+    }
+
+    private void UpdateActionProgress()
+    {
+        if (!_isActionInProgress || _isCasting || _isDead || _isStunned)
+        {
+            return;
+        }
+
+        bool inActionState = IsInAttackOrSkillState();
+        if (inActionState)
+        {
+            _actionEnteredAnimatorState = true;
+            return;
+        }
+
+        float elapsed = Time.time - _actionStartedAt;
+        if ((_actionEnteredAnimatorState && !animator.IsInTransition(0)) || elapsed >= ActionFallbackTimeout)
+        {
+            _isActionInProgress = false;
+            _actionEnteredAnimatorState = false;
+            OnAttackEndEvent?.Invoke();
+        }
+    }
+
+    private bool IsInAttackOrSkillState()
+    {
+        AnimatorStateInfo current = animator.GetCurrentAnimatorStateInfo(0);
+        if (IsActionStateHash(current.shortNameHash))
+        {
+            return true;
+        }
+
+        if (animator.IsInTransition(0))
+        {
+            AnimatorStateInfo next = animator.GetNextAnimatorStateInfo(0);
+            if (IsActionStateHash(next.shortNameHash))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsActionStateHash(int hash)
+    {
+        return hash == Attack01StateHash ||
+               hash == Attack02StateHash ||
+               hash == Attack03StateHash ||
+               hash == SkillCastStateHash ||
+               hash == SkillRelease01StateHash ||
+               hash == SkillRelease02StateHash;
     }
 
     // =========================================================
@@ -148,10 +213,12 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
 
     private void UpdateLocomotionSpeed(float deltaTime)
     {
+        float dampTime = config != null ? config.speedDampTime : 0.14f;
+
         if (_isDead || _isStunned)
         {
-            animator.SetFloat(SpeedHash, 0f);
-            _currentBlendSpeed = 0f;
+            animator.SetFloat(SpeedHash, 0f, dampTime * 0.6f, deltaTime);
+            _currentBlendSpeed = animator.GetFloat(SpeedHash);
             return;
         }
 
@@ -166,13 +233,16 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
             rawWorldSpeed *= evadeSpeedMultiplier;
         }
 
-        float targetBlendTreeSpeed;
-        float dampTime = 0.1f;
+        // Pause locomotion blending while actively executing a grounded melee swing so feet stay planted.
+        if (_isActionInProgress && !(_configAllowsMoveAttack()))
+        {
+            rawWorldSpeed = 0f;
+        }
 
+        float targetBlendTreeSpeed;
         if (config != null)
         {
             targetBlendTreeSpeed = config.EvaluateBlendTreeSpeed(rawWorldSpeed);
-            dampTime = config.speedDampTime;
         }
         else
         {
@@ -182,6 +252,19 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
 
         animator.SetFloat(SpeedHash, targetBlendTreeSpeed, dampTime, deltaTime);
         _currentBlendSpeed = animator.GetFloat(SpeedHash);
+
+        // Emit rhythmic footsteps synced to actual Walk/Run blend speed.
+        if (rawWorldSpeed > 0.65f && !_isActionInProgress && Time.time >= _nextProceduralFootstepTime)
+        {
+            float cadence = Mathf.Lerp(0.56f, 0.34f, Mathf.InverseLerp(1.0f, 4.5f, _currentBlendSpeed));
+            _nextProceduralFootstepTime = Time.time + cadence;
+            MMOAudioManager.PlayFootstep(transform.position, 0.16f);
+        }
+    }
+
+    private bool _configAllowsMoveAttack()
+    {
+        return config != null && config.useUpperBodyLayerWhenMoving;
     }
 
     private void UpdateUpperBodyLayerWeight(float deltaTime)
@@ -270,6 +353,16 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
     }
 
     /// <summary>
+    /// Triggers the next alternating basic attack so left/right swings stay symmetrical and natural.
+    /// </summary>
+    public int TriggerNextAttack(int lastAttackIndex)
+    {
+        int index = config != null ? config.PickNextAttackIndex(lastAttackIndex) : 0;
+        TriggerAttack(index);
+        return index;
+    }
+
+    /// <summary>
     /// Triggers a specific basic attack index (0 = Attack_01, 1 = Attack_02, 2 = Attack_03).
     /// </summary>
     public void TriggerAttack(int attackIndex)
@@ -288,6 +381,8 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
         }
 
         _isActionInProgress = true;
+        _actionEnteredAnimatorState = false;
+        _actionStartedAt = Time.time;
         animator.ResetTrigger(HitHash);
         animator.SetInteger(AttackIndexHash, clampedIndex);
         animator.SetTrigger(AttackHash);
@@ -311,6 +406,8 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
         }
 
         _isActionInProgress = true;
+        _actionEnteredAnimatorState = false;
+        _actionStartedAt = Time.time;
         _isCasting = startCastingLoop;
 
         animator.ResetTrigger(HitHash);
@@ -330,6 +427,8 @@ public sealed class MonsterAnimatorBridge : MonoBehaviour
         }
 
         _isCasting = false;
+        _actionStartedAt = Time.time;
+        _actionEnteredAnimatorState = false;
         animator.SetBool(IsCastingHash, false);
     }
 

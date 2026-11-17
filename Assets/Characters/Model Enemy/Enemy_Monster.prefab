@@ -9,6 +9,18 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalScale.x
+      value: 4
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalScale.y
+      value: 4
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      propertyPath: m_LocalScale.z
+      value: 4
+      objectReference: {fileID: 0}
+    - target: {fileID: -8679921383154817045, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       propertyPath: m_LocalPosition.x
       value: 0
       objectReference: {fileID: 0}
@@ -71,6 +83,15 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
       insertIndex: -1
       addedObject: {fileID: 5055086437025334615}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 4274905662275702523}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 6223396469825418393}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 8001131250332465526}
   m_SourcePrefab: {fileID: 100100000, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
 --- !u!1 &4769876298519285170 stripped
 GameObject:
@@ -118,10 +139,10 @@ CapsuleCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 2
-  m_Radius: 0.48
-  m_Height: 2
+  m_Radius: 0.25
+  m_Height: 0.45027927
   m_Direction: 1
-  m_Center: {x: 0, y: 1, z: 0}
+  m_Center: {x: 0, y: 0.22513963, z: 0}
 --- !u!114 &1726108052776393660
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -135,7 +156,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Targetable
   aimPoint: {fileID: 0}
-  fallbackAimOffset: {x: 0, y: 1.25, z: 0}
+  fallbackAimOffset: {x: 0, y: 0.27917314, z: 0}
   lockVisual: {fileID: 6105273478567910661}
   lockColor: {r: 1, g: 0.8, b: 0.1, a: 1}
 --- !u!114 &2994956930962096984
@@ -185,6 +206,90 @@ MonoBehaviour:
   attackCooldown: 2
   attackHitDelay: 0.45
   respawnDelay: 5.5
+  bossSkillRadius: 4.6
+  bossSkillCastTime: 1.05
+  bossSkillCooldown: 8.5
+--- !u!114 &4274905662275702523
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: -1552182283, guid: e725a070cec140c4caffb81624c8c787, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Fusion.Runtime.dll::Fusion.NetworkObject
+  SortKey: 1498641091
+  SendPriority: 1
+  EnableInterpolation: 1
+  Flags: 262402
+  NestedObjects: []
+  NetworkedBehaviours:
+  - {fileID: 6223396469825418393}
+  - {fileID: 8001131250332465526}
+  ForceRemoteRenderTimeframe: 0
+--- !u!114 &6223396469825418393
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 158639473, guid: e725a070cec140c4caffb81624c8c787, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Fusion.Runtime.dll::Fusion.NetworkTransform
+  _stateAuthorityChangeErrorCorrectionDelta: 0
+  SyncScale: 0
+  SyncParent: 0
+  _autoAOIOverride: 1
+  ConfigFlags: 0
+  PhysicsSettings:
+    ForecastEnabled: 1
+    DebugPhysics: 0
+    GravityForecast: 2
+    MaxExtrapolationTime: 0.15
+    MinLinearDetectedError: 0.02
+    MinAngularDetectedError: 3
+    MaxLinearError: 0
+    MaxAngularError: 0
+    LowCorrectionProgressThreshold: 0.015
+    HighErrorSimilarityThreshold: 1
+    MaxErrorTotalTime: 0.5
+    MaxRemoteSleepIgnoreTime: 0.5
+    ErrorCorrectionType: 0
+    LinearVelCorrectionMul: 1
+    AngularVelCorrectionMul: 1
+    PositionCorrectionLerp: 0.15
+    RotationCorrectionLerp: 0.15
+    Spring: 75
+    Damper: 2
+    MinImpactfulCollisionAlignment: 0.3
+    ImpactStartCorrectionTime: 0.1
+    ImpactCorrectionTimeComplete: 0.3
+--- !u!114 &8001131250332465526
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 4769876298519285170}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a32b61560ee68144f87b36c85b487c36, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MMOMonsterNetwork
+  _NetHealth: 0
+  _NetMaxHealth: 0
+  _NetState: 0
+  _NetWorldSpeed: 0
+  _NetStunned:
+    RawValue: 0
+  _NetActionCode: 0
+  _NetActionSequence: 0
 --- !u!137 &6105273478567910661 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 1894081440512372198, guid: 9b9abaf99b915ea4ebb96083bde01140, type: 3}
