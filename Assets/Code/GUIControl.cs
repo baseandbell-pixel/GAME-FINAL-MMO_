@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using Fusion;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -9,15 +11,23 @@ public class GUIControl : MonoBehaviour
     public string googleDesktopClientId;
     public string googleDesktopClientSecret;
 
-
     public Button signInbutton;
     public TMP_Text debug;
 
-
+    [Header("Menu Panel (หน้า Start Game)")]
     public GameObject menuPanel;
-    public Button quickJoinButton;
+    public Button openRoomBrowserButton; // [เพิ่มใหม่] ปุ่ม Start Game ที่กดแล้วไปหน้า Room List
+    public Button quickJoinButton;       // ปุ่ม Quick Join เดิม (เผื่อยังอยากใช้)
 
-    public GameObject lobbyPanel;
+    [Header("Room Browser Panel (หน้าสร้างและเลือกห้อง)")]
+    public GameObject roomBrowserPanel;  // [เพิ่มใหม่] Panel แสดงรายชื่อห้อง + สร้างห้อง
+    public TMP_InputField roomNameInput; // [เพิ่มใหม่] ช่องกรอกชื่อห้อง
+    public Button createRoomButton;      // [เพิ่มใหม่] ปุ่ม Create Room
+    public Transform roomListContent;    // [เพิ่มใหม่] Content ของ ScrollView ที่จะวางปุ่มห้อง
+    public RoomListItemUI roomItemPrefab;// [เพิ่มใหม่] Prefab ปุ่มห้อง
+
+    [Header("Room Lobby Panel (หน้าในห้องรอเริ่มเกม)")]
+    public GameObject lobbyPanel;        // Panel เดิมที่มีตัวละคร / Ready / Play
 
     public LobbyNetwork lobbyNetwork;
 
@@ -28,23 +38,46 @@ public class GUIControl : MonoBehaviour
     {
         api = GoogleAPI.instance;
 
-        // Only the login step is visible until Google sign-in succeeds.
         if (menuPanel) menuPanel.SetActive(false);
+        if (roomBrowserPanel) roomBrowserPanel.SetActive(false);
         if (lobbyPanel) lobbyPanel.SetActive(false);
+
         if (quickJoinButton)
         {
             quickJoinButton.interactable = false;
             quickJoinButton.onClick.AddListener(OnClickQuickJoin);
         }
 
+        if (openRoomBrowserButton)
+        {
+            openRoomBrowserButton.interactable = false;
+            openRoomBrowserButton.onClick.AddListener(OnClickOpenRoomBrowser);
+        }
+
+        if (createRoomButton)
+        {
+            createRoomButton.onClick.AddListener(OnClickCreateRoom);
+        }
+
         if (lobbyNetwork == null) lobbyNetwork = LobbyNetwork.Instance;
-        if (lobbyNetwork != null) lobbyNetwork.OnStateChanged += OnNetworkStateChanged;
+        if (lobbyNetwork != null)
+        {
+            lobbyNetwork.OnStateChanged += OnNetworkStateChanged;
+            lobbyNetwork.OnRoomListUpdated += UpdateRoomListUI; // ผูก Event อัปเดตรายการห้อง
+        }
     }
 
     void OnDestroy()
     {
         if (quickJoinButton) quickJoinButton.onClick.RemoveListener(OnClickQuickJoin);
-        if (lobbyNetwork != null) lobbyNetwork.OnStateChanged -= OnNetworkStateChanged;
+        if (openRoomBrowserButton) openRoomBrowserButton.onClick.RemoveListener(OnClickOpenRoomBrowser);
+        if (createRoomButton) createRoomButton.onClick.RemoveListener(OnClickCreateRoom);
+
+        if (lobbyNetwork != null)
+        {
+            lobbyNetwork.OnStateChanged -= OnNetworkStateChanged;
+            lobbyNetwork.OnRoomListUpdated -= UpdateRoomListUI;
+        }
     }
 
     public async void OnClickSignIn()
@@ -69,8 +102,6 @@ public class GUIControl : MonoBehaviour
             Debug.Log($"Firebase UID: {user.UserId}");
             api.uuid = user.UserId;
 
-            // Firestore is the source of truth for name + hero; the Google display
-            // name is only a fallback for a player we have never seen before.
             SetStatus("Loading profile...");
             await api.LoadProfileAsync(user.DisplayName);
             SetStatus($"Welcome, {api.username}!");
@@ -95,11 +126,11 @@ public class GUIControl : MonoBehaviour
         if (_pass) ShowMenuAfterLogin();
     }
 
-
     async void ShowMenuAfterLogin()
     {
         if (menuPanel) menuPanel.SetActive(true);
         if (quickJoinButton) quickJoinButton.interactable = false;
+        if (openRoomBrowserButton) openRoomBrowserButton.interactable = false;
 
         if (lobbyNetwork == null) lobbyNetwork = LobbyNetwork.Instance;
         if (lobbyNetwork == null)
@@ -111,6 +142,83 @@ public class GUIControl : MonoBehaviour
         SetStatus("Connecting to Photon...");
         bool ok = await lobbyNetwork.ConnectToPhotonAsync();
         if (quickJoinButton) quickJoinButton.interactable = ok;
+        if (openRoomBrowserButton) openRoomBrowserButton.interactable = ok;
+    }
+
+    // [เพิ่มใหม่] กดปุ่ม Start Game จากหน้า Menu เพื่อเปิดหน้า Room List
+    public void OnClickOpenRoomBrowser()
+    {
+        if (menuPanel) menuPanel.SetActive(false);
+        if (roomBrowserPanel) roomBrowserPanel.SetActive(true);
+
+        // อัปเดตรายการห้องที่มีอยู่ทันทีที่เปิดหน้านี้
+        if (lobbyNetwork != null)
+        {
+            UpdateRoomListUI(lobbyNetwork.CachedSessionList);
+        }
+    }
+
+    // [เพิ่มใหม่] ปุ่ม Back จากหน้า Room Browser กลับไป Menu
+    public void OnClickBackToMenu()
+    {
+        if (roomBrowserPanel) roomBrowserPanel.SetActive(false);
+        if (menuPanel) menuPanel.SetActive(true);
+    }
+
+    // [เพิ่มใหม่] กดปุ่ม Create Room
+    public async void OnClickCreateRoom()
+    {
+        if (lobbyNetwork == null) return;
+        SetBrowserButtonsInteractable(false);
+
+        string roomName = roomNameInput != null ? roomNameInput.text : "";
+        bool ok = await lobbyNetwork.CreateRoomAsync(roomName);
+
+        SetBrowserButtonsInteractable(true);
+
+        if (ok)
+        {
+            EnterRoomLobbyUI();
+        }
+    }
+
+    // [เพิ่มใหม่] กดปุ่ม Join ที่รายการห้องใน Room List
+    private async void OnClickJoinRoomFromList(string roomName)
+    {
+        if (lobbyNetwork == null) return;
+        SetBrowserButtonsInteractable(false);
+
+        bool ok = await lobbyNetwork.JoinRoomAsync(roomName);
+
+        SetBrowserButtonsInteractable(true);
+
+        if (ok)
+        {
+            EnterRoomLobbyUI();
+        }
+    }
+
+    // [เพิ่มใหม่] วาดรายการห้องใน ScrollView
+    private void UpdateRoomListUI(List<SessionInfo> sessions)
+    {
+        if (roomListContent == null || roomItemPrefab == null) return;
+
+        // ล้างรายการเก่าทิ้งก่อน
+        foreach (Transform child in roomListContent)
+        {
+            Destroy(child.gameObject);
+        }
+
+        if (sessions == null) return;
+
+        foreach (var session in sessions)
+        {
+            // แสดงเฉพาะห้องที่เปิดอยู่และมองเห็นได้
+            if (!session.IsVisible) continue;
+
+            RoomListItemUI item = Instantiate(roomItemPrefab, roomListContent);
+            item.Setup(session, OnClickJoinRoomFromList);
+        }
     }
 
     public async void OnClickQuickJoin()
@@ -125,24 +233,44 @@ public class GUIControl : MonoBehaviour
             return;
         }
 
+        EnterRoomLobbyUI();
+    }
+
+    private void EnterRoomLobbyUI()
+    {
         if (menuPanel) menuPanel.SetActive(false);
+        if (roomBrowserPanel) roomBrowserPanel.SetActive(false);
         if (lobbyPanel) lobbyPanel.SetActive(true);
+    }
+
+    private void SetBrowserButtonsInteractable(bool interactable)
+    {
+        if (createRoomButton) createRoomButton.interactable = interactable;
+        if (quickJoinButton) quickJoinButton.interactable = interactable;
     }
 
     void OnNetworkStateChanged(LobbyNetwork.State state, string message)
     {
         SetStatus(message);
 
-
-        if (state == LobbyNetwork.State.Idle || state == LobbyNetwork.State.Failed)
+        // กรณีหลุดออกจากห้อง หรือกด LeaveLobby()
+        if (state == LobbyNetwork.State.Idle || state == LobbyNetwork.State.ConnectedToPhoton)
         {
             if (lobbyPanel && lobbyPanel.activeSelf)
             {
                 lobbyPanel.SetActive(false);
-                if (menuPanel) menuPanel.SetActive(true);
+                // ส่งกลับมาหน้า Room Browser เพื่อให้เลือกห้องใหม่ได้ทันที
+                if (roomBrowserPanel) roomBrowserPanel.SetActive(true);
+                else if (menuPanel) menuPanel.SetActive(true);
             }
-            if (quickJoinButton && menuPanel && menuPanel.activeSelf)
-                quickJoinButton.interactable = true;
+        }
+        else if (state == LobbyNetwork.State.Failed)
+        {
+            if (lobbyPanel) lobbyPanel.SetActive(false);
+            if (roomBrowserPanel) roomBrowserPanel.SetActive(false);
+            if (menuPanel) menuPanel.SetActive(true);
+            if (quickJoinButton) quickJoinButton.interactable = true;
+            if (openRoomBrowserButton) openRoomBrowserButton.interactable = true;
         }
     }
 

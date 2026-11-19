@@ -25,18 +25,17 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     /// <summary>Raised whenever the connection state changes (state, human readable message).</summary>
     public event Action<State, string> OnStateChanged;
 
-    /// <summary>
-    /// Raised when the room gets a new "first player". In Shared mode Photon hands the
-    /// master client role to somebody else as soon as the current one leaves, so this is
-    /// how the remaining clients learn who owns the PLAY button now.
-    /// (new master, true when that is the local player)
-    /// </summary>
+    /// <summary>Raised when the room gets a new "first player".</summary>
     public event Action<PlayerRef, bool> OnMasterClientChanged;
+
+    // [เพิ่มใหม่] Event แจ้งเตือน UI เมื่อรายการห้องใน Lobby มีการอัปเดต
+    public event Action<List<SessionInfo>> OnRoomListUpdated;
+
+    // [เพิ่มใหม่] เก็บรายการห้องล่าสุดเผื่อ UI เปิดทีหลัง
+    public List<SessionInfo> CachedSessionList { get; private set; } = new List<SessionInfo>();
 
     public State CurrentState { get; private set; } = State.Idle;
     public NetworkRunner Runner { get; private set; }
-
-    /// <summary>The player that currently owns the room, or PlayerRef.None when not in a room.</summary>
     public PlayerRef MasterClient { get; private set; } = PlayerRef.None;
 
     PlayerRef _lastMaster = PlayerRef.None;
@@ -62,7 +61,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
     void Update()
     {
-        // Shared mode has no "master client changed" callback, so we watch it ourselves.
         PollMasterClient();
     }
 
@@ -78,8 +76,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         _lastMaster = master;
         MasterClient = master;
 
-        // The very first assignment (we just created/joined the room) is not a hand-over,
-        // so only a real change is announced.
         if (!master.IsRealPlayer || !hadPreviousMaster) return;
 
         bool localIsMaster = Runner != null && master == Runner.LocalPlayer;
@@ -106,11 +102,35 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
             return false;
         }
 
-        SetState(State.ConnectedToPhoton, "Connected. Ready to Quick Join.");
+        SetState(State.ConnectedToPhoton, "Connected to Lobby.");
         return true;
     }
 
+    // [เพิ่มใหม่] สร้างห้องแบบกำหนดชื่อเอง
+    public async Task<bool> CreateRoomAsync(string roomName)
+    {
+        if (string.IsNullOrWhiteSpace(roomName))
+        {
+            roomName = $"{GoogleAPI.instance.username}'s Room";
+        }
+
+        return await StartOrJoinSessionAsync(roomName.Trim(), createIfNotExists: true);
+    }
+
+    // [เพิ่มใหม่] กดเข้าร่วมห้องจาก Room List
+    public async Task<bool> JoinRoomAsync(string roomName)
+    {
+        if (string.IsNullOrWhiteSpace(roomName)) return false;
+        return await StartOrJoinSessionAsync(roomName.Trim(), createIfNotExists: false);
+    }
+
+    // [อัปเดต] รวม Logic การเข้าห้องไว้ที่เดียว (ยังเก็บ QuickJoinAsync เดิมไว้ให้เรียกใช้ได้)
     public async Task<bool> QuickJoinAsync()
+    {
+        return await StartOrJoinSessionAsync(null, createIfNotExists: true);
+    }
+
+    private async Task<bool> StartOrJoinSessionAsync(string sessionName, bool createIfNotExists)
     {
         if (CurrentState == State.Idle || CurrentState == State.Failed)
         {
@@ -118,34 +138,40 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         }
         if (CurrentState == State.Joining || CurrentState == State.InLobby) return false;
 
-        SetState(State.Joining, "Looking for a room...");
+        SetState(State.Joining, string.IsNullOrEmpty(sessionName) ? "Looking for a room..." : $"Joining {sessionName}...");
 
-        var result = await Runner.StartGame(new StartGameArgs
+        var args = new StartGameArgs
         {
             GameMode = GameMode.Shared,
-            SessionName = null,                       // null => random matchmaking
+            SessionName = sessionName, // ถ้าเป็น null จะสุ่ม, ถ้ามีชื่อจะเข้า/สร้างตามชื่อนั้น
             PlayerCount = MaxPlayers,
-            MatchmakingMode = Photon.Realtime.MatchmakingMode.FillRoom,
-            EnableClientSessionCreation = true,       // create a room if none is free
+            EnableClientSessionCreation = createIfNotExists,
             SceneManager = GetComponent<INetworkSceneManager>() ?? gameObject.AddComponent<NetworkSceneManagerDefault>(),
             ObjectProvider = GetComponent<INetworkObjectProvider>() ?? gameObject.AddComponent<NetworkObjectProviderDefault>(),
-        });
+        };
+
+        // ถ้าเป็นการ Quick Join (sessionName == null) ให้ใช้ FillRoom
+        if (string.IsNullOrEmpty(sessionName))
+        {
+            args.MatchmakingMode = Photon.Realtime.MatchmakingMode.FillRoom;
+        }
+
+        var result = await Runner.StartGame(args);
 
         if (!result.Ok)
         {
-            SetState(State.Failed, $"Quick Join failed: {result.ShutdownReason}");
+            // หากเข้าห้องไม่สำเร็จ ให้กลับไปสถานะ ConnectedToPhoton เพื่อเลือกห้องใหม่ได้
+            SetState(State.ConnectedToPhoton, $"Failed: {result.ShutdownReason}");
             return false;
         }
 
         SpawnLocalPlayer();
-        SetState(State.InLobby, $"Joined room {Runner.SessionInfo.Name}");
+        SetState(State.InLobby, $"Joined room: {Runner.SessionInfo.Name}");
         return true;
     }
 
-    /// <summary>True for the player that owns the room - in Shared mode that is the first player in.</summary>
     public bool IsFirstPlayer => Runner != null && Runner.IsRunning && Runner.IsSharedModeMasterClient;
 
-    /// <summary>Loads the map for everybody in the room. Only the first player may call it.</summary>
     public void StartGame()
     {
         if (!IsFirstPlayer)
@@ -179,15 +205,23 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     {
         if (Runner == null || !Runner.IsRunning) return;
         await Runner.Shutdown();
+
+        // [อัปเดต] หลังจากออกจากห้องใน Fusion Runner จะ Shutdown ตัวเอง
+        // เราสั่งเชื่อมต่อเข้า SessionLobby ใหม่อัตโนมัติ เพื่อให้กลับมาเห็น Room List ได้ทันที
         SetState(State.Idle, "Left the room.");
+        await ConnectToPhotonAsync();
     }
 
+    // [อัปเดต] รับรายการห้องจาก Photon แล้วส่งให้ UI
+    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList)
+    {
+        CachedSessionList = sessionList;
+        OnRoomListUpdated?.Invoke(sessionList);
+    }
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { }
     public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
     {
-        // The role may have just moved to somebody else - tell the UI right away
-        // instead of waiting for the next Update.
         PollMasterClient();
     }
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
@@ -195,6 +229,7 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         LobbyPlayer.All.Clear();
         MasterClient = PlayerRef.None;
         _lastMaster = PlayerRef.None;
+        CachedSessionList.Clear();
         SetState(State.Idle, $"Disconnected ({shutdownReason}).");
     }
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
@@ -211,7 +246,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     public void OnConnectedToServer(NetworkRunner runner) { }
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
     public void OnUserSimulationMessage(NetworkRunner runner) { }
-    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList) { }
     public void OnCustomAuthenticationResponse(NetworkRunner runner, Dictionary<string, object> data) { }
     public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) { }
     public void OnSceneLoadDone(NetworkRunner runner)
