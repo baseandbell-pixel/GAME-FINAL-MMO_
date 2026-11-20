@@ -16,15 +16,15 @@ public class GUIControl : MonoBehaviour
 
     [Header("Menu Panel (หน้า Start Game)")]
     public GameObject menuPanel;
-    public Button openRoomBrowserButton; // [เพิ่มใหม่] ปุ่ม Start Game ที่กดแล้วไปหน้า Room List
-    public Button quickJoinButton;       // ปุ่ม Quick Join เดิม (เผื่อยังอยากใช้)
+    public Button openRoomBrowserButton; // ปุ่ม Start Game ที่กดแล้วไปหน้า Room List
+    public Button quickJoinButton;       // ปุ่ม Quick Join เดิม (ปรับให้เปิดหน้า Room List เช่นกัน)
 
     [Header("Room Browser Panel (หน้าสร้างและเลือกห้อง)")]
-    public GameObject roomBrowserPanel;  // [เพิ่มใหม่] Panel แสดงรายชื่อห้อง + สร้างห้อง
-    public TMP_InputField roomNameInput; // [เพิ่มใหม่] ช่องกรอกชื่อห้อง
-    public Button createRoomButton;      // [เพิ่มใหม่] ปุ่ม Create Room
-    public Transform roomListContent;    // [เพิ่มใหม่] Content ของ ScrollView ที่จะวางปุ่มห้อง
-    public RoomListItemUI roomItemPrefab;// [เพิ่มใหม่] Prefab ปุ่มห้อง
+    public GameObject roomBrowserPanel;  // Panel แสดงรายชื่อห้อง + สร้างห้อง
+    public TMP_InputField roomNameInput; // ช่องกรอกชื่อห้อง
+    public Button createRoomButton;      // ปุ่ม Create Room
+    public Transform roomListContent;    // Content ของ ScrollView ที่จะวางปุ่มห้อง
+    public RoomListItemUI roomItemPrefab;// Prefab ปุ่มห้อง
 
     [Header("Room Lobby Panel (หน้าในห้องรอเริ่มเกม)")]
     public GameObject lobbyPanel;        // Panel เดิมที่มีตัวละคร / Ready / Play
@@ -63,7 +63,7 @@ public class GUIControl : MonoBehaviour
         if (lobbyNetwork != null)
         {
             lobbyNetwork.OnStateChanged += OnNetworkStateChanged;
-            lobbyNetwork.OnRoomListUpdated += UpdateRoomListUI; // ผูก Event อัปเดตรายการห้อง
+            lobbyNetwork.OnRoomListUpdated += UpdateRoomListUI;
         }
     }
 
@@ -145,7 +145,7 @@ public class GUIControl : MonoBehaviour
         if (openRoomBrowserButton) openRoomBrowserButton.interactable = ok;
     }
 
-    // [เพิ่มใหม่] กดปุ่ม Start Game จากหน้า Menu เพื่อเปิดหน้า Room List
+    // กดปุ่ม Start Game จากหน้า Menu เพื่อเปิดหน้า Room List
     public void OnClickOpenRoomBrowser()
     {
         if (menuPanel) menuPanel.SetActive(false);
@@ -158,14 +158,14 @@ public class GUIControl : MonoBehaviour
         }
     }
 
-    // [เพิ่มใหม่] ปุ่ม Back จากหน้า Room Browser กลับไป Menu
+    // ปุ่ม Back จากหน้า Room Browser กลับไป Menu
     public void OnClickBackToMenu()
     {
         if (roomBrowserPanel) roomBrowserPanel.SetActive(false);
         if (menuPanel) menuPanel.SetActive(true);
     }
 
-    // [เพิ่มใหม่] กดปุ่ม Create Room
+    // กดปุ่ม Create Room
     public async void OnClickCreateRoom()
     {
         if (lobbyNetwork == null) return;
@@ -182,7 +182,7 @@ public class GUIControl : MonoBehaviour
         }
     }
 
-    // [เพิ่มใหม่] กดปุ่ม Join ที่รายการห้องใน Room List
+    // กดปุ่ม Join ที่รายการห้องใน Room List
     private async void OnClickJoinRoomFromList(string roomName)
     {
         if (lobbyNetwork == null) return;
@@ -198,7 +198,7 @@ public class GUIControl : MonoBehaviour
         }
     }
 
-    // [เพิ่มใหม่] วาดรายการห้องใน ScrollView
+    // วาดรายการห้องใน ScrollView
     private void UpdateRoomListUI(List<SessionInfo> sessions)
     {
         if (roomListContent == null || roomItemPrefab == null) return;
@@ -221,19 +221,10 @@ public class GUIControl : MonoBehaviour
         }
     }
 
-    public async void OnClickQuickJoin()
+    // [อัปเดต] ปรับให้ปุ่มเก่าที่ผูก OnClickQuickJoin ไว้ เปิดหน้าเลือกห้องแทนการสุ่มเข้าห้องทันที
+    public void OnClickQuickJoin()
     {
-        if (lobbyNetwork == null) return;
-        if (quickJoinButton) quickJoinButton.interactable = false;
-
-        bool ok = await lobbyNetwork.QuickJoinAsync();
-        if (!ok)
-        {
-            if (quickJoinButton) quickJoinButton.interactable = true;
-            return;
-        }
-
-        EnterRoomLobbyUI();
+        OnClickOpenRoomBrowser();
     }
 
     private void EnterRoomLobbyUI()

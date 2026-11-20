@@ -28,10 +28,10 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     /// <summary>Raised when the room gets a new "first player".</summary>
     public event Action<PlayerRef, bool> OnMasterClientChanged;
 
-    // [เพิ่มใหม่] Event แจ้งเตือน UI เมื่อรายการห้องใน Lobby มีการอัปเดต
+    // Event แจ้งเตือน UI เมื่อรายการห้องใน Lobby มีการอัปเดต
     public event Action<List<SessionInfo>> OnRoomListUpdated;
 
-    // [เพิ่มใหม่] เก็บรายการห้องล่าสุดเผื่อ UI เปิดทีหลัง
+    // เก็บรายการห้องล่าสุดเผื่อ UI เปิดทีหลัง
     public List<SessionInfo> CachedSessionList { get; private set; } = new List<SessionInfo>();
 
     public State CurrentState { get; private set; } = State.Idle;
@@ -106,7 +106,7 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         return true;
     }
 
-    // [เพิ่มใหม่] สร้างห้องแบบกำหนดชื่อเอง
+    // สร้างห้องแบบกำหนดชื่อเอง
     public async Task<bool> CreateRoomAsync(string roomName)
     {
         if (string.IsNullOrWhiteSpace(roomName))
@@ -117,14 +117,14 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         return await StartOrJoinSessionAsync(roomName.Trim(), createIfNotExists: true);
     }
 
-    // [เพิ่มใหม่] กดเข้าร่วมห้องจาก Room List
+    // กดเข้าร่วมห้องจาก Room List
     public async Task<bool> JoinRoomAsync(string roomName)
     {
         if (string.IsNullOrWhiteSpace(roomName)) return false;
         return await StartOrJoinSessionAsync(roomName.Trim(), createIfNotExists: false);
     }
 
-    // [อัปเดต] รวม Logic การเข้าห้องไว้ที่เดียว (ยังเก็บ QuickJoinAsync เดิมไว้ให้เรียกใช้ได้)
+    // รวม Logic การเข้าห้องไว้ที่เดียว (ยังเก็บ QuickJoinAsync เดิมไว้ให้เรียกใช้ได้)
     public async Task<bool> QuickJoinAsync()
     {
         return await StartOrJoinSessionAsync(null, createIfNotExists: true);
@@ -132,6 +132,9 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
     private async Task<bool> StartOrJoinSessionAsync(string sessionName, bool createIfNotExists)
     {
+        // [เพิ่มตัวดักจับ] บรรทัดนี้จะฟ้องใน Console ทันทีว่าสคริปต์ตัวไหนแอบสั่งสร้าง/เข้าห้อง
+        Debug.LogError($"[ตัวดักจับ] มีคำสั่งเข้าห้องทำงาน! (ชื่อห้อง: '{sessionName}', สร้างใหม่: {createIfNotExists})\nดูชื่อตัวการจากบรรทัดข้างล่างนี้:\n" + Environment.StackTrace);
+
         if (CurrentState == State.Idle || CurrentState == State.Failed)
         {
             if (!await ConnectToPhotonAsync()) return false;
@@ -143,14 +146,13 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         var args = new StartGameArgs
         {
             GameMode = GameMode.Shared,
-            SessionName = sessionName, // ถ้าเป็น null จะสุ่ม, ถ้ามีชื่อจะเข้า/สร้างตามชื่อนั้น
+            SessionName = sessionName,
             PlayerCount = MaxPlayers,
             EnableClientSessionCreation = createIfNotExists,
             SceneManager = GetComponent<INetworkSceneManager>() ?? gameObject.AddComponent<NetworkSceneManagerDefault>(),
             ObjectProvider = GetComponent<INetworkObjectProvider>() ?? gameObject.AddComponent<NetworkObjectProviderDefault>(),
         };
 
-        // ถ้าเป็นการ Quick Join (sessionName == null) ให้ใช้ FillRoom
         if (string.IsNullOrEmpty(sessionName))
         {
             args.MatchmakingMode = Photon.Realtime.MatchmakingMode.FillRoom;
@@ -160,7 +162,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
         if (!result.Ok)
         {
-            // หากเข้าห้องไม่สำเร็จ ให้กลับไปสถานะ ConnectedToPhoton เพื่อเลือกห้องใหม่ได้
             SetState(State.ConnectedToPhoton, $"Failed: {result.ShutdownReason}");
             return false;
         }
@@ -185,6 +186,12 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
             return;
         }
 
+        // ล็อกห้องไม่ให้คนนอกกด Join เข้ามาระหว่างกำลังเริ่มเกม
+        if (Runner != null && Runner.SessionInfo != null)
+        {
+            Runner.SessionInfo.IsOpen = false;
+        }
+
         SetState(State.Starting, "Loading the map...");
         Runner.LoadScene(gameSceneName, LoadSceneMode.Single);
     }
@@ -206,13 +213,10 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         if (Runner == null || !Runner.IsRunning) return;
         await Runner.Shutdown();
 
-        // [อัปเดต] หลังจากออกจากห้องใน Fusion Runner จะ Shutdown ตัวเอง
-        // เราสั่งเชื่อมต่อเข้า SessionLobby ใหม่อัตโนมัติ เพื่อให้กลับมาเห็น Room List ได้ทันที
         SetState(State.Idle, "Left the room.");
         await ConnectToPhotonAsync();
     }
 
-    // [อัปเดต] รับรายการห้องจาก Photon แล้วส่งให้ UI
     public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList)
     {
         CachedSessionList = sessionList;
