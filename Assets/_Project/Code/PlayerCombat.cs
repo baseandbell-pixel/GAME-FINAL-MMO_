@@ -477,6 +477,7 @@ public class PlayerCombat : NetworkBehaviour
             Local = this;
             Debug.Log($"[PlayerCombat] Local player registered ({name}, id={Object.Id}).");
             CombatHud.EnsureFor(this);
+            EnsureLocalPlayerVFXControllers();
         }
 
         if (Object.HasStateAuthority)
@@ -488,6 +489,44 @@ public class PlayerCombat : NetworkBehaviour
 
         ApplyHealthState(forceNotify: true);
         UpdateBlockVfxVisual(IsBlocking && !IsDead);
+    }
+
+    private void EnsureLocalPlayerVFXControllers()
+    {
+        var healVfx = GetComponent<MMOHealingPotionVFX>();
+        if (healVfx == null)
+        {
+            healVfx = gameObject.AddComponent<MMOHealingPotionVFX>();
+            healVfx.showDebugHUD = false;
+        }
+
+        var staminaVfx = GetComponent<MMOStaminaPotionVFX>();
+        if (staminaVfx == null)
+        {
+            staminaVfx = gameObject.AddComponent<MMOStaminaPotionVFX>();
+            staminaVfx.showDebugHUD = false;
+        }
+
+        var levelUpVfx = GetComponent<MMOLevelUpController>();
+        if (levelUpVfx == null)
+        {
+            levelUpVfx = gameObject.AddComponent<MMOLevelUpController>();
+            levelUpVfx.allowLeftClick = false;
+        }
+
+        var deathBloodVfx = GetComponent<MMOMonsterDeathBloodVFX>();
+        if (deathBloodVfx == null)
+        {
+            deathBloodVfx = gameObject.AddComponent<MMOMonsterDeathBloodVFX>();
+            deathBloodVfx.showTestHUD = false;
+        }
+
+        var heartbeatComboUi = GetComponent<MMOHeartbeatComboUI>();
+        if (heartbeatComboUi == null)
+        {
+            heartbeatComboUi = gameObject.AddComponent<MMOHeartbeatComboUI>();
+            heartbeatComboUi.countOnAttackInputForTest = false;
+        }
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
@@ -630,10 +669,17 @@ public class PlayerCombat : NetworkBehaviour
             NetworkUnspentStatPoints += pointsGained;
             NetworkHealth = MaxHealth;
             NetworkStamina = MaxStamina;
+            RPC_PlayLevelUpVFX(NetworkLevel);
             Debug.Log($"[PlayerCombat] LEVEL UP! {name} reached Level {NetworkLevel} (+{pointsGained} Stat Points, total unspent={NetworkUnspentStatPoints}).");
         }
         ProgressionChanged?.Invoke();
         PlayerSaveManager.RequestAutoSave(leveledUp ? "LevelUp" : "AddExperience");
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_PlayLevelUpVFX(int newLevel)
+    {
+        MMOLevelUpController.PlayLevelUpVFX(transform);
     }
 
     /// <summary>Allocates Stat Points + scaled Gold cost into STR, VIT, END, or AGI.</summary>
@@ -885,7 +931,8 @@ public class PlayerCombat : NetworkBehaviour
 
     public bool ConsumeSprintStamina(float dt)
     {
-        if (!_isSpawned || IsDead) return false;
+        if (!_isSpawned) return true;
+        if (IsDead) return false;
         if (_sprintExhaustedCooldown || NetworkStamina <= 0f)
         {
             _sprintExhaustedCooldown = true;
@@ -943,6 +990,7 @@ public class PlayerCombat : NetworkBehaviour
         float before = NetworkStamina;
         NetworkStamina = Mathf.Min(MaxStamina, NetworkStamina + amount);
         _sprintExhaustedCooldown = false;
+        MMOStaminaPotionVFX.UseStaminaPotion();
         Debug.Log($"[PlayerCombat] Restored {NetworkStamina - before:0} Stamina ({before:0} -> {NetworkStamina:0}/{MaxStamina:0}).");
     }
 
@@ -1146,6 +1194,9 @@ public class PlayerCombat : NetworkBehaviour
 
         if (_animationDriver != null)
             _animationDriver.PlayDodge(rollX, rollY);
+
+        var smokeVfx = GetComponent<MMODodgeSmokeController>();
+        if (smokeVfx != null) smokeVfx.TriggerSmokeRoll();
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
@@ -1174,9 +1225,28 @@ public class PlayerCombat : NetworkBehaviour
 
     private void UpdateBlockVfxVisual(bool active)
     {
+        var aaaBlockParry = GetComponent<MMOBlockParryController>();
+        if (aaaBlockParry != null)
+        {
+            if (_blockVfxRoot != null && _blockVfxRoot.activeSelf)
+                _blockVfxRoot.SetActive(false);
+            aaaBlockParry.SetGuardStanceActive(active);
+            return;
+        }
+
         if (_blockVfxRoot == null) BuildBlockShieldVfx();
         if (_blockVfxRoot != null && _blockVfxRoot.activeSelf != active)
             _blockVfxRoot.SetActive(active);
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastBlockedHitSoundwave()
+    {
+        var aaaBlockParry = GetComponent<MMOBlockParryController>();
+        if (aaaBlockParry != null)
+        {
+            aaaBlockParry.TriggerBlockAbsorb();
+        }
     }
 
     private void OnStaminaChanged()
@@ -1391,6 +1461,7 @@ public class PlayerCombat : NetworkBehaviour
         if (!_isSpawned || !Object.HasStateAuthority || IsDead || amount <= 0) return;
         int before = NetworkHealth;
         NetworkHealth = Mathf.Min(MaxHealth, NetworkHealth + amount);
+        MMOHealingPotionVFX.UseHealPotion();
         Debug.Log($"[PlayerCombat] Healed {NetworkHealth - before} ({before} -> {NetworkHealth}/{MaxHealth}).");
     }
 
@@ -1414,6 +1485,15 @@ public class PlayerCombat : NetworkBehaviour
         {
             damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1f - blockDamageReduction)));
             TryConsumeAuthorityStamina(blockHitStaminaCost);
+
+            // เมื่อถูกโจมตีขณะบล็อกอยู่ ให้ตัวโล่สว่างวาบรับแรงไว้บนหน้าโล่อย่างมั่นคง (ไม่สะท้อน/ไม่กระเด็น)
+            var aaaBlockParry = GetComponent<MMOBlockParryController>();
+            if (aaaBlockParry != null)
+            {
+                aaaBlockParry.TriggerBlockAbsorb();
+            }
+            RPC_BroadcastBlockedHitSoundwave();
+
             if (NetworkStamina <= 0f)
             {
                 IsBlocking = false;
@@ -1728,11 +1808,19 @@ public sealed class CombatHud : MonoBehaviour
 
         _localHud.AddTextPopup(enemy.LockPoint, isCrit ? $"CRIT! -{amount}" : $"-{amount}", c, isCrit);
 
+        if (isCrit)
+        {
+            Vector3 hitPos = enemy.LockPoint != null ? enemy.LockPoint.position : enemy.transform.position + Vector3.up * 1.2f;
+            float critScale = comboStep >= 3 ? 1.2f : -1f;
+            MMOCriticalHitVFX.SpawnCriticalHit(hitPos, critScale);
+        }
+
         var local = PlayerCombat.Local;
         if (local != null && local.Runner != null && local.Runner.LocalPlayer == attacker)
         {
             _localHud._combo = Time.unscaledTime - _localHud._lastComboTime <= ComboTimeout ? _localHud._combo + 1 : 1;
             _localHud._lastComboTime = Time.unscaledTime;
+            MMOHeartbeatComboUI.RegisterHit();
             Debug.Log($"[CombatHud] Damage dealt: {amount}{(isCrit ? " (CRIT!)" : "")}; combo {_localHud._combo}.");
         }
     }
@@ -1873,6 +1961,7 @@ public sealed class CombatHud : MonoBehaviour
 
     private void DrawCombo()
     {
+        if (MMOHeartbeatComboUI.Instance != null) return;
         if (_combo <= 1) return;
         float age = Time.unscaledTime - _lastComboTime;
         GUI.color = new Color(1f, 0.85f, .2f, Mathf.Clamp01(1f - age / ComboTimeout));

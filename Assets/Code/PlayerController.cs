@@ -466,6 +466,9 @@ public class PlayerController : MonoBehaviour
         anim.ResetTrigger("Roll");
         anim.SetTrigger("Roll");
 
+        var smokeVfx = GetComponent<MMODodgeSmokeController>();
+        if (smokeVfx != null) smokeVfx.TriggerSmokeRoll();
+
         if (netChar != null) netChar.RecordAction(NetworkCharacter.ACT_ROLL, rx, ry);
     }
 

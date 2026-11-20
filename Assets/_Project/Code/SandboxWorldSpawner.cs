@@ -344,6 +344,11 @@ public class SandboxWorldSpawner : MonoBehaviour
             _bossCleared = false;
             _bossRespawnRemaining = 0f;
         }
+        else if (!_bossEverSpawned && !_bossCleared && isMaster)
+        {
+            // รับประกันว่าหากบอสยังไม่เคยถูกเสก (เช่น SyncExistingEnemiesToCamps ทำงานก่อน) จะสั่งเสกบอสทันที
+            SpawnBoss(runner);
+        }
         else if (_bossEverSpawned && !_bossCleared)
         {
             _bossCleared = true;

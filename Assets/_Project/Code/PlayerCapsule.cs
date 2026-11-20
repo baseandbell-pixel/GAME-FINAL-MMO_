@@ -160,8 +160,28 @@ public class PlayerCapsule : NetworkBehaviour
         _overrideMoveUntil = holdSeconds > 0f ? Time.time + holdSeconds : 0f;
     }
 
-    /// <summary>True only for the copy this peer may drive. In Shared Mode this is the locally spawned object.</summary>
-    public bool IsLocallyControlled => Object != null && (Object.HasInputAuthority || (Runner != null && Runner.GameMode == GameMode.Shared && Object.HasStateAuthority));
+    Vector2 _localMoveNormalized;
+    bool _localEffectiveSprint;
+
+    public Vector2 EffectiveMove => (Object != null && Object.IsValid) ? NetworkMove : _localMoveNormalized;
+    public bool EffectiveSprinting => (Object != null && Object.IsValid) ? (bool)NetworkSprinting : _localEffectiveSprint;
+
+    /// <summary>True only for the copy this peer may drive. In Shared Mode this is the locally spawned object; in offline fallback Object is null/invalid.</summary>
+    public bool IsLocallyControlled => Object == null || !Object.IsValid || Object.HasInputAuthority || (Runner != null && Runner.GameMode == GameMode.Shared && Object.HasStateAuthority);
+
+    void Start()
+    {
+        if (Object == null || !Object.IsValid)
+        {
+            isOwner = true;
+            if (Local == null) Local = this;
+            if (rb != null)
+            {
+                rb.isKinematic = false;
+                rb.interpolation = RigidbodyInterpolation.Interpolate;
+            }
+        }
+    }
 
     private void Update()
     {
@@ -235,14 +255,17 @@ public class PlayerCapsule : NetworkBehaviour
             rb.MoveRotation(Quaternion.Slerp(rb.rotation, targetRotation, rotationSpeed * Time.fixedDeltaTime));
         }
 
+        Vector3 refSpace = (MovementReference != null && strafeInActionCamera && FacingTarget == null)
+            ? Quaternion.Inverse(Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f)) * wanted
+            : Quaternion.Inverse(transform.rotation) * wanted;
+        _localMoveNormalized = new Vector2(refSpace.x, refSpace.z);
+        _localEffectiveSprint = effectiveSprint;
+
         // State Authority writes the replicated values; in Shared Mode this is always the peer
         // that owns this avatar. Proxies consume them in Render for synchronized locomotion.
-        if (Object.HasStateAuthority)
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
         {
-            Vector3 refSpace = (MovementReference != null && strafeInActionCamera && FacingTarget == null)
-                ? Quaternion.Inverse(Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f)) * wanted
-                : Quaternion.Inverse(transform.rotation) * wanted;
-            NetworkMove = new Vector2(refSpace.x, refSpace.z);
+            NetworkMove = _localMoveNormalized;
             NetworkSprinting = effectiveSprint;
         }
     }

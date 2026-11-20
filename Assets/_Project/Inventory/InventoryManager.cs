@@ -289,6 +289,7 @@ public class InventoryManager : MonoBehaviour
             if (_combat.NetworkHealth < _combat.MaxHealth)
             {
                 _combat.HealSelf(item.healAmount);
+                MMOHealingPotionVFX.UseHealPotion();
                 appliedAny = true;
             }
             else if (item.staminaRestoreAmount <= 0 && item.attackBuffBonus <= 0)
@@ -301,6 +302,7 @@ public class InventoryManager : MonoBehaviour
         if (item.staminaRestoreAmount > 0)
         {
             _combat.RestoreStamina(item.staminaRestoreAmount);
+            MMOStaminaPotionVFX.UseStaminaPotion();
             appliedAny = true;
         }
 

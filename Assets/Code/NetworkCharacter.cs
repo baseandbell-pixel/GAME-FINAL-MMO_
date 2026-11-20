@@ -207,6 +207,8 @@ public class NetworkCharacter : NetworkBehaviour
                 _anim.SetFloat("RollY", py);
                 _anim.ResetTrigger("Roll");
                 _anim.SetTrigger("Roll");
+                var remoteSmokeVfx = GetComponent<MMODodgeSmokeController>();
+                if (remoteSmokeVfx != null) remoteSmokeVfx.TriggerSmokeRoll();
                 break;
 
             case ACT_JUMP:

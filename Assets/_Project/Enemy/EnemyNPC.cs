@@ -1092,6 +1092,14 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         Debug.Log($"[EnemyNPC] {name} (Lv.{ScaledLevel}) died (killer {killer}, exp={exp}).");
         if (animator != null) animator.SetTrigger(DieTrigger);
+        try
+        {
+            MMOMonsterDeathBloodVFX.SpawnDeathBlood(transform.position, IsBoss ? 1.85f : -1f);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[EnemyNPC] Death blood VFX skipped: {ex.Message}");
+        }
         onDeath?.Invoke();
 
         if (Runner != null && Runner.LocalPlayer == killer)

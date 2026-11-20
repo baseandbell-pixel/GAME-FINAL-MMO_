@@ -401,7 +401,11 @@ public class InventoryUI : MonoBehaviour
 
     private void OnUseClicked()
     {
-        if (_selected >= 0) _inv.UseItem(_selected);
+        if (_selected >= 0 && _inv.UseItem(_selected))
+        {
+            // ปิดหน้าต่างกระเป๋าอัตโนมัติหลังกดใช้ยา เพื่อให้ผู้เล่นเห็นเอฟเฟกต์หิ้งห้อย/โลมารอบตัวทันที
+            SetOpen(false);
+        }
     }
 
     private void OnEquipClicked()

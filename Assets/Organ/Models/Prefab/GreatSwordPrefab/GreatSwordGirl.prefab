@@ -361,6 +361,15 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
       insertIndex: -1
       addedObject: {fileID: 8813312916830965982}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 3787670156397570894}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 6819204718293041553}
+    - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 7918273645192837465}
   m_SourcePrefab: {fileID: 100100000, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
 --- !u!4 &1183207650001422433 stripped
 Transform:
@@ -630,6 +639,71 @@ MonoBehaviour:
   activeSlashStartNormalized: 0.19
   activeSlashEndNormalized: 0.48
   waveSpawnOffset: {x: 0, y: 1.15, z: 0.75}
+--- !u!114 &3787670156397570894
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1183344994937220836}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 059b8fd432707144f928e4daac54db35, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::RunWindSlipstream
+  useLightGreenWind: 0
+  lightGreenWindColor: {r: 0.62, g: 1, b: 0.86, a: 0.72}
+  pureWhiteWindColor: {r: 0.93, g: 0.98, b: 1, a: 0.68}
+  triggerOnRunAnimation: 1
+  blendTreeRunThreshold: 1.55
+  requireMovementWithShift: 1
+  minMoveSpeedThreshold: 0.25
+  worldRunSpeedThreshold: 4.2
+  stopGraceTime: 0.14
+  windDensity: 54
+  windOpacity: 0.68
+  leftFootBoneName: Bip001 L Foot
+  rightFootBoneName: Bip001 R Foot
+--- !u!114 &6819204718293041553
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1183344994937220836}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ae6d18c9affeee54a8df410dd866bc99, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MMOBlockParryController
+  allowRightMouseGuard: 1
+  guardHoldKey: 102
+  syncWithPlayerCombat: 1
+  baseShieldColor: {r: 0.32, g: 0.84, b: 1, a: 0.86}
+  absorbImpactColor: {r: 0.82, g: 0.97, b: 1, a: 1}
+  shieldDeploySpeed: 24
+  shieldPulseFrequency: 4.2
+  showDebugHUD: 0
+--- !u!114 &7918273645192837465
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1183344994937220836}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 85c9c505c687c7941b23b9a4e256e101, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MMODodgeSmokeController
+  autoDetectAnimatorRollState: 1
+  enableDirectKeyTrigger: 1
+  primaryRollKey: 99
+  secondaryRollKey: 306
+  syncWithCharacterRollAndDash: 1
+  rollDuration: 0.42
+  minTriggerInterval: 0.35
+  showDebugHUD: 0
 --- !u!4 &2103095982623179365 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -9114496787053588016, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}

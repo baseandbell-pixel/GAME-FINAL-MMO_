@@ -135,8 +135,8 @@ public class PlayerAnimationDriver : MonoBehaviour
         if (animator == null || animator.runtimeAnimatorController == null) return;
         if (!_parametersChecked) CacheParameterAvailability();
 
-        Vector2 netMove = _capsule != null ? _capsule.NetworkMove : Vector2.zero;
-        bool netSprint = _capsule != null && _capsule.NetworkSprinting;
+        Vector2 netMove = _capsule != null ? _capsule.EffectiveMove : Vector2.zero;
+        bool netSprint = _capsule != null && _capsule.EffectiveSprinting;
         bool isDead = _combat != null && _combat.IsDead;
         bool isBlocking = _combat != null && _combat.IsBlocking && !isDead;
 

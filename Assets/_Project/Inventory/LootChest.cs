@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using Fusion;
 using TMPro;
@@ -20,6 +21,7 @@ public class LootChest : MonoBehaviour
     [SerializeField] private float interactRadius = 3.2f;
     [SerializeField] private int dropsPerChest = 2;
     [SerializeField] private WorldItem worldItemPrefab;
+    [SerializeField] private float vanishDelayAfterOpen = 3.8f;
 
     public int CampId => campId;
     public bool IsBossChest => isBossChest;
@@ -31,6 +33,7 @@ public class LootChest : MonoBehaviour
     private Transform _beaconRing;
     private Light _chestLight;
     private TextMeshPro _worldLabel;
+    private MMOTreasureChestController _vfxController;
     private float _lidAngle;
     private float _bannerUntil = -1f;
     private string _bannerText = "";
@@ -154,6 +157,20 @@ public class LootChest : MonoBehaviour
         _worldLabel.alignment = TextAlignmentOptions.Center;
         _worldLabel.color = new Color(1f, 0.86f, 0.24f, 1f);
         _worldLabel.textWrappingMode = TextWrappingModes.NoWrap;
+
+        // เชื่อมระบบเอฟเฟกต์เปิดกล่องสมบัติแสงทอง 4 เลเยอร์ระดับ AAA เข้ากับหีบสมบัติในเกมจริง
+        _vfxController = GetComponent<MMOTreasureChestController>();
+        if (_vfxController == null)
+        {
+            _vfxController = gameObject.AddComponent<MMOTreasureChestController>();
+        }
+        _vfxController.openAngleX = -105f;
+        _vfxController.BindExternalChest(
+            _lidPivot,
+            new Vector3(0f, 0.56f, 0f),
+            dedicatedPointLight: null,
+            enableStandaloneInput: false,
+            enableDebugHud: false);
     }
 
     private static GameObject CreatePart(Transform parent, string partName, PrimitiveType type, Vector3 localPos, Vector3 localScale, Color color)
@@ -181,7 +198,8 @@ public class LootChest : MonoBehaviour
 
     private void Update()
     {
-        if (IsOpened && _lidPivot != null && _lidAngle > -68f)
+        // ให้ MMOTreasureChestController เป็นตัวหมุนบานพับฝาหีบแบบ Back Ease-Out (-105 องศา) เพื่อไม่ให้ตีกัน
+        if (_vfxController == null && IsOpened && _lidPivot != null && _lidAngle > -68f)
         {
             _lidAngle = Mathf.MoveTowards(_lidAngle, -68f, 180f * Time.deltaTime);
             _lidPivot.localRotation = Quaternion.Euler(_lidAngle, 0f, 0f);
@@ -231,6 +249,15 @@ public class LootChest : MonoBehaviour
     {
         if (IsOpened) return _droppedItems;
         IsOpened = true;
+
+        if (_vfxController == null)
+        {
+            _vfxController = GetComponent<MMOTreasureChestController>();
+        }
+        if (_vfxController != null)
+        {
+            _vfxController.TriggerOpenChest();
+        }
 
         if (opener == null) opener = PlayerCombat.Local;
         NetworkRunner runner = opener != null ? opener.Runner : null;
@@ -287,7 +314,54 @@ public class LootChest : MonoBehaviour
         _bannerColor = ItemData.GetTierColor(highestTier);
         _bannerUntil = Time.unscaledTime + 4.0f;
 
+        if (gameObject.activeInHierarchy)
+        {
+            StartCoroutine(VanishAfterOpenRoutine());
+        }
+
         return _droppedItems;
+    }
+
+    /// <summary>
+    /// รอให้เอฟเฟกต์เปิดกล่องแสงทอง 4 เลเยอร์แสดงผลครบถ้วน จากนั้นค่อยๆ หรี่แสง ย่อตัว และทำลายกล่องสมบัติทิ้งอัตโนมัติ
+    /// </summary>
+    private IEnumerator VanishAfterOpenRoutine()
+    {
+        float holdTime = Mathf.Max(1.8f, vanishDelayAfterOpen - 0.8f);
+        yield return new WaitForSeconds(holdTime);
+
+        if (_vfxController != null)
+        {
+            _vfxController.StopVFXSoftly();
+        }
+
+        var box = GetComponent<BoxCollider>();
+        if (box != null) box.enabled = false;
+
+        if (_worldLabel != null) _worldLabel.gameObject.SetActive(false);
+
+        Vector3 startScale = transform.localScale;
+        float startLightIntensity = _chestLight != null ? _chestLight.intensity : 0f;
+        const float shrinkDuration = 0.75f;
+        float elapsed = 0f;
+
+        while (elapsed < shrinkDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / shrinkDuration);
+            float easeIn = t * t * t;
+            transform.localScale = Vector3.Lerp(startScale, Vector3.zero, easeIn);
+
+            if (_chestLight != null)
+            {
+                _chestLight.intensity = Mathf.Lerp(startLightIntensity, 0f, t);
+            }
+
+            yield return null;
+        }
+
+        All.Remove(this);
+        Destroy(gameObject);
     }
 
     private void OnGUI()
