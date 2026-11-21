@@ -1,0 +1,134 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &2295963777526254643
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8746715059036645256}
+  - component: {fileID: 8494715805853937119}
+  m_Layer: 0
+  m_Name: MonsterSystem_Manager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &8746715059036645256
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2295963777526254643}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 2461887695176257889}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &8494715805853937119
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2295963777526254643}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f18dbdd378bf01d4bbfadf113cc6a2f1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MonsterSystemManager
+  enableAllZones: 1
+  sharedWorldItemPrefab: {fileID: 6507998983499857821, guid: 1f3dda27c4c498b4fb91d3d916ec6506, type: 3}
+  globalHealthMultiplier: 1
+  globalDamageMultiplier: 1
+  globalRespawnSpeedMultiplier: 1
+  globalDropRateMultiplier: 1
+  managedZones:
+  - {fileID: 5853049668694880889}
+  onAnyMonsterKilled:
+    m_PersistentCalls:
+      m_Calls: []
+  onAnyMonsterSpawned:
+    m_PersistentCalls:
+      m_Calls: []
+--- !u!1001 &2909398519612494119
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 8746715059036645256}
+    m_Modifications:
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: -22
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalRotation.w
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalRotation.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalRotation.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalRotation.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.x
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.y
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_LocalEulerAnglesHint.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 5763865932117749475, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+      propertyPath: m_Name
+      value: Zone_Orc
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+--- !u!4 &2461887695176257889 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 741443955365642310, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+  m_PrefabInstance: {fileID: 2909398519612494119}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &5853049668694880889 stripped
+MonoBehaviour:
+  m_CorrespondingSourceObject: {fileID: 8744432606970012510, guid: cc95229b888acbd4893a9cfe9f429469, type: 3}
+  m_PrefabInstance: {fileID: 2909398519612494119}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d7bc2df6d93512f448492379e116bbb8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MonsterSpawnZone

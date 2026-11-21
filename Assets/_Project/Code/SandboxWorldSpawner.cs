@@ -65,6 +65,8 @@ public class SandboxWorldSpawner : MonoBehaviour
 
     [Header("Enemies & Camps (4 แคมป์ แต่ละตัวมีโซนลาดตระเวนส่วนตัวแยกกันไม่เดินกระจุก)")]
     [SerializeField] private EnemyNPC enemyPrefab;
+    [Tooltip("พรีแฟบมอนสเตอร์เฉพาะแต่ละแคมป์ (ช่อง 0 = Camp 1, ช่อง 1 = Camp 2, ช่อง 2 = Camp 3, ช่อง 3 = Camp 4) — ช่องที่เว้นว่างจะใช้ enemyPrefab เดิม")]
+    [SerializeField] private EnemyNPC[] campEnemyPrefabs = null;
     [Tooltip("Primary camp ID (Camp 1 uses scene enemyPoints only if spaced >= minIndividualZoneSpacing; otherwise uses separated personal patrol zone anchors).")]
 #pragma warning disable CS0414
     [SerializeField] private int campId = 1;
@@ -785,9 +787,18 @@ public class SandboxWorldSpawner : MonoBehaviour
         return totalEnemies >= ExpectedCampSize && boss != null;
     }
 
+    private EnemyNPC ResolveCampEnemyPrefab(int targetCampId)
+    {
+        int idx = targetCampId - 1;
+        if (campEnemyPrefabs != null && idx >= 0 && idx < campEnemyPrefabs.Length && campEnemyPrefabs[idx] != null)
+            return campEnemyPrefabs[idx];
+        return enemyPrefab;
+    }
+
     private int SpawnCampEnemies(NetworkRunner runner, CampRuntimeState camp)
     {
-        if (runner == null || !runner.IsRunning || enemyPrefab == null || camp == null) return 0;
+        EnemyNPC prefabForCamp = camp != null ? ResolveCampEnemyPrefab(camp.CampId) : enemyPrefab;
+        if (runner == null || !runner.IsRunning || prefabForCamp == null || camp == null) return 0;
 
         camp.ActiveEnemies.Clear();
         camp.CampDamageContributors.Clear();
@@ -803,7 +814,7 @@ public class SandboxWorldSpawner : MonoBehaviour
             Vector3 pos = camp.SpawnPositions[i];
             int zoneIndex = i;
             int zoneLvl = UnityEngine.Random.Range(camp.MinLevel, camp.MaxLevel + 1);
-            var npc = runner.Spawn(enemyPrefab, pos, Quaternion.identity, null, (r, o) =>
+            var npc = runner.Spawn(prefabForCamp, pos, Quaternion.identity, null, (r, o) =>
             {
                 var enemy = o.GetComponent<EnemyNPC>();
                 if (enemy != null)
