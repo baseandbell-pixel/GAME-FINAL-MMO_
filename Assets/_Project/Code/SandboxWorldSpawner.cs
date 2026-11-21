@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using Fusion;
 using UnityEngine;
 
@@ -30,6 +32,10 @@ public class SandboxWorldSpawner : MonoBehaviour
     {
         public int CampId;
         public string CampName;
+        // ข้อมูลโซนเลเวลคงที่ของแคมป์นี้ (รองรับ Central Server MMORPG ไม่ให้เลเวลกระโดดตามผู้เล่นเลเวลสูง)
+        public string ZoneTierName;
+        public int MinLevel = 1;
+        public int MaxLevel = 2;
         public Vector3 Center;
         public Vector3[] SpawnPositions;
         public bool EverPopulated;
@@ -37,6 +43,11 @@ public class SandboxWorldSpawner : MonoBehaviour
         public float RespawnRemainingSeconds;
         public LootChest ActiveChest;
         public readonly List<EnemyNPC> ActiveEnemies = new List<EnemyNPC>(4);
+        // ตารางสะสมดาเมจของผู้เล่นแต่ละคนต่อมอนสเตอร์ทุกตัวในแคมป์นี้ (ใช้ล็อกสิทธิ์เปิดกล่องสมบัติเฉพาะผู้ร่วมสู้)
+        public readonly Dictionary<PlayerRef, float> CampDamageContributors = new Dictionary<PlayerRef, float>();
+        public bool AuthoritativeClearHandled;
+        public float AuthoritativeClearAt = -10f;
+        public float ZeroLivingDetectedAt = -1f;
 
         public string GetFormattedRespawnTime()
         {
@@ -47,19 +58,33 @@ public class SandboxWorldSpawner : MonoBehaviour
         }
     }
 
-    [Header("Enemies & Camps (4 Camps, ~7-Block Spacing)")]
+    [Header("Enemies & Camps (4 แคมป์ แต่ละตัวมีโซนลาดตระเวนส่วนตัวแยกกันไม่เดินกระจุก)")]
     [SerializeField] private EnemyNPC enemyPrefab;
-    [Tooltip("Primary camp ID (Camp 1 uses scene enemyPoints if assigned; Camps 2..4 are generated at ~7-block spacing).")]
+    [Tooltip("Primary camp ID (Camp 1 uses scene enemyPoints only if spaced >= minIndividualZoneSpacing; otherwise uses separated personal patrol zone anchors).")]
 #pragma warning disable CS0414
     [SerializeField] private int campId = 1;
 #pragma warning restore CS0414
     [SerializeField] private Transform[] enemyPoints;
+    // รัศมีโซนลาดตระเวนส่วนตัวของมอนสเตอร์แต่ละตัว (3.4m x 2 = 6.8m < ระยะห่าง 10m -> ไม่มีทางทับซ้อนกัน)
+    [Min(1.5f)] [SerializeField] private float individualEnemyPatrolRadius = 3.4f;
+    // ระยะห่างขั้นต่ำระหว่างจุดเกิดของมอนสเตอร์แต่ละตัวในแคมป์เดียวกัน หากจุดในฉากชิดกว่านี้จะใช้พิกัดกระจายโซนอัตโนมัติ
+    [Min(6f)] [SerializeField] private float minIndividualZoneSpacing = 8.0f;
     [Min(5f)] [SerializeField] private float campRespawnDelaySeconds = DefaultCampRespawnSeconds;
 
     [Header("Dedicated Boss Arena (4:00 Respawn & Proximity Zone)")]
+    // พรีแฟบเฉพาะของบอส 3D Golem (หากเว้นว่างจะใช้ enemyPrefab สำรองอัตโนมัติ)
+    [SerializeField] private EnemyNPC bossPrefab;
     [SerializeField] private Vector3 bossArenaCenter = new Vector3(-26f, 0f, -16f);
     [Min(5f)] [SerializeField] private float bossArenaProximityRadius = 18f;
     [Min(5f)] [SerializeField] private float bossRespawnDelaySeconds = DefaultBossRespawnSeconds;
+
+    [Header("Zone-Based Enemy Levels (Central Server Ready)")]
+    // กำหนดช่วงเลเวลคงที่ตามโซนแทนการสเกลตามผู้เล่นสูงสุดในห้อง เพื่อให้ผู้เล่นใหม่ Lv.1 ฟาร์ม Starter Zone ได้เสมอ
+    [Min(1)] [SerializeField] private int starterCampMinLevel = 1;
+    [Min(1)] [SerializeField] private int starterCampMaxLevel = 2;
+    [Min(1)] [SerializeField] private int midFieldCampMinLevel = 4;
+    [Min(1)] [SerializeField] private int midFieldCampMaxLevel = 6;
+    [Min(5)] [SerializeField] private int bossArenaZoneLevel = 5;
 
     [Header("Comfort Safe Zone (Non-Combat & Reconnect Anchor)")]
     [SerializeField] private Vector3 safeZoneCenter = new Vector3(-14f, 0f, 8f);
@@ -82,6 +107,8 @@ public class SandboxWorldSpawner : MonoBehaviour
     public float BossArenaProximityRadius => bossArenaProximityRadius;
     public float CampRespawnDelaySeconds => campRespawnDelaySeconds;
     public float BossRespawnDelaySeconds => bossRespawnDelaySeconds;
+    public float IndividualEnemyPatrolRadius => individualEnemyPatrolRadius;
+    public int BossArenaZoneLevel => Mathf.Max(5, bossArenaZoneLevel);
 
     public EnemyNPC ActiveBoss => _activeBoss;
     public LootChest ActiveBossChest => _activeBossChest;
@@ -103,14 +130,16 @@ public class SandboxWorldSpawner : MonoBehaviour
     private LootChest _activeBossChest;
     private bool _bossEverSpawned;
     private bool _bossCleared;
+    private bool _bossAuthoritativeClearHandled;
+    private float _bossAuthoritativeClearAt = -10f;
+    private float _bossZeroLivingDetectedAt = -1f;
     private float _bossRespawnRemaining;
+    // ตารางสะสมดาเมจของผู้เล่นแต่ละคนที่ทำใส่บอสในรอบปัจจุบัน
+    private readonly Dictionary<PlayerRef, float> _bossDamageContributors = new Dictionary<PlayerRef, float>();
 
     private bool _done;
     private float _nextAttempt;
     private float _masterReadyAt = -1f;
-
-    private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
-    private static readonly int ColorId = Shader.PropertyToID("_Color");
 
     private void Awake()
     {
@@ -131,58 +160,87 @@ public class SandboxWorldSpawner : MonoBehaviour
     }
 
     /// <summary>
-    /// Configures the 4 normal enemy camps positioned ~7 blocks apart (~18m center-to-center, ~14m edge-to-edge)
-    /// so aggro zones never overlap.
+    /// กำหนดตำแหน่งโซนลาดตระเวนส่วนตัวแยกทีละตัว (ห่างกัน 10 เมตร รัศมีโซนละ 3.4 เมตร ไม่มีโซนทับซ้อน)
+    /// และช่วงเลเวลคงที่ตามพื้นที่ (Zone-Based Levels) ของแคมป์ทั้ง 4 แคมป์:
+    ///   - Starter Camps (ใกล้ Comfort Zone: Camp 1 &amp; Camp 4) = Lv.1–2
+    ///   - Mid-Field Camps (โซนกลาง/รอบนอก: Camp 2 &amp; Camp 3) = Lv.4–6
     /// </summary>
     private void InitializeCampDefinitions()
     {
         _camps.Clear();
 
-        // Camp 1: East Camp (center 18, 0, 8)
-        Vector3[] c1Points = new Vector3[ExpectedCampSize];
-        if (enemyPoints != null && enemyPoints.Length == ExpectedCampSize && enemyPoints[0] != null)
+        int sMin = Mathf.Max(1, starterCampMinLevel);
+        int sMax = Mathf.Max(sMin, starterCampMaxLevel);
+        int mMin = Mathf.Max(sMax, midFieldCampMinLevel);
+        int mMax = Mathf.Max(mMin, midFieldCampMaxLevel);
+        int mSplit = Mathf.Clamp(mMin + 1, mMin, mMax);
+
+        // Camp 1: East Starter Camp (center 29, 0, 8 — 4 โซนย่อยห่างกัน 10 เมตร พ้นระยะ CampBarrier)
+        Vector3[] c1Points = new[]
+        {
+            new Vector3(24f, 1.2f, 3f),
+            new Vector3(34f, 1.2f, 3f),
+            new Vector3(24f, 1.2f, 13f),
+            new Vector3(34f, 1.2f, 13f)
+        };
+        if (HasWellSpacedScenePoints(enemyPoints, ExpectedCampSize, minIndividualZoneSpacing))
         {
             for (int i = 0; i < ExpectedCampSize; i++)
-                c1Points[i] = enemyPoints[i] != null ? enemyPoints[i].position : new Vector3(18f, 1.2f, 8f);
+                c1Points[i] = enemyPoints[i].position;
         }
-        else
-        {
-            c1Points[0] = new Vector3(16f, 1.2f, 6f);
-            c1Points[1] = new Vector3(20f, 1.2f, 6f);
-            c1Points[2] = new Vector3(16f, 1.2f, 10f);
-            c1Points[3] = new Vector3(20f, 1.2f, 10f);
-        }
-        _camps.Add(BuildCampState(1, "Camp 1 (East)", c1Points));
+        _camps.Add(BuildCampState(1, "Camp 1 (East Starter)", "Starter Zone", sMin, sMax, c1Points));
 
-        // Camp 2: North-East Camp (~7 blocks north of Camp 1, center 18, 0, 26)
-        _camps.Add(BuildCampState(2, "Camp 2 (North-East)", new[]
+        // Camp 2: North-East Mid-Field Camp (center 29, 0, 32 — 4 โซนย่อยห่างกัน 10 เมตร)
+        _camps.Add(BuildCampState(2, "Camp 2 (North-East Mid)", "Mid-Field", mMin, mSplit, new[]
         {
-            new Vector3(16f, 1.2f, 24f),
-            new Vector3(20f, 1.2f, 24f),
-            new Vector3(16f, 1.2f, 28f),
-            new Vector3(20f, 1.2f, 28f)
+            new Vector3(24f, 1.2f, 27f),
+            new Vector3(34f, 1.2f, 27f),
+            new Vector3(24f, 1.2f, 37f),
+            new Vector3(34f, 1.2f, 37f)
         }));
 
-        // Camp 3: South-East Camp (~7 blocks south of Camp 1, center 18, 0, -10)
-        _camps.Add(BuildCampState(3, "Camp 3 (South-East)", new[]
+        // Camp 3: South-East Mid-Field Camp (center 29, 0, -18 — 4 โซนย่อยห่างกัน 10 เมตร พ้นระยะลานบอส)
+        _camps.Add(BuildCampState(3, "Camp 3 (South-East Mid)", "Mid-Field", Mathf.Clamp(mMax - 1, mMin, mMax), mMax, new[]
         {
-            new Vector3(16f, 1.2f, -12f),
-            new Vector3(20f, 1.2f, -12f),
-            new Vector3(16f, 1.2f, -8f),
-            new Vector3(20f, 1.2f, -8f)
+            new Vector3(24f, 1.2f, -23f),
+            new Vector3(34f, 1.2f, -23f),
+            new Vector3(24f, 1.2f, -13f),
+            new Vector3(34f, 1.2f, -13f)
         }));
 
-        // Camp 4: North-West Camp (~7 blocks west of Camp 2, center 0, 0, 26)
-        _camps.Add(BuildCampState(4, "Camp 4 (North-West)", new[]
+        // Camp 4: North-West Starter Camp (center -4, 0, 32 — 4 โซนย่อยห่างกัน 10 เมตร พ้นระยะ Comfort Safe Zone)
+        _camps.Add(BuildCampState(4, "Camp 4 (North-West Starter)", "Starter Zone", sMin, sMax, new[]
         {
-            new Vector3(-2f, 1.2f, 24f),
-            new Vector3(2f, 1.2f, 24f),
-            new Vector3(-2f, 1.2f, 28f),
-            new Vector3(2f, 1.2f, 28f)
+            new Vector3(-9f, 1.2f, 27f),
+            new Vector3(1f, 1.2f, 27f),
+            new Vector3(-9f, 1.2f, 37f),
+            new Vector3(1f, 1.2f, 37f)
         }));
     }
 
-    private static CampRuntimeState BuildCampState(int id, string campName, Vector3[] points)
+    /// <summary>
+    /// ตรวจสอบว่าจุดเกิดที่วางไว้ในฉากมีระยะห่างเพียงพอสำหรับโซนลาดตระเวนส่วนตัวของมอนสเตอร์แต่ละตัวหรือไม่
+    /// </summary>
+    private static bool HasWellSpacedScenePoints(Transform[] points, int requiredCount, float minSpacing)
+    {
+        if (points == null || points.Length != requiredCount) return false;
+        for (int i = 0; i < requiredCount; i++)
+        {
+            if (points[i] == null) return false;
+            for (int j = i + 1; j < requiredCount; j++)
+            {
+                if (points[j] == null) return false;
+                Vector3 a = points[i].position;
+                Vector3 b = points[j].position;
+                a.y = 0f;
+                b.y = 0f;
+                if (Vector3.Distance(a, b) < minSpacing) return false;
+            }
+        }
+        return true;
+    }
+
+    private static CampRuntimeState BuildCampState(int id, string campName, string zoneTierName, int minLevel, int maxLevel, Vector3[] points)
     {
         Vector3 sum = Vector3.zero;
         for (int i = 0; i < points.Length; i++) sum += points[i];
@@ -193,6 +251,9 @@ public class SandboxWorldSpawner : MonoBehaviour
         {
             CampId = id,
             CampName = campName,
+            ZoneTierName = zoneTierName,
+            MinLevel = Mathf.Max(1, minLevel),
+            MaxLevel = Mathf.Max(minLevel, maxLevel),
             Center = center,
             SpawnPositions = points
         };
@@ -292,13 +353,167 @@ public class SandboxWorldSpawner : MonoBehaviour
         return $"Boss respawns in {mins:00}:{secs:00}";
     }
 
+    // ------------------------------------------------------------------ ระบบสะสมดาเมจประจำแคมป์และล็อกหีบสมบัติเฉพาะผู้ร่วมต่อสู้
+
+    /// <summary>
+    /// บันทึกดาเมจสะสมของผู้เล่นในแต่ละแคมป์หรือบอส (เรียกจากฝั่ง State Authority ของ EnemyNPC)
+    /// </summary>
+    public void RecordCampDamage(int targetCampId, bool isBoss, PlayerRef attacker, float damageAmount)
+    {
+        if (attacker == PlayerRef.None || damageAmount <= 0f) return;
+
+        Dictionary<PlayerRef, float> ledger = isBoss ? _bossDamageContributors : FindCampState(targetCampId)?.CampDamageContributors;
+        if (ledger == null) return;
+
+        if (ledger.TryGetValue(attacker, out float prev))
+            ledger[attacker] = prev + damageAmount;
+        else
+            ledger[attacker] = damageAmount;
+    }
+
+    /// <summary>
+    /// แปลงตารางผู้มีส่วนร่วมทำดาเมจประจำแคมป์เป็นข้อความขนาดกะทัดรัดสำหรับส่งผ่าน Network RPC
+    /// รูปแบบ: "rawEncoded:share:isTopDps;..." (ใช้ InvariantCulture เพื่อรองรับทุกระบบภาษา)
+    /// </summary>
+    public string BuildCampContributorPayload(int targetCampId, bool isBoss)
+    {
+        Dictionary<PlayerRef, float> ledger = isBoss ? _bossDamageContributors : FindCampState(targetCampId)?.CampDamageContributors;
+        if (ledger == null || ledger.Count == 0) return string.Empty;
+
+        LootDropSystem.AnalyzeDamageContribution(
+            ledger,
+            PlayerRef.None,
+            out float totalDamage,
+            out PlayerRef topDps,
+            out List<PlayerRef> participants);
+
+        if (participants.Count == 0 || totalDamage <= 0f) return string.Empty;
+
+        var sb = new StringBuilder(64);
+        // เรียงผู้ทำดาเมจจากมากไปน้อยก่อนประกอบข้อความ เพื่อรับประกันว่าไม่เกินขีดจำกัด 64 ตัวอักษรของ NetworkString<_64>
+        participants.Sort((a, b) =>
+        {
+            float da = ledger.TryGetValue(a, out float va) ? va : 0f;
+            float db = ledger.TryGetValue(b, out float vb) ? vb : 0f;
+            return db.CompareTo(da);
+        });
+
+        for (int i = 0; i < participants.Count; i++)
+        {
+            PlayerRef p = participants[i];
+            if (!ledger.TryGetValue(p, out float dealt) || dealt <= 0f) continue;
+
+            float share = Mathf.Clamp01(dealt / totalDamage);
+            int topFlag = p == topDps ? 1 : 0;
+            string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{share.ToString("0.##", CultureInfo.InvariantCulture)}:{topFlag}";
+            int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
+            if (sb.Length + needed > 62) break;
+
+            if (sb.Length > 0) sb.Append(';');
+            sb.Append(token);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// แปลงข้อความรายชื่อผู้มีส่วนร่วมจาก RPC กลับมาเป็น Dictionary สำหรับตั้งค่าล็อกสิทธิ์ของ LootChest
+    /// </summary>
+    public static Dictionary<int, LootChest.ParticipantContribution> ParseContributorPayload(string payload)
+    {
+        var result = new Dictionary<int, LootChest.ParticipantContribution>();
+        if (string.IsNullOrEmpty(payload)) return result;
+
+        string[] entries = payload.Split(';');
+        for (int i = 0; i < entries.Length; i++)
+        {
+            if (string.IsNullOrEmpty(entries[i])) continue;
+            string[] parts = entries[i].Split(':');
+            if (parts.Length < 3) continue;
+
+            if (int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int rawEncoded) &&
+                float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float share) &&
+                int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int topFlag) &&
+                share > 0f)
+            {
+                result[rawEncoded] = new LootChest.ParticipantContribution
+                {
+                    playerRawEncoded = rawEncoded,
+                    damageShare = Mathf.Clamp01(share),
+                    isTopDps = topFlag == 1
+                };
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// ประมวลผลการเคลียร์แคมป์/บอสที่ส่งมาจาก State Authority อย่างเป็นทางการ:
+    ///   - สร้างกล่องสมบัติและล็อกสิทธิ์เฉพาะผู้เล่นที่มีชื่ออยู่ในตารางดาเมจ (damage > 0)
+    ///   - แจก Gold รางวัลเคลียร์แคมป์เฉพาะผู้เล่นที่ร่วมต่อสู้จริงเท่านั้น (ห้ามผู้เล่นหรือ Host ที่ยืนดูได้ Gold ฟรี)
+    /// </summary>
+    public void HandleAuthoritativeCampCleared(int clearedCampId, bool isBossCamp, Vector3 chestPos, string contributorPayload)
+    {
+        var contributors = ParseContributorPayload(contributorPayload);
+        var local = PlayerCombat.Local;
+        NetworkRunner runner = local != null ? local.Runner : null;
+        PlayerRef localRef = (runner != null && runner.IsRunning) ? runner.LocalPlayer : PlayerRef.None;
+        bool localParticipated = localRef != PlayerRef.None &&
+                                 contributors.TryGetValue(localRef.RawEncoded, out var localContrib) &&
+                                 localContrib.damageShare > 0f;
+
+        if (isBossCamp)
+        {
+            if (_bossAuthoritativeClearHandled) return;
+            _bossCleared = true;
+            _bossAuthoritativeClearHandled = true;
+            _bossAuthoritativeClearAt = Time.unscaledTime;
+            _bossRespawnRemaining = bossRespawnDelaySeconds;
+            if (spawnRewardChestOnCampClear)
+            {
+                _activeBossChest = LootChest.SpawnAt(chestPos, BossCampId, itemPrefab, isBossChest: true, replaceExisting: true);
+                _activeBossChest.ConfigureParticipation(contributors);
+            }
+            if (localParticipated)
+                AwardCampClearGold(local, "Boss Sovereign Golem", isBoss: true, zoneLevel: BossArenaZoneLevel);
+
+            Debug.Log($"[WorldSpawner] BOSS DEFEATED (Authoritative)! EligibleContributors={contributors.Count}, LocalParticipated={localParticipated}.");
+            return;
+        }
+
+        CampRuntimeState camp = FindCampState(clearedCampId);
+        if (camp == null || camp.AuthoritativeClearHandled) return;
+
+        camp.IsCleared = true;
+        camp.AuthoritativeClearHandled = true;
+        camp.AuthoritativeClearAt = Time.unscaledTime;
+        camp.RespawnRemainingSeconds = campRespawnDelaySeconds;
+        if (spawnRewardChestOnCampClear)
+        {
+            camp.ActiveChest = LootChest.SpawnAt(chestPos, camp.CampId, itemPrefab, isBossChest: false, replaceExisting: true);
+            camp.ActiveChest.ConfigureParticipation(contributors);
+        }
+        if (localParticipated)
+            AwardCampClearGold(local, camp.CampName, isBoss: false, zoneLevel: camp.MaxLevel);
+
+        Debug.Log($"[WorldSpawner] {camp.CampName} CLEARED (Authoritative)! EligibleContributors={contributors.Count}, LocalParticipated={localParticipated}.");
+    }
+
+    private CampRuntimeState FindCampState(int targetCampId)
+    {
+        for (int i = 0; i < _camps.Count; i++)
+        {
+            if (_camps[i].CampId == targetCampId) return _camps[i];
+        }
+        return null;
+    }
+
     private void TickCampsAndBossLifecycle(float dt)
     {
         var local = PlayerCombat.Local;
         NetworkRunner runner = local != null ? local.Runner : null;
         bool isMaster = runner != null && runner.IsRunning && runner.IsSharedModeMasterClient;
 
-        // 1. Monitor & Respawn the 4 Normal Enemy Camps (90s / 1:30 respawn timer)
+        // 1. ตรวจสอบวงจรชีวิตและเวลาเกิดใหม่ของแคมป์มอนสเตอร์ทั้ง 4 แคมป์ (90 วินาที)
         for (int c = 0; c < _camps.Count; c++)
         {
             CampRuntimeState camp = _camps[c];
@@ -306,26 +521,34 @@ public class SandboxWorldSpawner : MonoBehaviour
 
             if (living > 0)
             {
-                camp.EverPopulated = true;
-                camp.IsCleared = false;
-                camp.RespawnRemainingSeconds = 0f;
-                // ลบกล่องสมบัติเก่าที่ยังเหลือค้างเมื่อมอนสเตอร์ในแคมป์เกิดใหม่แล้ว
-                if (camp.ActiveChest != null)
+                // เว้นระยะเผื่อซิงก์เครือข่าย 3 วินาทีหลังได้รับ RPC_NotifyCampCleared เพื่อป้องกัน Race Condition กรณี RPC ถึงเครื่องลูกก่อนสถานะตายของมอนตัวสุดท้าย
+                if (!camp.AuthoritativeClearHandled || (Time.unscaledTime - camp.AuthoritativeClearAt >= 3.0f))
                 {
-                    Destroy(camp.ActiveChest.gameObject);
-                    camp.ActiveChest = null;
+                    camp.EverPopulated = true;
+                    camp.IsCleared = false;
+                    camp.AuthoritativeClearHandled = false;
+                    camp.ZeroLivingDetectedAt = -1f;
+                    camp.RespawnRemainingSeconds = 0f;
+                    // ลบกล่องสมบัติเก่าที่ยังเหลือค้างเมื่อมอนสเตอร์ในแคมป์เกิดใหม่แล้ว
+                    if (camp.ActiveChest != null)
+                    {
+                        Destroy(camp.ActiveChest.gameObject);
+                        camp.ActiveChest = null;
+                    }
                 }
             }
             else if (camp.EverPopulated && !camp.IsCleared)
             {
-                camp.IsCleared = true;
-                camp.RespawnRemainingSeconds = campRespawnDelaySeconds;
-                if (spawnRewardChestOnCampClear)
+                // รอสัญญาณ RPC_NotifyCampCleared จาก State Authority สั้นๆ (0.8s) ก่อนใช้ Fallback แบบล็อกสิทธิ์เข้มงวด
+                if (camp.ZeroLivingDetectedAt < 0f)
                 {
-                    camp.ActiveChest = LootChest.SpawnAt(camp.Center, camp.CampId, itemPrefab, isBossChest: false, replaceExisting: true);
+                    camp.ZeroLivingDetectedAt = Time.unscaledTime;
                 }
-                AwardCampClearGold(local, camp.CampName, isBoss: false);
-                Debug.Log($"[WorldSpawner] {camp.CampName} CLEARED! Reward Chest + Gold awarded. Respawning in {camp.GetFormattedRespawnTime()}.");
+                else if (Time.unscaledTime - camp.ZeroLivingDetectedAt >= 0.8f)
+                {
+                    string fallbackPayload = isMaster ? BuildCampContributorPayload(camp.CampId, isBoss: false) : string.Empty;
+                    HandleAuthoritativeCampCleared(camp.CampId, isBossCamp: false, camp.Center, fallbackPayload);
+                }
             }
             else if (camp.IsCleared)
             {
@@ -336,37 +559,46 @@ public class SandboxWorldSpawner : MonoBehaviour
                     if (spawned > 0)
                     {
                         camp.IsCleared = false;
+                        camp.AuthoritativeClearHandled = false;
+                        camp.ZeroLivingDetectedAt = -1f;
                         Debug.Log($"[WorldSpawner] {camp.CampName} RESPAWNED ({spawned} enemies).");
                     }
                 }
             }
         }
 
-        // 2. Monitor & Respawn the Solo Boss in Boss Arena (240s / 4:00 respawn timer)
+        // 2. ตรวจสอบวงจรชีวิตและเวลาเกิดใหม่ของบอสใหญ่ใน Boss Arena (240 วินาที)
         int livingBoss = CountLivingInCamp(BossCampId, isBoss: true);
         if (livingBoss > 0)
         {
-            _bossEverSpawned = true;
-            _bossCleared = false;
-            _bossRespawnRemaining = 0f;
-            // ลบกล่องบอสเก่าที่ยังเหลือค้างเมื่อบอสเกิดใหม่แล้ว
-            if (_activeBossChest != null)
+            // เว้นระยะเผื่อซิงก์เครือข่าย 3 วินาทีหลังได้รับ RPC_NotifyCampCleared ของบอสเช่นเดียวกัน
+            if (!_bossAuthoritativeClearHandled || (Time.unscaledTime - _bossAuthoritativeClearAt >= 3.0f))
             {
-                Destroy(_activeBossChest.gameObject);
-                _activeBossChest = null;
+                _bossEverSpawned = true;
+                _bossCleared = false;
+                _bossAuthoritativeClearHandled = false;
+                _bossZeroLivingDetectedAt = -1f;
+                _bossRespawnRemaining = 0f;
+                // ลบกล่องบอสเก่าที่ยังเหลือค้างเมื่อบอสเกิดใหม่แล้ว
+                if (_activeBossChest != null)
+                {
+                    Destroy(_activeBossChest.gameObject);
+                    _activeBossChest = null;
+                }
             }
         }
         else if (_bossEverSpawned && !_bossCleared)
         {
-            _bossCleared = true;
-            _bossRespawnRemaining = bossRespawnDelaySeconds;
-            if (spawnRewardChestOnCampClear)
+            if (_bossZeroLivingDetectedAt < 0f)
+            {
+                _bossZeroLivingDetectedAt = Time.unscaledTime;
+            }
+            else if (Time.unscaledTime - _bossZeroLivingDetectedAt >= 0.8f)
             {
                 Vector3 chestPos = bossArenaCenter + new Vector3(0f, 0f, 2.2f);
-                _activeBossChest = LootChest.SpawnAt(chestPos, BossCampId, itemPrefab, isBossChest: true, replaceExisting: true);
+                string fallbackPayload = isMaster ? BuildCampContributorPayload(BossCampId, isBoss: true) : string.Empty;
+                HandleAuthoritativeCampCleared(BossCampId, isBossCamp: true, chestPos, fallbackPayload);
             }
-            AwardCampClearGold(local, "Boss Sovereign Golem", isBoss: true);
-            Debug.Log($"[WorldSpawner] BOSS DEFEATED! Boss Reward Chest + Gold awarded. {GetBossRespawnCountdownText()} ({bossRespawnDelaySeconds:0}s).");
         }
         else if (_bossCleared)
         {
@@ -376,6 +608,8 @@ public class SandboxWorldSpawner : MonoBehaviour
                 if (SpawnBoss(runner) != null)
                 {
                     _bossCleared = false;
+                    _bossAuthoritativeClearHandled = false;
+                    _bossZeroLivingDetectedAt = -1f;
                     Debug.Log("[WorldSpawner] BOSS RESPAWNED in Boss Arena!");
                 }
             }
@@ -500,13 +734,19 @@ public class SandboxWorldSpawner : MonoBehaviour
         if (runner == null || !runner.IsRunning || enemyPrefab == null || camp == null) return 0;
 
         camp.ActiveEnemies.Clear();
+        camp.CampDamageContributors.Clear();
+        camp.AuthoritativeClearHandled = false;
+        camp.ZeroLivingDetectedAt = -1f;
         int spawned = 0;
         int assignedCampId = camp.CampId;
 
-        int scaleLvl = GetTargetDynamicScaleLevel();
+        // ใช้ระบบ Zone-Based Level คงที่ตามพื้นที่แคมป์ พร้อมกำหนดโซนลาดตระเวนส่วนตัวแยกทีละตัว (Individual Patrol Zone)
+        float zoneRadius = Mathf.Clamp(individualEnemyPatrolRadius, 1.5f, 6.0f);
         for (int i = 0; i < camp.SpawnPositions.Length; i++)
         {
             Vector3 pos = camp.SpawnPositions[i];
+            int zoneIndex = i;
+            int zoneLvl = UnityEngine.Random.Range(camp.MinLevel, camp.MaxLevel + 1);
             var npc = runner.Spawn(enemyPrefab, pos, Quaternion.identity, null, (r, o) =>
             {
                 var enemy = o.GetComponent<EnemyNPC>();
@@ -514,8 +754,9 @@ public class SandboxWorldSpawner : MonoBehaviour
                 {
                     enemy.CampId = assignedCampId;
                     enemy.IsBoss = false;
-                    enemy.ScaledLevel = scaleLvl;
-                    enemy.ApplyDynamicScaling(scaleLvl);
+                    enemy.ScaledLevel = zoneLvl;
+                    enemy.ConfigurePersonalPatrolZone(pos, zoneRadius, zoneIndex);
+                    enemy.ApplyZoneLevel(zoneLvl);
                 }
             });
 
@@ -537,47 +778,50 @@ public class SandboxWorldSpawner : MonoBehaviour
 
     private EnemyNPC SpawnBoss(NetworkRunner runner)
     {
-        if (runner == null || !runner.IsRunning || enemyPrefab == null) return null;
+        EnemyNPC prefabToSpawn = bossPrefab != null ? bossPrefab : enemyPrefab;
+        if (runner == null || !runner.IsRunning || prefabToSpawn == null) return null;
 
-        int scaleLvl = GetTargetDynamicScaleLevel();
-        Vector3 spawnPos = new Vector3(bossArenaCenter.x, 1.35f, bossArenaCenter.z);
-        _activeBoss = runner.Spawn(enemyPrefab, spawnPos, Quaternion.identity, null, (r, o) =>
+        // บอสใช้เลเวลคงที่ตาม Boss Arena Zone (ค่าเริ่มต้น Lv.5+ ตั้งค่าได้ใน Inspector)
+        int bossZoneLvl = BossArenaZoneLevel;
+        // โมเดล 3D ที่มี Feet Pivot (เช่น Boss_SovereignGolem) เกิดที่ระดับพื้น Y=0 ส่วน Capsule เก่าเกิดที่ Y=1.35
+        float spawnY = prefabToSpawn.HasRiggedModel ? 0f : 1.35f;
+        if (Physics.Raycast(new Vector3(bossArenaCenter.x, bossArenaCenter.y + 4f, bossArenaCenter.z), Vector3.down, out RaycastHit groundHit, 12f, ~0, QueryTriggerInteraction.Ignore))
+        {
+            spawnY = prefabToSpawn.HasRiggedModel ? groundHit.point.y : groundHit.point.y + 1.35f;
+        }
+
+        Vector3 spawnPos = new Vector3(bossArenaCenter.x, spawnY, bossArenaCenter.z);
+        _activeBoss = runner.Spawn(prefabToSpawn, spawnPos, Quaternion.identity, null, (r, o) =>
         {
             var boss = o.GetComponent<EnemyNPC>();
             if (boss != null)
             {
                 boss.CampId = BossCampId;
                 boss.IsBoss = true;
-                boss.ScaledLevel = scaleLvl;
+                boss.ScaledLevel = bossZoneLvl;
                 boss.ApplyBossConfiguration();
             }
         });
 
         if (_activeBoss != null)
         {
+            _bossDamageContributors.Clear();
             _bossEverSpawned = true;
             _bossCleared = false;
+            _bossAuthoritativeClearHandled = false;
+            _bossZeroLivingDetectedAt = -1f;
             _bossRespawnRemaining = 0f;
         }
         return _activeBoss;
     }
 
-    private static int GetTargetDynamicScaleLevel()
-    {
-        int highest = 1;
-        for (int i = 0; i < PlayerCombat.All.Count; i++)
-        {
-            var p = PlayerCombat.All[i];
-            if (p != null && p.IsSpawned && p.NetworkLevel > highest)
-                highest = p.NetworkLevel;
-        }
-        return Mathf.Max(1, highest);
-    }
-
-    private static void AwardCampClearGold(PlayerCombat player, string sourceName, bool isBoss)
+    /// <summary>
+    /// แจก Gold รางวัลการเคลียร์แคมป์/บอสโดยอ้างอิงตามเลเวลของโซน (Zone Level) เพื่อสมดุลเศรษฐกิจแบบ Central Server
+    /// </summary>
+    private static void AwardCampClearGold(PlayerCombat player, string sourceName, bool isBoss, int zoneLevel)
     {
         if (player == null || !player.IsSpawned) return;
-        int lvl = Mathf.Max(1, player.NetworkLevel);
+        int lvl = Mathf.Max(1, zoneLevel);
         float scale = 1f + (lvl - 1) * 0.15f;
         int minGold = isBoss ? Mathf.RoundToInt(250 * scale) : Mathf.RoundToInt(40 * scale);
         int maxGold = isBoss ? Mathf.RoundToInt(450 * scale) : Mathf.RoundToInt(85 * scale);
@@ -614,15 +858,8 @@ public class SandboxWorldSpawner : MonoBehaviour
         ring.transform.SetParent(root, true);
         ring.transform.position = new Vector3(bossArenaCenter.x, 0.02f, bossArenaCenter.z);
         ring.transform.localScale = new Vector3(bossArenaProximityRadius * 1.4f, 0.015f, bossArenaProximityRadius * 1.4f);
-        var r = ring.GetComponent<Renderer>();
-        if (r != null)
-        {
-            var mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(mpb);
-            mpb.SetColor(BaseColorId, new Color(0.28f, 0.06f, 0.09f, 1f));
-            mpb.SetColor(ColorId, new Color(0.28f, 0.06f, 0.09f, 1f));
-            r.SetPropertyBlock(mpb);
-        }
+        // ผูก URP Lit Material ถาวรสำหรับแผ่นพื้นลานบอส (ป้องกันสีชมพูใน Standalone Build)
+        UrpMaterialHelper.ApplyLitColor(ring.GetComponent<Renderer>(), new Color(0.28f, 0.06f, 0.09f, 1f));
 
         // 4 Arena Boundary Pillars
         float rOffset = 10.5f;
@@ -639,6 +876,9 @@ public class SandboxWorldSpawner : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// สร้างสิ่งกีดขวาง/เสาลานบอสพร้อมผูก URP Lit Material ถาวรผ่าน UrpMaterialHelper (ไม่เป็นสีชมพูใน Standalone Build)
+    /// </summary>
     private static void CreateObstacle(Transform parent, string obstacleName, Vector3 position, Vector3 scale, Color color)
     {
         GameObject obstacle = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -646,14 +886,6 @@ public class SandboxWorldSpawner : MonoBehaviour
         obstacle.transform.SetParent(parent, true);
         obstacle.transform.position = position;
         obstacle.transform.localScale = scale;
-        var renderer = obstacle.GetComponent<Renderer>();
-        if (renderer != null)
-        {
-            var block = new MaterialPropertyBlock();
-            renderer.GetPropertyBlock(block);
-            block.SetColor(BaseColorId, color);
-            block.SetColor(ColorId, color);
-            renderer.SetPropertyBlock(block);
-        }
+        UrpMaterialHelper.ApplyLitColor(obstacle.GetComponent<Renderer>(), color);
     }
 }

@@ -1,3 +1,4 @@
+using System.Collections;
 using Fusion;
 using UnityEngine;
 
@@ -30,8 +31,12 @@ public class PlayerAnimationDriver : MonoBehaviour
     [Header("Locomotion & Combat Stance Settings (ตั้งค่าความนุ่มนวลและสถานะถือดาบ)")]
     // เวลาหน่วงการเกลี่ยค่า Blend Tree ให้การออกตัวและหยุดเดินมีน้ำหนักสมจริงสไตล์ Where Winds Meet
     [SerializeField] private float locomotionDampTime = 0.11f;
-    // ให้ถือดาบพร้อมสู้เป็นค่าเริ่มต้นเมื่ออยู่นอกเขตปลอดภัย
-    [SerializeField] private bool alwaysArmedInSandbox = true;
+    // ค่าสำรองกรณีทดสอบแบบ Offline ที่ไม่มี PlayerCombat (หากมี PlayerCombat จะอิงค่า Networked IsWeaponDrawn เสมอ)
+    [SerializeField] private bool alwaysArmedInSandbox = false;
+    // จังหวะหน่วงสลับโมเดลดาบจากกลางหลัง -> มือขวา ให้ตรงกับท่าจับด้ามดาบในคลิป Draw A Great Sword
+    [SerializeField] private float drawSocketSwapDelay = 0.18f;
+    // จังหวะหน่วงสลับโมเดลดาบจากมือขวา -> กลางหลัง ให้ตรงกับท่าวางดาบลงฝักในคลิป Sheath A Great Sword
+    [SerializeField] private float sheatheSocketSwapDelay = 0.30f;
     // เวลารอขั้นต่ำและสูงสุดในการสุ่มเล่นท่า Idle Look Variation
     [SerializeField] private float minIdleVariationWait = 7f;
     [SerializeField] private float maxIdleVariationWait = 13f;
@@ -41,12 +46,24 @@ public class PlayerAnimationDriver : MonoBehaviour
     // คืนค่า NetworkMecanimAnimator ที่ใช้งานอยู่
     public NetworkMecanimAnimator NetworkAnimator => networkAnimator;
     // ชื่อสถานะอนิเมชันที่เพิ่งสั่งเล่นล่าสุด (ใช้ตรวจสอบและดีบัก)
-    public string LastPlayedActionState { get; private set; } = "Great Sword Idle";
+    public string LastPlayedActionState { get; private set; } = "Unarmed Idle";
+    // สถานะว่ากำลังอยู่ในช่วง Micro Hit-Stop (ชะลอภาพอนิเมชันชั่วคราวตอนฟันโดน) หรือไม่
+    public bool IsInHitStop { get; private set; }
+    // ตรวจสอบตำแหน่งปัจจุบันของโมเดลดาบ (อยู่ในมือขวา หรือสะพายอยู่กลางหลัง)
+    public bool IsSwordInHand => swordHand != null && swordHand.activeSelf;
+    public bool IsSwordOnBack => swordBack != null && swordBack.activeSelf;
 
     private PlayerCapsule _capsule;
     private PlayerCombat _combat;
     private float _idleVariationTimer;
     private int _lastIdleVariant;
+    private float _hitStopEndRealtime = -1f;
+    private const float NormalAnimatorSpeed = 1f;
+    // สถานะติดตามการสลับโมเดลดาบในมือ vs กลางหลังให้สัมพันธ์กับคลิป Draw/Sheath
+    private bool _lastArmedStance;
+    private bool _swordCurrentlyInHand;
+    private float _swordSwapAtTime = -1f;
+    private bool _pendingSwordInHand;
 
     // แคชค่า Hash ของพารามิเตอร์ทั้งหมดใน playerAnimator เพื่อประสิทธิภาพสูงสุด
     private static readonly int HashMoveX = Animator.StringToHash("MoveX");
@@ -197,18 +214,59 @@ public class PlayerAnimationDriver : MonoBehaviour
     }
 
     /// <summary>
-    /// กำหนดค่าเริ่มต้นของ Animator เมื่อผู้เล่นเกิดในฉาก
+    /// กำหนดค่าเริ่มต้นของ Animator เมื่อผู้เล่นเกิดในฉาก (เริ่มต้นเก็บดาบไว้กลางหลังจนกว่าจะกด [1])
     /// </summary>
     private void InitializeAnimatorDefaults()
     {
         if (animator == null || animator.runtimeAnimatorController == null) return;
 
+        bool initialArmed = (_combat != null && _combat.IsSpawned)
+            ? (_combat.IsWeaponDrawn && !_combat.IsInSafeZone)
+            : false;
+
         animator.applyRootMotion = false;
         animator.SetBool(HashGrounded, true);
-        animator.SetBool(HashSkipDraw, false);
-        animator.SetBool(HashInCombat, alwaysArmedInSandbox);
+        animator.SetBool(HashSkipDraw, true);
+        animator.SetBool(HashInCombat, initialArmed);
 
-        UpdateSwordVisuals(alwaysArmedInSandbox);
+        SyncWeaponDrawnImmediate(initialArmed);
+    }
+
+    /// <summary>
+    /// สลับตำแหน่งโมเดลดาบและสถานะตั้งต้นทันทีโดยไม่ต้องรอคลิป Draw/Sheath (ใช้ตอน Spawn หรือ Reset)
+    /// </summary>
+    public void SyncWeaponDrawnImmediate(bool drawn)
+    {
+        _lastArmedStance = drawn;
+        _swordCurrentlyInHand = drawn;
+        _pendingSwordInHand = drawn;
+        _swordSwapAtTime = -1f;
+        UpdateSwordVisuals(drawn);
+        if (animator != null && animator.runtimeAnimatorController != null)
+        {
+            animator.SetBool(HashSkipDraw, true);
+            animator.SetBool(HashInCombat, drawn);
+        }
+        LastPlayedActionState = drawn ? "Great Sword Idle" : "Unarmed Idle";
+    }
+
+    /// <summary>
+    /// รับสัญญาณเมื่อค่า Networked IsWeaponDrawn เปลี่ยนแปลง เพื่อเริ่มเล่นคลิปชักดาบ/เก็บดาบและตั้งเวลาสลับตำแหน่งโมเดลดาบ
+    /// </summary>
+    public void NotifyWeaponDrawnChanged(bool drawn)
+    {
+        _lastArmedStance = drawn;
+        _pendingSwordInHand = drawn;
+        float delay = drawn ? Mathf.Max(0f, drawSocketSwapDelay) : Mathf.Max(0f, sheatheSocketSwapDelay);
+        _swordSwapAtTime = Time.time + delay;
+
+        if (animator != null && animator.runtimeAnimatorController != null)
+        {
+            // เปิด SkipDraw = false เพื่อให้เลเยอร์ Weapon Action เล่นท่า Draw A Great Sword / Sheath A Great Sword อย่างสมบูรณ์
+            animator.SetBool(HashSkipDraw, false);
+            animator.SetBool(HashInCombat, drawn);
+        }
+        LastPlayedActionState = drawn ? "Draw A Great Sword" : "Sheath A Great Sword";
     }
 
     /// <summary>
@@ -233,16 +291,56 @@ public class PlayerAnimationDriver : MonoBehaviour
 
     private void LateUpdate()
     {
+        // คืนความเร็ว Animator กลับเป็นปกติ (1.0) ทันทีเมื่อหมดช่วงเวลา Micro Hit-Stop (ปลอดภัยแม้ฟันโดนหลายตัวพร้อมกัน)
+        if (IsInHitStop && Time.realtimeSinceStartup >= _hitStopEndRealtime)
+        {
+            if (animator != null) animator.speed = NormalAnimatorSpeed;
+            IsInHitStop = false;
+        }
+
         if (animator == null || animator.runtimeAnimatorController == null) return;
         if (!_parametersChecked) CacheParameterAvailability();
 
         bool isDead = _combat != null && _combat.IsDead;
         bool isBlocking = _combat != null && _combat.IsBlocking && !isDead;
         bool inSafeZone = _combat != null && _combat.IsInSafeZone;
-        bool armedStance = alwaysArmedInSandbox && !inSafeZone;
+        bool armedStance = (_combat != null && _combat.IsSpawned)
+            ? (_combat.IsWeaponDrawn && !inSafeZone && !isDead)
+            : (alwaysArmedInSandbox && !inSafeZone && !isDead);
 
-        // อัปเดตการแสดงผลดาบในมือ vs บนหลังให้ตรงกันบนทุกเครื่อง (ทั้ง Host และ Remote Clients)
-        UpdateSwordVisuals(armedStance || isBlocking);
+        bool wantArmedVisual = armedStance || isBlocking;
+
+        // ตรวจจับการเปลี่ยนสถานะถือดาบ/เก็บดาบทั้งบน Local และ Remote Proxies เพื่อสลับโมเดลดาบตรงจังหวะแอนิเมชัน
+        if (wantArmedVisual != _lastArmedStance)
+        {
+            _lastArmedStance = wantArmedVisual;
+            _pendingSwordInHand = wantArmedVisual;
+            if (isDead)
+            {
+                _swordSwapAtTime = -1f;
+                _swordCurrentlyInHand = false;
+                UpdateSwordVisuals(false);
+            }
+            else
+            {
+                float delay = wantArmedVisual ? Mathf.Max(0f, drawSocketSwapDelay) : Mathf.Max(0f, sheatheSocketSwapDelay);
+                _swordSwapAtTime = Time.time + delay;
+                LastPlayedActionState = wantArmedVisual ? "Draw A Great Sword" : "Sheath A Great Sword";
+            }
+        }
+
+        // สลับโมเดลดาบระหว่างมือขวา (Sword_Hand) และกลางหลัง (Sword_Back) เมื่อถึงจังหวะมือแตะด้ามดาบ
+        if (_swordSwapAtTime >= 0f && Time.time >= _swordSwapAtTime)
+        {
+            _swordSwapAtTime = -1f;
+            _swordCurrentlyInHand = _pendingSwordInHand;
+            UpdateSwordVisuals(_swordCurrentlyInHand);
+        }
+        else if (_swordSwapAtTime < 0f && _swordCurrentlyInHand != wantArmedVisual)
+        {
+            _swordCurrentlyInHand = wantArmedVisual;
+            UpdateSwordVisuals(_swordCurrentlyInHand);
+        }
 
         // หากเป็นตัวละครของผู้เล่นคนอื่น (Remote Proxy) และมี NetworkMecanimAnimator คอยซิงก์ให้อยู่แล้ว ไม่ต้องเขียนทับค่าพารามิเตอร์ซ้ำ
         bool isRemoteProxy = _combat != null && _combat.Object != null && _combat.Object.IsValid && !_combat.Object.HasStateAuthority;
@@ -376,6 +474,9 @@ public class PlayerAnimationDriver : MonoBehaviour
 
         animator.SetBool(HashSkipDraw, true);
         animator.SetBool(HashInCombat, true);
+        _swordSwapAtTime = -1f;
+        _swordCurrentlyInHand = true;
+        _lastArmedStance = true;
         UpdateSwordVisuals(true);
 
         animator.ResetTrigger(HashRoll);
@@ -495,6 +596,9 @@ public class PlayerAnimationDriver : MonoBehaviour
             animator.ResetTrigger(HashAttack);
             animator.SetBool(HashSkipDraw, true);
             animator.SetBool(HashInCombat, true);
+            _swordSwapAtTime = -1f;
+            _swordCurrentlyInHand = true;
+            _lastArmedStance = true;
             UpdateSwordVisuals(true);
             if (_hasBlockParam) FireSyncedTrigger(HashBlock);
             if (!animator.GetCurrentAnimatorStateInfo(0).IsName("Block"))
@@ -515,6 +619,45 @@ public class PlayerAnimationDriver : MonoBehaviour
         if (_hasBlockHitParam) FireSyncedTrigger(HashBlockHit);
         animator.CrossFadeInFixedTime(StateBlockHit, 0.06f, 0, 0f);
         LastPlayedActionState = "Block Hit";
+    }
+
+    /// <summary>
+    /// เล่นอนิเมชันปัดป้องสมบูรณ์ (Perfect Parry Impact) โดยรีเซ็ต Trigger โจมตีค้างและสั่งเล่นท่า Block Hit อย่างคมชัด
+    /// </summary>
+    public void PlayParryImpact()
+    {
+        if (animator == null || animator.runtimeAnimatorController == null) return;
+        animator.ResetTrigger(HashAttack);
+        animator.ResetTrigger(HashHeavyAttack);
+        animator.ResetTrigger(HashRunAttack);
+        if (_hasBlockHitParam) FireSyncedTrigger(HashBlockHit);
+        animator.CrossFadeInFixedTime(StateBlockHit, 0.04f, 0, 0f);
+        LastPlayedActionState = "Perfect Parry";
+    }
+
+    /// <summary>
+    /// สั่งทำ Micro Hit-Stop เฉพาะภาพอนิเมชันในเครื่อง (ไม่แตะ Time.timeScale เพื่อไม่ให้ Photon Fusion Tick เสียจังหวะ)
+    /// ใช้เวลาจริงแบบ Deadline เพื่อไม่ให้เกิด Race Condition เมื่อฟันโดนศัตรูหลายตัวในวงสวิงเดียวกัน
+    /// </summary>
+    public void TriggerHitStop(float durationSeconds, float slowSpeed = 0.06f)
+    {
+        if (animator == null || !gameObject.activeInHierarchy || durationSeconds <= 0f) return;
+
+        float clampedDuration = Mathf.Clamp(durationSeconds, 0.015f, 0.14f);
+        float clampedSlow = Mathf.Clamp(slowSpeed, 0.02f, 0.4f);
+
+        _hitStopEndRealtime = Mathf.Max(_hitStopEndRealtime, Time.realtimeSinceStartup + clampedDuration);
+        animator.speed = clampedSlow;
+        IsInHitStop = true;
+    }
+
+    private void OnDisable()
+    {
+        // คืนความเร็ว Animator กลับเป็นปกติเสมอหากคอมโพเนนต์ถูกปิดหรือ Despawn ระหว่างติด Hit-Stop
+        if (IsInHitStop && animator != null)
+            animator.speed = NormalAnimatorSpeed;
+        IsInHitStop = false;
+        _hitStopEndRealtime = -1f;
     }
 
     /// <summary>

@@ -65,7 +65,13 @@ public class TargetLockSystem : MonoBehaviour
             _subscribed = true;
         }
 
-        if (IsLocked) ValidateTarget();
+        if (IsLocked)
+        {
+            if (!_combat.IsWeaponDrawn || _combat.IsInSafeZone)
+                Release("weapon sheathed or entered safe zone");
+            else
+                ValidateTarget();
+        }
 
         if (_combat.IsDead || GameplayInput.IsBlocked) return;
 
@@ -88,6 +94,15 @@ public class TargetLockSystem : MonoBehaviour
 
     public bool TryAcquire()
     {
+        // ห้ามล็อกเป้าหมายเมื่ออยู่ในเขตปลอดภัยหรือยังไม่ได้ชักดาบ (โหมดสำรวจ)
+        if (_combat != null && (_combat.IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)))
+            return false;
+        if (_combat != null && !_combat.IsWeaponDrawn)
+        {
+            _combat.NotifyWeaponMustBeDrawn();
+            return false;
+        }
+
         // คำนวณจุดระดับสายตาให้แม่นยำทั้งกรณี Pivot อยู่ที่เท้า (GreatSwordGirl) และกรณี Pivot อยู่กลางตัว
         bool isFeetPivot = _capsule != null && _capsule.CharacterVisual == transform;
         Vector3 eye = transform.position + Vector3.up * (isFeetPivot ? eyeHeight : Mathf.Max(0.4f, eyeHeight - 1f));

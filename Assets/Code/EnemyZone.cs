@@ -12,7 +12,8 @@ public class EnemyZone : MonoBehaviour
     {
         if (player == null)
         {
-            player = FindFirstObjectByType<CombatState>();
+            // เปลี่ยนจาก FindFirstObjectByType ที่ล้าสมัยเป็น FindAnyObjectByType เพื่อลด Warning CS0618
+            player = FindAnyObjectByType<CombatState>();
             if (player == null) return;
         }
 

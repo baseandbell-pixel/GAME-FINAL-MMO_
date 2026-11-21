@@ -206,15 +206,8 @@ public class MapManager : MonoBehaviour
             beam.transform.SetParent(_worldWaypointBeacon.transform, false);
             beam.transform.localPosition = new Vector3(0f, 12f, 0f);
             beam.transform.localScale = new Vector3(0.45f, 12f, 0.45f);
-            var r = beam.GetComponent<Renderer>();
-            Shader shader = Shader.Find("Sprites/Default");
-            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
-            if (r != null && shader != null)
-            {
-                var mat = new Material(shader);
-                mat.color = new Color(0.18f, 0.96f, 0.65f, 0.35f);
-                r.sharedMaterial = mat;
-            }
+            // ใช้ URP Unlit Transparent ถาวรสำหรับลำแสง Waypoint (ป้องกันการถูก Strip Shader ใน Standalone Build)
+            UrpMaterialHelper.ApplyTransparentColor(beam.GetComponent<Renderer>(), new Color(0.18f, 0.96f, 0.65f, 0.35f), disableShadows: true);
         }
 
         _worldWaypointBeacon.transform.position = ActiveWaypointPosition;
@@ -384,12 +377,13 @@ public class MapManager : MonoBehaviour
             for (int i = 0; i < camps.Count; i++)
             {
                 var c = camps[i];
-                string shortName = $"Camp {c.CampId}";
+                string levelTag = c.MinLevel == c.MaxLevel ? $"Lv.{c.MinLevel}" : $"Lv.{c.MinLevel}-{c.MaxLevel}";
+                string shortName = $"Camp {c.CampId} ({levelTag})";
                 into.Add(new MapMarker
                 {
                     position = c.Center,
                     kind = MarkerKind.EnemyCamp,
-                    label = c.IsCleared ? $"{shortName} ({c.GetFormattedRespawnTime()})" : shortName
+                    label = c.IsCleared ? $"Camp {c.CampId} ({c.GetFormattedRespawnTime()})" : shortName
                 });
             }
 
@@ -399,7 +393,7 @@ public class MapManager : MonoBehaviour
                 kind = MarkerKind.Boss,
                 label = SandboxWorldSpawner.Instance.IsBossRespawning
                     ? $"BOSS ({SandboxWorldSpawner.Instance.GetBossRespawnCountdownText().Replace("Boss respawns in ", "")})"
-                    : "BOSS"
+                    : $"BOSS (Lv.{SandboxWorldSpawner.Instance.BossArenaZoneLevel})"
             });
         }
 
@@ -419,11 +413,25 @@ public class MapManager : MonoBehaviour
         {
             var ch = LootChest.All[i];
             if (ch == null || ch.IsOpened) continue;
+            bool eligible = ch.IsLocalPlayerEligible();
             into.Add(new MapMarker
             {
                 position = ch.transform.position,
                 kind = MarkerKind.LootChest,
-                label = ch.IsBossChest ? "Boss Chest" : "Chest"
+                label = eligible ? (ch.IsBossChest ? "Boss Chest" : "Chest") : "Locked Chest"
+            });
+        }
+
+        // แสดงจุดดรอปของไอเทมส่วนตัวแบบ Client-Local เฉพาะบนแผนที่ของเจ้าของสิทธิ์
+        for (int i = 0; i < LocalPersonalLoot.All.Count; i++)
+        {
+            var localDrop = LocalPersonalLoot.All[i];
+            if (localDrop == null || localDrop.IsCollected) continue;
+            into.Add(new MapMarker
+            {
+                position = localDrop.transform.position,
+                kind = MarkerKind.Loot,
+                label = localDrop.Data != null ? localDrop.Data.displayName : "Personal Loot"
             });
         }
 

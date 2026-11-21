@@ -45,7 +45,10 @@ public class InventoryManager : MonoBehaviour
 {
     public static InventoryManager Local { get; private set; }
 
-    [Min(1)] [SerializeField] private int capacity = 24;
+    // ความจุกระเป๋ามาตรฐานขยายเป็น 48 ช่อง (รองรับอุปกรณ์และยาจำนวนมากโดยไม่กระทบไฟล์เซฟเก่า)
+    public const int DefaultBagCapacity = 48;
+
+    [Min(1)] [SerializeField] private int capacity = DefaultBagCapacity;
     [Tooltip("Prefab used when dropping items back into the world.")]
     [SerializeField] private WorldItem worldItemPrefab;
     [SerializeField] private bool createUi = true;
@@ -103,6 +106,8 @@ public class InventoryManager : MonoBehaviour
     private void Awake()
     {
         _combat = GetComponent<PlayerCombat>();
+        // บังคับความจุกระเป๋าขั้นต่ำเป็น 48 ช่องแม้ Prefab เก่าจะเคยบันทึกค่า 24 ไว้
+        if (capacity < DefaultBagCapacity) capacity = DefaultBagCapacity;
         for (int i = 0; i < capacity; i++) _slots.Add(new InventorySlot());
     }
 

@@ -36,8 +36,8 @@ public class InventoryUI : MonoBehaviour
     public static InventoryUI Instance { get; private set; }
 
     private const int Columns = 6;
-    private const float SlotSize = 94f;
-    private const float SlotGap = 12f;
+    private const float SlotSize = 90f;
+    private const float SlotGap = 10f;
     private const float PanelWidth = 1280f;
     private const float PanelHeight = 780f;
 
@@ -49,6 +49,8 @@ public class InventoryUI : MonoBehaviour
     public IReadOnlyList<int> SelectedFodderIndices => _fodderSlots;
     public string HeaderStatsText => _headerStatsText != null ? _headerStatsText.text : string.Empty;
     public string LastEnhanceFeedback => _enhanceFeedbackText != null ? _enhanceFeedbackText.text : string.Empty;
+    // จำนวนช่องกระเป๋าทั้งหมดที่สร้างไว้ในตาราง UI (48 ช่อง)
+    public int DisplayedGridSlotCount => _slotBorders != null ? _slotBorders.Length : 0;
 
     // คืนค่าช่องกระเป๋าจริงที่กำลังถูกลากอยู่ (ใช้เชื่อมกับ HotbarUI)
     public int ActiveDragInventorySlotIndex => _draggingFromIndex;
@@ -97,7 +99,11 @@ public class InventoryUI : MonoBehaviour
     private Button _useBtn, _equipBtn, _dropBtn;
     private Text _equipBtnText;
 
-    // ตารางช่องกระเป๋า 24 ช่อง พร้อมแมปตำแหน่งที่แสดงผล -> ตำแหน่งจริงใน InventoryManager
+    // ตารางช่องกระเป๋าแบบเลื่อนได้ 48 ช่อง พร้อมปุ่มสลับหน้าด่วน (Page 1 / Page 2) และแมปตำแหน่งจริงใน InventoryManager
+    private Text _bagTitleText;
+    private ScrollRect _bagScrollRect;
+    private Image _page1BtnBg;
+    private Image _page2BtnBg;
     private Image[] _slotBorders;
     private Image[] _slotBgs;
     private Image[] _slotIcons;
@@ -296,19 +302,115 @@ public class InventoryUI : MonoBehaviour
         BuildBlacksmithColumn(inner.transform);
 
         // ============================================================
-        // คอลัมน์ขวา: BAG GRID (ซ่อนไอเทมที่สวมใส่อยู่ + Drag ไป Hotbar 1-6 ได้)
+        // คอลัมน์ขวา: BAG GRID แบบเลื่อนได้ 48 ช่อง (ซ่อนไอเทมที่สวมใส่อยู่ + Drag ไป Hotbar 2-7 ได้)
         // ============================================================
         var rightCol = MakeImage(inner.transform, "InventoryColumn", UITheme.ObsidianPanel);
         UITheme.ApplySlicedStyle(rightCol, UITheme.ObsidianPanel);
         _inventoryRightColumn = rightCol.gameObject;
         Place(rightCol.rectTransform, 594f, 64f, 664f, 668f);
 
-        var bagTitle = MakeLabel(rightCol.transform, "InvTitle",
-            "INVENTORY BAG  (Drag to Reorder / Equip / Drop on Hotbar 1-6)", 13, FontStyle.Bold, TextAnchor.MiddleLeft,
-            UITheme.BrushedGoldBright, 18f, 12f, 628f, 24f);
-        UITheme.AddShadow(bagTitle.gameObject, 1f);
+        _bagTitleText = MakeLabel(rightCol.transform, "InvTitle",
+            $"INVENTORY BAG  (0 / {_inv.Capacity})  •  Drag to Reorder / Hotbar 2-7", 13, FontStyle.Bold, TextAnchor.MiddleLeft,
+            UITheme.BrushedGoldBright, 18f, 10f, 444f, 26f);
+        UITheme.AddShadow(_bagTitleText.gameObject, 1f);
+
+        // ปุ่มลัดสลับหน้ากระเป๋า Page 1 (1-24) / Page 2 (25-48) ควบคู่กับการเลื่อน Mouse Wheel
+        var p1Img = MakeImage(rightCol.transform, "BagPage1Btn", UITheme.BrushedGold);
+        UITheme.ApplySlicedStyle(p1Img, UITheme.BrushedGold);
+        Place(p1Img.rectTransform, 474f, 10f, 82f, 24f);
+        _page1BtnBg = p1Img;
+        var p1Btn = p1Img.gameObject.AddComponent<Button>();
+        p1Btn.targetGraphic = p1Img;
+        p1Btn.onClick.AddListener(() => JumpBagToPage(0));
+        MakeLabel(p1Img.transform, "Txt", "Page 1", 11, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Color(0.08f, 0.06f, 0.02f), 2f, 0f, 78f, 24f);
+
+        var p2Img = MakeImage(rightCol.transform, "BagPage2Btn", new Color(0.16f, 0.19f, 0.26f, 1f));
+        UITheme.ApplySlicedStyle(p2Img, new Color(0.16f, 0.19f, 0.26f, 1f));
+        Place(p2Img.rectTransform, 562f, 10f, 82f, 24f);
+        _page2BtnBg = p2Img;
+        var p2Btn = p2Img.gameObject.AddComponent<Button>();
+        p2Btn.targetGraphic = p2Img;
+        p2Btn.onClick.AddListener(() => JumpBagToPage(1));
+        MakeLabel(p2Img.transform, "Txt", "Page 2", 11, FontStyle.Bold, TextAnchor.MiddleCenter,
+            UITheme.TextPrimary, 2f, 0f, 78f, 24f);
+
+        // กรอบ Viewport แบบ ScrollRect สำหรับตารางกระเป๋า 48 ช่อง (6 คอลัมน์ x 8 แถว)
+        var scrollGo = new GameObject("BagScrollView", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(ScrollRect));
+        scrollGo.transform.SetParent(rightCol.transform, false);
+        var scrollBg = scrollGo.GetComponent<Image>();
+        scrollBg.color = new Color(0.045f, 0.052f, 0.075f, 0.92f);
+        Place((RectTransform)scrollGo.transform, 18f, 40f, 628f, 420f);
+
+        var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D), typeof(Image));
+        viewportGo.transform.SetParent(scrollGo.transform, false);
+        var vpImg = viewportGo.GetComponent<Image>();
+        vpImg.color = new Color(0f, 0f, 0f, 0.01f);
+        var vpRt = (RectTransform)viewportGo.transform;
+        vpRt.anchorMin = Vector2.zero;
+        vpRt.anchorMax = Vector2.one;
+        vpRt.offsetMin = new Vector2(4f, 4f);
+        vpRt.offsetMax = new Vector2(-18f, -4f);
 
         int count = _inv.Capacity;
+        int totalRows = Mathf.CeilToInt(count / (float)Columns);
+        float contentHeight = Mathf.Max(412f, totalRows * (SlotSize + SlotGap) + 12f);
+
+        var contentGo = new GameObject("BagGridContent", typeof(RectTransform));
+        contentGo.transform.SetParent(vpRt, false);
+        var contentRt = (RectTransform)contentGo.transform;
+        contentRt.anchorMin = new Vector2(0f, 1f);
+        contentRt.anchorMax = new Vector2(1f, 1f);
+        contentRt.pivot = new Vector2(0.5f, 1f);
+        contentRt.anchoredPosition = Vector2.zero;
+        contentRt.sizeDelta = new Vector2(0f, contentHeight);
+
+        // แถบ Scrollbar แนวตั้งสีทองด้านขวาของตารางกระเป๋า
+        var sbGo = new GameObject("BagScrollbar", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Scrollbar));
+        sbGo.transform.SetParent(scrollGo.transform, false);
+        var sbBg = sbGo.GetComponent<Image>();
+        sbBg.color = new Color(0.10f, 0.12f, 0.17f, 0.95f);
+        var sbRt = (RectTransform)sbGo.transform;
+        sbRt.anchorMin = new Vector2(1f, 0f);
+        sbRt.anchorMax = new Vector2(1f, 1f);
+        sbRt.pivot = new Vector2(1f, 0.5f);
+        sbRt.anchoredPosition = new Vector2(-3f, 0f);
+        sbRt.sizeDelta = new Vector2(10f, -8f);
+
+        var handleArea = new GameObject("SlidingArea", typeof(RectTransform));
+        handleArea.transform.SetParent(sbRt, false);
+        var haRt = (RectTransform)handleArea.transform;
+        haRt.anchorMin = Vector2.zero;
+        haRt.anchorMax = Vector2.one;
+        haRt.offsetMin = Vector2.zero;
+        haRt.offsetMax = Vector2.zero;
+
+        var handleGo = new GameObject("Handle", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        handleGo.transform.SetParent(haRt, false);
+        var handleImg = handleGo.GetComponent<Image>();
+        UITheme.ApplySlicedStyle(handleImg, UITheme.BrushedGold);
+        var handleRt = (RectTransform)handleGo.transform;
+        handleRt.anchorMin = Vector2.zero;
+        handleRt.anchorMax = Vector2.one;
+        handleRt.offsetMin = Vector2.zero;
+        handleRt.offsetMax = Vector2.zero;
+
+        var scrollbar = sbGo.GetComponent<Scrollbar>();
+        scrollbar.direction = Scrollbar.Direction.BottomToTop;
+        scrollbar.handleRect = handleRt;
+        scrollbar.targetGraphic = handleImg;
+
+        _bagScrollRect = scrollGo.GetComponent<ScrollRect>();
+        _bagScrollRect.viewport = vpRt;
+        _bagScrollRect.content = contentRt;
+        _bagScrollRect.horizontal = false;
+        _bagScrollRect.vertical = true;
+        _bagScrollRect.movementType = ScrollRect.MovementType.Clamped;
+        _bagScrollRect.scrollSensitivity = 36f;
+        _bagScrollRect.verticalScrollbar = scrollbar;
+        _bagScrollRect.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+        _bagScrollRect.onValueChanged.AddListener(_ => UpdateBagPageButtonHighlights());
+
         _slotBorders = new Image[count];
         _slotBgs = new Image[count];
         _slotIcons = new Image[count];
@@ -320,10 +422,10 @@ public class InventoryUI : MonoBehaviour
         {
             _visibleToRealSlot[i] = i;
             int col = i % Columns, row = i / Columns;
-            float x = 20f + col * (SlotSize + SlotGap);
-            float y = 42f + row * (SlotSize + SlotGap);
+            float x = 8f + col * (SlotSize + SlotGap);
+            float y = 6f + row * (SlotSize + SlotGap);
 
-            var borderImg = MakeImage(rightCol.transform, "SlotBorder" + i, UITheme.BrushedGoldDark);
+            var borderImg = MakeImage(contentRt, "SlotBorder" + i, UITheme.BrushedGoldDark);
             UITheme.ApplySlicedStyle(borderImg, UITheme.BrushedGoldDark);
             Place(borderImg.rectTransform, x, y, SlotSize, SlotSize);
 
@@ -339,15 +441,16 @@ public class InventoryUI : MonoBehaviour
             var relay = bgImg.gameObject.AddComponent<SlotDragRelay>();
             relay.owner = this;
             relay.cellIndex = capturedCell;
+            relay.scrollRect = _bagScrollRect;
 
             var iconImg = MakeImage(bgImg.transform, "Icon", Color.white);
             iconImg.raycastTarget = false;
             iconImg.preserveAspect = true;
-            Place(iconImg.rectTransform, 22f, 12f, 44f, 44f);
+            Place(iconImg.rectTransform, 20f, 10f, 44f, 44f);
             iconImg.gameObject.SetActive(false);
 
             var label = MakeLabel(bgImg.transform, "Label", "", 11, FontStyle.Bold, TextAnchor.LowerCenter,
-                Color.white, 3f, 56f, SlotSize - 12f, 30f);
+                Color.white, 3f, 52f, SlotSize - 12f, 30f);
 
             var qty = MakeLabel(bgImg.transform, "Qty", "", 12, FontStyle.Bold, TextAnchor.UpperRight,
                 UITheme.BrushedGoldBright, 4f, 4f, SlotSize - 14f, 18f);
@@ -387,7 +490,7 @@ public class InventoryUI : MonoBehaviour
 
         // แถบคำแนะนำด้านล่างสุดของหน้าต่าง
         MakeLabel(inner.transform, "Hint",
-            "Tiers: Normal (Grey) | Rare (Blue) | Epic (Purple) | Legendary (Gold)   •   Drag items onto Hotbar [1-6] below for quick access   •   [M] World Map",
+            "Tiers: Normal (Grey) | Rare (Blue) | Epic (Purple) | Legendary (Gold)   •   [1] Draw/Sheathe Weapon   •   Drag items onto Hotbar [2-7] below   •   [M] World Map",
             12, FontStyle.Normal, TextAnchor.MiddleCenter, UITheme.TextSecondary, 16f, 740f, PanelWidth - 38f, 28f);
 
         // ============================================================
@@ -1491,7 +1594,25 @@ public class InventoryUI : MonoBehaviour
     }
 
     /// <summary>
-    /// รีเฟรชตารางกระเป๋า 24 ช่อง โดยซ่อนอุปกรณ์ที่สวมใส่อยู่ใน 4 ช่อง Equipment ออกไปจากตารางกระเป๋า
+    /// เลื่อนตารางกระเป๋า 48 ช่องไปยังหน้า 1 (ช่อง 1-24) หรือหน้า 2 (ช่อง 25-48) ทันที
+    /// </summary>
+    public void JumpBagToPage(int pageIndex)
+    {
+        if (_bagScrollRect == null) return;
+        _bagScrollRect.verticalNormalizedPosition = pageIndex <= 0 ? 1f : 0f;
+        UpdateBagPageButtonHighlights();
+    }
+
+    private void UpdateBagPageButtonHighlights()
+    {
+        if (_bagScrollRect == null || _page1BtnBg == null || _page2BtnBg == null) return;
+        bool onPage1 = _bagScrollRect.verticalNormalizedPosition >= 0.5f;
+        _page1BtnBg.color = onPage1 ? UITheme.BrushedGold : new Color(0.16f, 0.19f, 0.26f, 1f);
+        _page2BtnBg.color = !onPage1 ? UITheme.BrushedGold : new Color(0.16f, 0.19f, 0.26f, 1f);
+    }
+
+    /// <summary>
+    /// รีเฟรชตารางกระเป๋า 48 ช่อง โดยซ่อนอุปกรณ์ที่สวมใส่อยู่ใน 4 ช่อง Equipment ออกไปจากตารางกระเป๋า
     /// </summary>
     private void RefreshInventoryGrid()
     {
@@ -1511,6 +1632,10 @@ public class InventoryUI : MonoBehaviour
             if (!slots[r].IsEmpty) visibleList.Add(r);
             else emptyList.Add(r);
         }
+
+        if (_bagTitleText != null)
+            _bagTitleText.text = $"INVENTORY BAG  ({visibleList.Count} / {_inv.Capacity})  •  Drag to Reorder / Hotbar 2-7";
+        UpdateBagPageButtonHighlights();
 
         for (int cell = 0; cell < _slotBgs.Length; cell++)
         {
@@ -1600,7 +1725,7 @@ public class InventoryUI : MonoBehaviour
             _detailTitleText.color = Color.white;
             _detailBodyText.text = bsMode
                 ? "Blacksmith Tip: Pick Target Gear, attach Fodder (Normal..Legendary) to see dynamic Success %, and forge!"
-                : "Tip: Drag items to Hotbar [1-6] below or drag gear onto Equipment slots on the left.";
+                : "Tip: Drag items to Hotbar [2-7] below or drag gear onto Equipment slots on the left. Press [1] outside Safe Zone to Draw/Sheathe weapon.";
             _useBtn.interactable = bsMode && _enhanceTargetSlot >= 0;
             _equipBtn.interactable = _dropBtn.interactable = false;
             _equipBtnText.text = bsMode ? "Set Target" : "Equip";
@@ -1767,7 +1892,7 @@ public class InventoryUI : MonoBehaviour
         if (item.type == ItemType.Consumable)
         {
             return desc +
-                "• Drag this item from your Inventory Bag onto Hotbar slots [1-6] at the bottom of the screen for instant activation during combat.\n" +
+                "• Drag this item from your Inventory Bag onto Hotbar slots [2-7] at the bottom of the screen for instant activation during combat.\n" +
                 "• Using a potion triggers the Buff animation across Photon Fusion Shared Mode.";
         }
 
@@ -1775,6 +1900,7 @@ public class InventoryUI : MonoBehaviour
         {
             EquipmentSlotType.Sword => desc +
                 "• Equip in the WEAPON slot (removed from bag grid while equipped).\n" +
+                "• Press [1] outside Comfort Zone to Draw/Sheathe your GreatSword.\n" +
                 "• Combat: [LMB] Light 3-Hit Combo / Run Attack / Jump Attack / Stealth Assassinate (3.0x from behind), [R] Heavy Slash Combo.\n" +
                 "• Can be enhanced at the Blacksmith up to +10.",
             EquipmentSlotType.Shield => desc +
@@ -1942,16 +2068,18 @@ public class InventoryUI : MonoBehaviour
 
     private class SlotDragRelay : MonoBehaviour,
         IPointerEnterHandler, IPointerExitHandler,
-        IBeginDragHandler, IDragHandler, IEndDragHandler, IDropHandler
+        IBeginDragHandler, IDragHandler, IEndDragHandler, IDropHandler, IScrollHandler
     {
         public InventoryUI owner;
         public int cellIndex;
+        public ScrollRect scrollRect;
         public void OnPointerEnter(PointerEventData eventData) => owner?.OnCellHoverEnter(cellIndex);
         public void OnPointerExit(PointerEventData eventData) => owner?.OnCellHoverExit(cellIndex);
         public void OnBeginDrag(PointerEventData eventData) => owner?.OnCellBeginDrag(cellIndex, eventData);
         public void OnDrag(PointerEventData eventData) => owner?.OnCellDrag(eventData);
         public void OnEndDrag(PointerEventData eventData) => owner?.OnCellEndDrag();
         public void OnDrop(PointerEventData eventData) => owner?.OnCellDrop(cellIndex);
+        public void OnScroll(PointerEventData eventData) => scrollRect?.OnScroll(eventData);
     }
 
     private class EquipDropRelay : MonoBehaviour, IDropHandler

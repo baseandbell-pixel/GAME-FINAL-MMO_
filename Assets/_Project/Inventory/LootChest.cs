@@ -5,14 +5,28 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 /// <summary>
-/// กล่องสมบัติรางวัลประจำแคมป์มอนสเตอร์และบอส (Treasure Chest System):
-///   - ดรอปไอเทมแบบส่วนตัว (Personal Instanced Loot) ให้เฉพาะผู้เล่นที่กดเปิด โดยถ่วงน้ำหนักตามดาเมจที่ทำได้
-///   - เมื่อเปิดรับของแล้ว กล่องจะสลายตัวหายไปเองอย่างสะอาดภายในเวลาที่กำหนด (ก่อนที่มอนสเตอร์ในแคมป์จะเกิดใหม่ในรอบ 1:30 นาที)
-///   - เมื่อมอนสเตอร์เกิดใหม่และถูกเคลียร์อีกครั้ง ระบบจะสร้างกล่องสมบัติใบใหม่ขึ้นมาครบวงจร
+/// กล่องสมบัติรางวัลประจำแคมป์มอนสเตอร์และบอส (Participation-Locked Personal Treasure Chest):
+///   - บันทึกรายชื่อผู้เล่นที่มีส่วนร่วมทำดาเมจในแคมป์นั้น (damage > 0) และล็อกสิทธิ์การเปิดอย่างเคร่งครัด
+///   - ผู้เล่นที่ทำดาเมจ 0 (รวมถึง Host ที่ยืนดูเฉยๆ) จะไม่สามารถเปิดกล่องหรือรับรางวัลได้ (Zero-Freeloading Lockout)
+///   - เมื่อผู้มีสิทธิ์กดเปิด กล่องจะสุ่มไอเทมตามสัดส่วนดาเมจ (Top DPS ได้โบนัส Epic/Legendary สูงสุด)
+///     แล้วสร้างไอเทมตกแบบ Client-Local (LocalPersonalLoot) เฉพาะหน้าจอของคนเปิดเท่านั้น
 /// </summary>
 [DisallowMultipleComponent]
 public class LootChest : MonoBehaviour
 {
+    /// <summary>
+    /// โครงสร้างเก็บสัดส่วนการทำดาเมจของผู้เล่นที่มีสิทธิ์เปิดกล่องใบนี้
+    /// </summary>
+    public struct ParticipantContribution
+    {
+        public int playerRawEncoded;
+        public float damageShare;
+        public bool isTopDps;
+    }
+
+    // ข้อความแจ้งเตือนมาตรฐานเมื่อผู้เล่นที่ไม่ได้ร่วมสู้พยายามเปิดกล่อง
+    public const string LockedWarningMessage = "Locked: You did not participate in this battle";
+
     // รายการกล่องสมบัติทั้งหมดในฉาก
     public static readonly List<LootChest> All = new List<LootChest>();
 
@@ -37,8 +51,14 @@ public class LootChest : MonoBehaviour
     public float DespawnRemainingSeconds => IsOpened ? Mathf.Max(0f, _despawnAtTime - Time.time) : -1f;
     // รายการไอเทมที่สุ่มได้จากการเปิดกล่อง
     public IReadOnlyList<ItemData> DroppedItems => _droppedItems;
+    // จำนวนผู้เล่นที่มีส่วนร่วมทำดาเมจและมีสิทธิ์เปิดกล่องนี้
+    public int EligibleContributorCount => _eligibleContributors.Count;
 
     private readonly List<ItemData> _droppedItems = new List<ItemData>();
+    private readonly Dictionary<int, ParticipantContribution> _eligibleContributors = new Dictionary<int, ParticipantContribution>();
+    // เปิดระบบล็อกสิทธิ์ตามสัดส่วนดาเมจเป็นค่าเริ่มต้นเสมอ (ป้องกันการยืนชุบมือเปิบทุกกรณี)
+    private bool _hasParticipationLock = true;
+    private float _lastLockedToastAt = -10f;
     private Transform _lidPivot;
     private Transform _beaconRing;
     private Light _chestLight;
@@ -48,9 +68,6 @@ public class LootChest : MonoBehaviour
     private float _bannerUntil = -1f;
     private string _bannerText = "";
     private Color _bannerColor = Color.white;
-
-    private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
-    private static readonly int ColorId = Shader.PropertyToID("_Color");
 
     /// <summary>
     /// สร้างกล่องสมบัติประจำแคมป์หรือบอสลงในฉาก
@@ -83,8 +100,93 @@ public class LootChest : MonoBehaviour
         chest.dropsPerChest = isBossChest ? 3 : 2;
         chest.worldItemPrefab = itemPrefab;
         chest.BuildVisuals();
+        chest.RefreshParticipationLabel();
         Debug.Log($"[LootChest] Spawned {(isBossChest ? "BOSS " : "")}Camp {campId} Reward Treasure Chest at {go.transform.position}.");
         return chest;
+    }
+
+    /// <summary>
+    /// กำหนดรายชื่อผู้เล่นที่มีสิทธิ์เปิดกล่องนี้จากสถิติดาเมจสะสมของแคมป์ (ผู้ที่ทำดาเมจ 0 จะถูกล็อกทันที)
+    /// </summary>
+    public void ConfigureParticipation(IReadOnlyDictionary<int, ParticipantContribution> contributors)
+    {
+        _eligibleContributors.Clear();
+        _hasParticipationLock = true;
+        if (contributors != null)
+        {
+            foreach (var kv in contributors)
+            {
+                if (kv.Value.damageShare > 0f)
+                    _eligibleContributors[kv.Key] = kv.Value;
+            }
+        }
+        RefreshParticipationLabel();
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นที่ระบุ (PlayerRef) มีส่วนร่วมทำดาเมจและมีสิทธิ์เปิดกล่องนี้หรือไม่
+    /// </summary>
+    public bool IsPlayerEligible(PlayerRef playerRef, out ParticipantContribution contribution)
+    {
+        contribution = default;
+        if (!_hasParticipationLock)
+        {
+            contribution = new ParticipantContribution { playerRawEncoded = playerRef.RawEncoded, damageShare = 1f, isTopDps = true };
+            return true;
+        }
+        if (playerRef == PlayerRef.None) return false;
+        return _eligibleContributors.TryGetValue(playerRef.RawEncoded, out contribution) && contribution.damageShare > 0f;
+    }
+
+    /// <summary>
+    /// ตรวจสอบสิทธิ์ของผู้เล่นเครื่องปัจจุบัน (Local Player)
+    /// </summary>
+    public bool IsLocalPlayerEligible(out ParticipantContribution contribution)
+    {
+        contribution = default;
+        var local = PlayerCombat.Local;
+        PlayerRef localRef = ResolvePlayerRef(local);
+        return IsPlayerEligible(localRef, out contribution);
+    }
+
+    public bool IsLocalPlayerEligible() => IsLocalPlayerEligible(out _);
+
+    private static PlayerRef ResolvePlayerRef(PlayerCombat player)
+    {
+        if (player != null)
+        {
+            if (player.Object != null && player.Object.IsValid && player.Object.StateAuthority != PlayerRef.None)
+                return player.Object.StateAuthority;
+            if (player.Runner != null && player.Runner.IsRunning && player.Runner.LocalPlayer != PlayerRef.None)
+                return player.Runner.LocalPlayer;
+        }
+        return PlayerRef.None;
+    }
+
+    /// <summary>
+    /// อัปเดตป้าย 3 มิติเหนือกล่องให้สะท้อนสิทธิ์ของผู้เล่นเครื่องนี้ (เปิดได้ vs ถูกล็อก)
+    /// </summary>
+    private void RefreshParticipationLabel()
+    {
+        if (_worldLabel == null || IsOpened) return;
+
+        if (IsLocalPlayerEligible(out ParticipantContribution contrib))
+        {
+            string rankTag = contrib.isTopDps ? "TOP DPS" : $"{contrib.damageShare * 100f:0}% DMG";
+            _worldLabel.text = isBossChest
+                ? $"BOSS TREASURE CHEST\n<size=72%>[E] Open Personal Loot ({rankTag})</size>"
+                : $"TREASURE CHEST\n<size=72%>[E] Open Personal Reward ({rankTag})</size>";
+            _worldLabel.color = new Color(1f, 0.86f, 0.24f, 1f);
+            if (_chestLight != null) _chestLight.color = isBossChest ? new Color(1f, 0.55f, 0.18f) : new Color(1f, 0.82f, 0.28f);
+        }
+        else
+        {
+            _worldLabel.text = isBossChest
+                ? "LOCKED BOSS CHEST\n<size=68%>You did not participate in this battle</size>"
+                : "LOCKED TREASURE CHEST\n<size=68%>You did not participate in this battle</size>";
+            _worldLabel.color = new Color(1f, 0.34f, 0.28f, 1f);
+            if (_chestLight != null) _chestLight.color = new Color(0.85f, 0.18f, 0.16f);
+        }
     }
 
     private void OnEnable()
@@ -144,10 +246,11 @@ public class LootChest : MonoBehaviour
         CreatePart(_lidPivot, "ChestLock", PrimitiveType.Cube,
             new Vector3(0f, 0.04f, 0.79f), new Vector3(0.20f, 0.24f, 0.08f), glowGold);
 
-        // วงแหวนเรืองแสงบนพื้น
+        // วงแหวนเรืองแสงบนพื้น (ใช้ URP Unlit ถาวรเพื่อไม่ให้เป็นสีชมพูใน Standalone Build)
         var ring = CreatePart(transform, "ChestBeacon", PrimitiveType.Cylinder,
             new Vector3(0f, 0.02f, 0f), new Vector3(1.85f, 0.015f, 1.85f),
-            isBossChest ? new Color(1f, 0.45f, 0.12f, 1f) : new Color(1f, 0.82f, 0.22f, 1f));
+            isBossChest ? new Color(1f, 0.45f, 0.12f, 1f) : new Color(1f, 0.82f, 0.22f, 1f),
+            unlit: true);
         _beaconRing = ring.transform;
 
         // แสงไฟส่องสว่างรอบกล่อง
@@ -174,7 +277,10 @@ public class LootChest : MonoBehaviour
         _worldLabel.textWrappingMode = TextWrappingModes.NoWrap;
     }
 
-    private static GameObject CreatePart(Transform parent, string partName, PrimitiveType type, Vector3 localPos, Vector3 localScale, Color color)
+    /// <summary>
+    /// สร้างชิ้นส่วนของกล่องสมบัติพร้อมผูก URP Material ถาวรผ่าน UrpMaterialHelper (แก้ปัญหาสีชมพูใน Standalone Build)
+    /// </summary>
+    private static GameObject CreatePart(Transform parent, string partName, PrimitiveType type, Vector3 localPos, Vector3 localScale, Color color, bool unlit = false)
     {
         GameObject part = GameObject.CreatePrimitive(type);
         part.name = partName;
@@ -186,14 +292,10 @@ public class LootChest : MonoBehaviour
         part.transform.localScale = localScale;
 
         var r = part.GetComponent<Renderer>();
-        if (r != null)
-        {
-            var mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(mpb);
-            mpb.SetColor(BaseColorId, color);
-            mpb.SetColor(ColorId, color);
-            r.SetPropertyBlock(mpb);
-        }
+        if (unlit)
+            UrpMaterialHelper.ApplyUnlitColor(r, color);
+        else
+            UrpMaterialHelper.ApplyLitColor(r, color);
         return part;
     }
 
@@ -261,20 +363,45 @@ public class LootChest : MonoBehaviour
     }
 
     /// <summary>
-    /// เปิดกล่องสมบัติ สุ่มไอเทมส่วนตัว (Personal Instanced Loot) ให้ผู้เปิด และตั้งเวลาลบกล่องอัตโนมัติ
+    /// เปิดกล่องสมบัติสำหรับผู้เล่นที่มีส่วนร่วมทำดาเมจเท่านั้น (บล็อกผู้เล่นที่ทำดาเมจ 0 รวมถึง Host)
+    /// สุ่มไอเทมตามสัดส่วนดาเมจและสร้างแบบ Client-Local (LocalPersonalLoot) เฉพาะหน้าจอคนเปิด
     /// </summary>
-    public List<ItemData> OpenChest(PlayerCombat opener = null, float damageShare = 1.0f, bool isTopDps = true)
+    public List<ItemData> OpenChest(PlayerCombat opener = null, float? overrideDamageShare = null, bool? overrideIsTopDps = null)
     {
         if (IsOpened) return _droppedItems;
+        if (opener == null) opener = PlayerCombat.Local;
+
+        PlayerRef looterRef = ResolvePlayerRef(opener);
+        return OpenChestForPlayer(looterRef, overrideDamageShare, overrideIsTopDps);
+    }
+
+    /// <summary>
+    /// ตรวจสอบสิทธิ์และเปิดกล่องสำหรับ PlayerRef ที่ระบุ (ใช้ได้ทั้งการเล่นจริงและการทดสอบจำลอง Host vs Client)
+    /// </summary>
+    public List<ItemData> OpenChestForPlayer(PlayerRef looterRef, float? overrideDamageShare = null, bool? overrideIsTopDps = null)
+    {
+        if (IsOpened) return _droppedItems;
+
+        // ตรวจสอบสิทธิ์การมีส่วนร่วมในการต่อสู้อย่างเคร่งครัด (Zero-Freeloading Lockout)
+        if (!IsPlayerEligible(looterRef, out ParticipantContribution contrib))
+        {
+            if (Time.unscaledTime - _lastLockedToastAt >= 1.2f)
+            {
+                _lastLockedToastAt = Time.unscaledTime;
+                PlayerStatusHud.Instance?.ShowToast(LockedWarningMessage, new Color(1f, 0.30f, 0.25f), 3.0f);
+            }
+            _bannerText = LockedWarningMessage;
+            _bannerColor = new Color(1f, 0.32f, 0.26f, 1f);
+            _bannerUntil = Time.unscaledTime + 2.8f;
+            Debug.LogWarning($"[LootChest] Access DENIED on Camp {campId} for {looterRef}: {LockedWarningMessage}");
+            return _droppedItems;
+        }
+
         IsOpened = true;
         _despawnAtTime = Time.time + Mathf.Max(0.5f, openedDespawnDelay);
 
-        if (opener == null) opener = PlayerCombat.Local;
-        NetworkRunner runner = opener != null ? opener.Runner : null;
-        PlayerRef looterRef = (runner != null && runner.IsRunning) ? runner.LocalPlayer : PlayerRef.None;
-
-        if (worldItemPrefab == null && InventoryManager.Local != null)
-            worldItemPrefab = InventoryManager.Local.WorldItemPrefab;
+        float effectiveShare = overrideDamageShare.HasValue ? Mathf.Clamp01(overrideDamageShare.Value) : contrib.damageShare;
+        bool effectiveTopDps = overrideIsTopDps.HasValue ? overrideIsTopDps.Value : contrib.isTopDps;
 
         _droppedItems.Clear();
         ItemTier highestTier = ItemTier.Normal;
@@ -282,12 +409,14 @@ public class LootChest : MonoBehaviour
 
         for (int i = 0; i < count; i++)
         {
+            // ใช้ตารางดรอปเฉพาะหีบสมบัติ (isChest: true -> แคมป์ 62/25/10/3%, บอส 35/40/18/7% ถ่วงน้ำหนักตาม DPS)
             ItemData rolled = LootDropSystem.RollDamageWeightedLoot(
                 isBossChest,
-                damageShare,
-                isTopDps,
+                effectiveShare,
+                effectiveTopDps,
                 out ItemTier rolledTier,
-                out _);
+                out _,
+                isChest: true);
 
             if (rolled == null) continue;
 
@@ -298,19 +427,16 @@ public class LootChest : MonoBehaviour
             Vector3 dropOffset = new Vector3(Mathf.Cos(angle) * 1.45f, 0.45f, Mathf.Sin(angle) * 1.45f);
             Vector3 dropPos = transform.position + dropOffset;
 
-            WorldItem spawnedDrop = null;
-            if (runner != null && runner.IsRunning && worldItemPrefab != null)
-            {
-                // ผูกสิทธิ์ไอเทมให้เฉพาะผู้เล่นที่เปิดกล่อง (Personal Instanced Loot)
-                spawnedDrop = WorldItem.Spawn(runner, worldItemPrefab, dropPos, rolled, 1, allowedLooter: looterRef);
-            }
+            // สร้างไอเทมดรอปแบบ Client-Local แท้จริง (ผู้เล่นอื่นในห้องจะไม่เห็น Ghost Object บนพื้น)
+            string sourceLabel = isBossChest ? "Boss Chest" : "Camp Chest";
+            LocalPersonalLoot localDrop = LocalPersonalLoot.SpawnLocal(dropPos, rolled, 1, 0, LocalPersonalLoot.DefaultLifetimeSeconds, sourceLabel);
 
-            if (spawnedDrop == null && InventoryManager.Local != null)
+            if (localDrop == null && InventoryManager.Local != null)
             {
                 InventoryManager.Local.AddItem(rolled, 1);
             }
 
-            Debug.Log($"[LootChest] {(isBossChest ? "Boss " : "")}Camp {campId} Chest rolled personal loot [{ItemData.GetTierDisplayName(rolledTier)}] -> {rolled.displayName} for {looterRef}.");
+            Debug.Log($"[LootChest] {(isBossChest ? "Boss " : "")}Camp {campId} Chest rolled client-local loot [{ItemData.GetTierDisplayName(rolledTier)}] -> {rolled.displayName} for {looterRef} (Share={effectiveShare * 100f:0}%, TopDPS={effectiveTopDps}).");
         }
 
         if (_beaconRing != null) _beaconRing.gameObject.SetActive(false);
@@ -349,18 +475,33 @@ public class LootChest : MonoBehaviour
         var player = PlayerCombat.Local;
         if (!IsOpened && player != null && player.IsSpawned && !player.IsDead && IsPlayerInRange(player))
         {
-            var rect = new Rect(Screen.width * 0.5f - 185f, Screen.height * 0.67f, 370f, 32f);
+            bool eligible = IsLocalPlayerEligible(out ParticipantContribution contrib);
+            var rect = new Rect(Screen.width * 0.5f - 215f, Screen.height * 0.67f, 430f, 34f);
             var prev = GUI.color;
-            GUI.color = new Color(0.06f, 0.05f, 0.02f, 0.85f);
+            GUI.color = eligible ? new Color(0.06f, 0.05f, 0.02f, 0.86f) : new Color(0.14f, 0.02f, 0.02f, 0.90f);
             GUI.DrawTexture(rect, Texture2D.whiteTexture);
-            GUI.color = new Color(1f, 0.85f, 0.25f, 1f);
+            GUI.color = eligible ? new Color(1f, 0.85f, 0.25f, 1f) : new Color(1f, 0.36f, 0.30f, 1f);
             GUIStyle style = new GUIStyle(GUI.skin.label)
             {
                 alignment = TextAnchor.MiddleCenter,
                 fontSize = 15,
                 fontStyle = FontStyle.Bold
             };
-            GUI.Label(rect, isBossChest ? "[E] Open Boss Reward Chest (Personal Loot)" : "[E] Open Camp Reward Chest (Personal Loot)", style);
+
+            string prompt;
+            if (!eligible)
+            {
+                prompt = LockedWarningMessage;
+            }
+            else
+            {
+                string rankTag = contrib.isTopDps ? "TOP DPS ★" : $"{contrib.damageShare * 100f:0}% DMG";
+                prompt = isBossChest
+                    ? $"[E] Open Boss Reward Chest ({rankTag})"
+                    : $"[E] Open Camp Reward Chest ({rankTag})";
+            }
+
+            GUI.Label(rect, prompt, style);
             GUI.color = prev;
         }
 

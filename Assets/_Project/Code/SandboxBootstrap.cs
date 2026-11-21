@@ -28,8 +28,9 @@ public class SandboxBootstrap : MonoBehaviour
     private const int StableFramesRequired = 5;
     private const float ReadyTimeoutSeconds = 20f;
 
+    // ชื่อห้อง Shared Mode เวอร์ชันใหม่ (อัปเกรดตามโครงสร้าง Networked State ของ Boss Co-op Scaling เพื่อไม่ชนกับ Build เก่าบน Photon Cloud)
     [Tooltip("All instances using the same name end up in the same room.")]
-    [SerializeField] private string sessionName = "Dev_Kulpat";
+    [SerializeField] private string sessionName = "Dev_Kulpat_CoopV2";
 
     [Min(1)]
     [SerializeField] private int maxPlayers = 4;

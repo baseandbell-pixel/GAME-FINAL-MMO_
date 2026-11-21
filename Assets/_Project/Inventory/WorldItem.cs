@@ -78,8 +78,31 @@ public class WorldItem : NetworkBehaviour
     // ตัวแปรคำนวณหาไอเทมที่อยู่ใกล้ผู้เล่นที่สุดต่อเฟรม
     private static int s_frame = -1;
     private static WorldItem s_promptItem;
+    private static float s_promptDistance = float.MaxValue;
+
+    /// <summary>
+    /// ตรวจสอบว่ามีไอเทม Networked WorldItem อยู่ใกล้ผู้เล่นมากกว่าระยะที่ระบุหรือไม่ (ใช้ประสานงานกับ LocalPersonalLoot)
+    /// </summary>
+    public static bool IsAnyNetworkedItemCloserThan(float otherDistance)
+    {
+        RefreshPromptTarget();
+        return s_promptItem != null && s_promptDistance < otherDistance;
+    }
 
     // ------------------------------------------------------------------ ฟังก์ชันสร้างไอเทมลงพื้น (Spawn Helpers)
+
+    /// <summary>
+    /// สร้างไอเทมดรอปส่วนตัวแบบ Client-Local แท้จริง (ไม่มี NetworkObject และผู้เล่นอื่นมองไม่เห็น 100%)
+    /// </summary>
+    public static LocalPersonalLoot SpawnLocal(
+        Vector3 position,
+        ItemData item,
+        int quantity = 1,
+        int enhancementLevel = 0,
+        string sourceTag = "Personal Loot")
+    {
+        return LocalPersonalLoot.SpawnLocal(position, item, quantity, enhancementLevel, LocalPersonalLoot.DefaultLifetimeSeconds, sourceTag);
+    }
 
     /// <summary>
     /// สร้างไอเทมลงพื้นโลก (รองรับทั้งไอเทมส่วนกลาง, ไอเทมส่วนตัว Personal Instanced Loot, และไอเทมที่ผู้เล่นทิ้งเอง 30s)
@@ -173,18 +196,34 @@ public class WorldItem : NetworkBehaviour
     }
 
     /// <summary>
-    /// อัปเดตการแสดงผลสีและซ่อนไอเทมหากไม่ใช่ของเครื่องผู้เล่นคนนี้ (Personal Instanced Loot)
+    /// อัปเดตการแสดงผลสีและซ่อนไอเทมทั้งหมดหากไม่ใช่ของเครื่องผู้เล่นคนนี้
     /// </summary>
     private void ApplyVisual()
     {
-        if (visualRenderer == null) return;
+        bool visible = IsVisibleAndLootableByLocalPlayer();
         var data = Data;
-        Color c = data != null ? data.worldColor : Color.magenta;
-        visualRenderer.GetPropertyBlock(_mpb);
-        _mpb.SetColor(BaseColorId, c);
-        _mpb.SetColor(ColorId, c);
-        visualRenderer.SetPropertyBlock(_mpb);
-        visualRenderer.enabled = IsVisibleAndLootableByLocalPlayer();
+        Color c = data != null ? data.worldColor : new Color(0.95f, 0.82f, 0.28f, 1f);
+
+        if (visualRenderer != null)
+        {
+            // ซ่อมแซม Material ให้เป็น URP เสมอหาก Prefab สูญเสียการอ้างอิง Shader
+            UrpMaterialHelper.EnsureValidUrpMaterial(visualRenderer);
+            visualRenderer.GetPropertyBlock(_mpb);
+            _mpb.SetColor(BaseColorId, c);
+            _mpb.SetColor(ColorId, c);
+            visualRenderer.SetPropertyBlock(_mpb);
+            visualRenderer.enabled = visible;
+        }
+
+        // ซ่อน Renderer ย่อยทุกตัวเพื่อป้องกันไม่ให้เห็นชิ้นส่วนค้างหากไม่ใช่เจ้าของสิทธิ์
+        foreach (var r in GetComponentsInChildren<Renderer>(true))
+        {
+            if (r != null)
+            {
+                UrpMaterialHelper.EnsureValidUrpMaterial(r);
+                r.enabled = visible;
+            }
+        }
     }
 
     private void OnClaimedChanged()
@@ -277,6 +316,10 @@ public class WorldItem : NetworkBehaviour
         RefreshPromptTarget();
         if (s_promptItem != this) return;
 
+        // หากมีไอเทมส่วนตัว LocalPersonalLoot อยู่ใกล้กว่า ให้ไอเทมส่วนตัวเป็นตัวรับปุ่ม [E]
+        LocalPersonalLoot closestLocal = LocalPersonalLoot.GetClosestLocalLoot(out float localDist);
+        if (closestLocal != null && localDist <= s_promptDistance) return;
+
         var kb = Keyboard.current;
         if (kb != null && kb.eKey.wasPressedThisFrame) RequestPickup();
     }
@@ -289,18 +332,22 @@ public class WorldItem : NetworkBehaviour
         if (s_frame == Time.frameCount) return;
         s_frame = Time.frameCount;
         s_promptItem = null;
+        s_promptDistance = float.MaxValue;
 
         var player = PlayerCombat.Local;
         if (player == null || !player.IsSpawned || player.IsDead || GameplayInput.IsBlocked) return;
 
-        float best = float.MaxValue;
         Vector3 p = player.transform.position;
         for (int i = 0; i < All.Count; i++)
         {
             var it = All[i];
             if (it == null || !it.IsVisibleAndLootableByLocalPlayer()) continue;
             float d = Planar(it.transform.position, p);
-            if (d <= it.pickupRadius && d < best) { best = d; s_promptItem = it; }
+            if (d <= it.pickupRadius && d < s_promptDistance)
+            {
+                s_promptDistance = d;
+                s_promptItem = it;
+            }
         }
     }
 
@@ -391,6 +438,9 @@ public class WorldItem : NetworkBehaviour
     {
         if (!IsSpawned || s_promptItem != this || Event.current.type != EventType.Repaint) return;
         if (!IsVisibleAndLootableByLocalPlayer()) return;
+
+        LocalPersonalLoot closestLocal = LocalPersonalLoot.GetClosestLocalLoot(out float localDist);
+        if (closestLocal != null && localDist <= s_promptDistance) return;
 
         var data = Data;
         string enhTag = EnhancementLevel > 0 ? $" +{EnhancementLevel}" : "";

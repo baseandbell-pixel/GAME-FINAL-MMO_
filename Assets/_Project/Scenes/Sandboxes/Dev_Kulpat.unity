@@ -144,7 +144,7 @@ Transform:
   m_GameObject: {fileID: 66626794}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 20, y: 1.2, z: 6}
+  m_LocalPosition: {x: 34, y: 1.2, z: 3}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -175,7 +175,7 @@ Transform:
   m_GameObject: {fileID: 296521615}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 26}
+  m_LocalPosition: {x: -4, y: 0, z: 32}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -237,7 +237,7 @@ Transform:
   m_GameObject: {fileID: 356640119}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 16, y: 1.2, z: 10}
+  m_LocalPosition: {x: 24, y: 1.2, z: 13}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -272,7 +272,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 39a747803a47c9549a4d32b695efff34, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SandboxBootstrap
-  sessionName: Dev_Kulpat
+  sessionName: Dev_Kulpat_CoopV2
   maxPlayers: 4
 --- !u!4 &461104495
 Transform:
@@ -348,6 +348,9 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4294967295
   zoomOutSpeed: 6
+  shakeFrequency: 28
+  maxShakeOffset: 0.45
+  maxShakeRollDegrees: 2.5
 --- !u!81 &481160632
 AudioListener:
   m_ObjectHideFlags: 0
@@ -478,7 +481,7 @@ Transform:
   m_GameObject: {fileID: 694452063}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 18, y: 0, z: -10}
+  m_LocalPosition: {x: 29, y: 0, z: -18}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -520,10 +523,18 @@ MonoBehaviour:
   - {fileID: 66626795}
   - {fileID: 356640120}
   - {fileID: 2026110801}
+  individualEnemyPatrolRadius: 3.4
+  minIndividualZoneSpacing: 8
   campRespawnDelaySeconds: 90
+  bossPrefab: {fileID: 302671553429383206, guid: 7286541d6f5283d4b8df34784f487cad, type: 3}
   bossArenaCenter: {x: -26, y: 0, z: -16}
   bossArenaProximityRadius: 18
   bossRespawnDelaySeconds: 240
+  starterCampMinLevel: 1
+  starterCampMaxLevel: 2
+  midFieldCampMinLevel: 4
+  midFieldCampMaxLevel: 6
+  bossArenaZoneLevel: 5
   safeZoneCenter: {x: -14, y: 0, z: 8}
   safeZoneRadius: 7.5
   itemPrefab: {fileID: 6507998983499857821, guid: 1f3dda27c4c498b4fb91d3d916ec6506, type: 3}
@@ -763,7 +774,7 @@ Transform:
   m_GameObject: {fileID: 1323361264}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 16, y: 1.2, z: 6}
+  m_LocalPosition: {x: 24, y: 1.2, z: 3}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1215,7 +1226,7 @@ Transform:
   m_GameObject: {fileID: 2026110800}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 20, y: 1.2, z: 10}
+  m_LocalPosition: {x: 34, y: 1.2, z: 13}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1246,7 +1257,7 @@ Transform:
   m_GameObject: {fileID: 2043905118}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 18, y: 0, z: 26}
+  m_LocalPosition: {x: 29, y: 0, z: 32}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

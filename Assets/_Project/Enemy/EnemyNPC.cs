@@ -1,20 +1,24 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using Fusion;
 using TMPro;
 using UnityEngine;
+using UnityEngine.AI;
 using UnityEngine.Events;
 
 // สถานะพฤติกรรม AI ของมอนสเตอร์และบอส
 public enum NpcState : byte
 {
-    Idle,      // ยืนรอก่อนเดินลาดตระเวนรอบถัดไป
-    Patrol,    // เดินลาดตระเวนอัตโนมัติในอาณาเขตแคมป์
-    Chasing,   // ไล่ล่าผู้เล่นที่ตรวจพบ
-    Attacking, // โจมตีผู้เล่นในระยะ
-    Returning, // วิ่งกลับจุดเกิดเมื่อผู้เล่นออกนอกระยะหรือเข้า Safe Zone
-    Dead       // ตายและรอเวลาสลายตัว
+    Idle = 0,      // ยืนรอก่อนเดินลาดตระเวนรอบถัดไป
+    Patrol = 1,    // เดินลาดตระเวนอัตโนมัติในอาณาเขตแคมป์
+    Chasing = 2,   // ไล่ล่าผู้เล่นที่ตรวจพบ
+    Attacking = 3, // โจมตีผู้เล่นในระยะ
+    Returning = 4, // วิ่งกลับจุดเกิดเมื่อผู้เล่นออกนอกระยะหรือเข้า Safe Zone
+    Dead = 5,      // ตายและรอเวลาสลายตัว
+    Staggered = 6  // สถานะชะงัก/เสียหลักจากการถูกผู้เล่นปัดป้องสมบูรณ์ (Perfect Parry)
 }
 
 // รูปแบบท่าโจมตีพิเศษทั้ง 3 ท่าของบอส (Sovereign Golem)
@@ -59,11 +63,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public float AttackCooldown = 2.1f;
     public float AttackRange = 2.4f;
 
-    [Header("AI & Territory Patrol (ระบบเดินลาดตระเวนและมุมมองสายตา)")]
+    [Header("AI & Territory Patrol (ระบบเดินลาดตระเวนโซนส่วนตัวและมุมมองสายตา)")]
     [Min(1f)] [SerializeField] private float aggroRadius = 6.8f;
     [Min(2f)] [SerializeField] private float leashRadius = 22f;
-    // รัศมีเดินลาดตระเวนในอาณาเขตแคมป์ (เพิ่มเป็น 5.5 เมตรให้เดินทั่วแคมป์อย่างมีชีวิตชีวา)
-    [SerializeField] private float patrolRadius = 5.5f;
+    // รัศมีเดินลาดตระเวนประจำตัวของมอนสเตอร์แต่ละตัว (ตั้งให้เล็กกว่าครึ่งหนึ่งของระยะห่างระหว่างจุดเกิด เพื่อไม่ให้โซนทับซ้อนและเดินกระจุกรวมกัน)
+    [SerializeField] private float patrolRadius = 3.4f;
+    // ระยะเรียกเพื่อนร่วมแคมป์เมื่อถูกโจมตี (เรียกเฉพาะตัวที่อยู่ใกล้ในระยะ 8 เมตร ไม่ดึงทั้งแคมป์จากระยะไกล)
+    [Min(2f)] [SerializeField] private float campAllyAlertRadius = 8.0f;
     // เวลารอที่จุดลาดตระเวนก่อนเดินไปยังจุดถัดไป
     [SerializeField] private Vector2 idleWaitRange = new Vector2(0.8f, 2.2f);
     [SerializeField] private float patrolSpeed = 1.85f;
@@ -101,15 +107,54 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public UnityEvent onHit;
     public UnityEvent onDeath;
 
+    [Header("Visual & Rigged Model (โมเดล 3D และแอนิเมชัน)")]
+    // เปิดอัตโนมัติเมื่อ Prefab มี SkinnedMeshRenderer (เช่น Boss Golem) เพื่อไม่ให้ทับ Scale/สี หรือสร้างมงกุฎ Primitive
+    [SerializeField] private bool hasRiggedModel = false;
+    // ความสูงจุด Lock-on สำหรับโมเดล 3D ที่มีจุดหมุนอยู่ที่เท้า (Feet Pivot)
+    [SerializeField] private float riggedLockPointHeight = 1.85f;
+    // ความสูงหลอดเลือดลอยเหนือศีรษะสำหรับโมเดล 3D
+    [SerializeField] private float riggedOverheadBarHeight = 3.75f;
+
+    [Header("Hybrid Navigation (NavMesh + ระบบหลบสิ่งกีดขวางสำรอง)")]
+    // เปิดใช้งาน NavMeshAgent อัตโนมัติหากฉากมีการ Bake NavMesh ไว้แล้ว (หากยังไม่ Bake จะใช้ระบบเดิมโดยไม่เกิด Warning)
+    [SerializeField] private bool useNavMeshWhenAvailable = true;
+    // ปรับความสูงตามพื้น/ทางลาด/สะพานอัตโนมัติในโหมด Fallback
+    [SerializeField] private bool snapToGround = true;
+    [SerializeField] private LayerMask groundSnapMask = ~0;
+
+    // ---- อีเวนต์สำหรับทีม UI / Audio / VFX มาเชื่อมต่อโดยไม่ต้องแก้โค้ด AI ----
+    // แจ้งเตือนทุก Peer เมื่อศัตรูได้รับดาเมจ (enemy, appliedDamage, isCrit)
+    public event Action<EnemyNPC, int, bool> Damaged;
+    // แจ้งเตือนทุก Peer เมื่อศัตรูถูก Perfect Parry จนติดสถานะชะงัก (enemy, durationSeconds)
+    public event Action<EnemyNPC, float> Staggered;
+    // แจ้งเตือนทุก Peer เมื่อศัตรูตาย
+    public event Action<EnemyNPC> Died;
+
     // ---- ข้อมูลที่ซิงก์ผ่าน Network (Networked State) ----
     [Networked, OnChangedRender(nameof(OnHealthChanged))]
     public int CurrentHealth { get; set; } = 120;
+
+    // ค่าพลังชีวิตสูงสุดที่ซิงก์ผ่าน Photon Fusion (จำเป็นสำหรับบอสที่มีระบบสเกลพลังชีวิตแบบ Co-op +1x ต่อผู้เล่น)
+    [Networked]
+    public int NetworkMaxHealth { get; set; } = 120;
+
+    // จำนวนผู้เล่นสูงสุดที่เคยเข้ามาในลานบอสในรอบการต่อสู้ปัจจุบัน (1 = 1x, 2 = 2x, 3 = 3x — ห้ามลดลงเมื่อมีคนเดินออก!)
+    [Networked, OnChangedRender(nameof(OnCoopScaleChanged))]
+    public int CoopPeakPlayerCount { get; set; } = 1;
+
+    // จำนวนผู้เล่นที่ยังมีชีวิตและยืนอยู่ในลานบอส ณ ปัจจุบัน (ใช้แสดงข้อมูลและตรวจรีเซ็ตเมื่อลานว่าง 0 คน)
+    [Networked]
+    public int ActivePlayersInBossZone { get; set; } = 0;
 
     [Networked, OnChangedRender(nameof(OnStateChanged))]
     public NpcState State { get; set; }
 
     [Networked] public NetworkId TargetId { get; set; }
     [Networked] public Vector3 HomePosition { get; set; }
+    // รัศมีโซนลาดตระเวนส่วนตัวของมอนสเตอร์ตัวนี้ (ซิงก์ผ่าน Network เพื่อให้ตรวจสอบและแสดงผลได้ตรงกันทุกเครื่อง)
+    [Networked] public float PersonalPatrolRadius { get; set; } = 3.4f;
+    // ลำดับโซนย่อยภายในแคมป์ (0..3) เพื่อแยกพื้นที่เดินของแต่ละตัวออกจากกันอย่างชัดเจน
+    [Networked] public int PersonalZoneIndex { get; set; } = 0;
     [Networked] public int CampId { get; set; }
     [Networked, OnChangedRender(nameof(OnBossFlagChanged))]
     public NetworkBool IsBoss { get; set; }
@@ -118,17 +163,36 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     // ---- คุณสมบัติเปิดอ่านจากภายนอก (Public API) ----
     public bool IsSpawned { get; private set; }
     public bool IsAlive => IsSpawned && Object != null && Object.IsValid && State != NpcState.Dead && CurrentHealth > 0;
+    // ตรวจสอบว่ามอนสเตอร์กำลังติดสถานะชะงักจาก Perfect Parry หรือไม่
+    public bool IsStaggered => IsSpawned && State == NpcState.Staggered;
+    // ตรวจสอบว่า Prefab นี้ใช้โมเดล 3D จริงหรือไม่
+    public bool HasRiggedModel => hasRiggedModel;
+    // ตรวจสอบว่ากำลังใช้ NavMeshAgent นำทางอยู่ในฉากนี้หรือไม่
+    public bool IsUsingNavMesh => _navAgent != null && _navAgent.enabled && _navAgent.isOnNavMesh;
     // ตรวจสอบว่ามอนสเตอร์รู้ตัวและกำลังต่อสู้อยู่หรือไม่ (ใช้เช็คเงื่อนไขลอบสังหาร)
-    public bool IsAlerted => State == NpcState.Chasing || State == NpcState.Attacking;
+    public bool IsAlerted => State == NpcState.Chasing || State == NpcState.Attacking || State == NpcState.Staggered;
     public Collider BodyCollider { get; private set; }
     public float AggroRadius => aggroRadius;
     public float ChaseSpeed => chaseSpeed;
     public float PatrolSpeed => patrolSpeed;
-    public float PatrolRadius => patrolRadius;
+    // รัศมีลาดตระเวนจริงที่ใช้ในปัจจุบัน (อ้างอิงจากโซนส่วนตัวของมอนสเตอร์ตัวนี้)
+    public float PatrolRadius => (IsSpawned && PersonalPatrolRadius > 0.25f) ? PersonalPatrolRadius : patrolRadius;
+    // จุดศูนย์กลางโซนลาดตระเวนส่วนตัว (ใช้ทั้งเป็นจุดเดินลาดตระเวนและจุด Leash กลับบ้านของมอนสเตอร์ตัวนี้)
+    public Vector3 PersonalZoneAnchor => IsSpawned ? HomePosition : transform.position;
     public Vector3 CurrentPatrolWaypoint => _patrolPoint;
-    public int ScaledMaxHealth => MaxHealth;
+    public int ScaledMaxHealth => (IsSpawned && NetworkMaxHealth > 0) ? NetworkMaxHealth : MaxHealth;
     public int ScaledAttackDamage => AttackDamage;
     public int ScaledDefense => Defense;
+    // ค่าตัวคูณ Co-op ปัจจุบันของบอส (1.0x สำหรับ 1 คน, 2.0x สำหรับ 2 คน, +1.0x ต่อผู้เล่นที่เข้ามาเพิ่ม)
+    public float CoopStatMultiplier => IsBoss ? Mathf.Max(1f, CoopPeakPlayerCount) : 1f;
+    // ค่าพลังพื้นฐานที่ 1.0x ของบอสก่อนคูณ Co-op (สำหรับตรวจสอบและรีเซ็ตหลังจบการต่อสู้)
+    public int BaseMaxHealth => _baseMaxHealth > 0 ? _baseMaxHealth : MaxHealth;
+    public int BaseAttackDamage => _baseAttackDamage > 0 ? _baseAttackDamage : AttackDamage;
+    public int BaseDefense => _baseDefense;
+    // ข้อมูลท่าโจมตีที่บอสกำลังร่ายอยู่ (ใช้แสดง Cast Bar บน Top-Center Boss HUD)
+    public string ActiveTelegraphName { get; private set; } = string.Empty;
+    public float ActiveTelegraphEndTime { get; private set; } = -1f;
+    public float ActiveTelegraphDuration { get; private set; } = 0f;
     public int ExperienceReward => experienceReward;
     public int CurrentAttackDamage => AttackDamage;
 
@@ -137,8 +201,20 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public int DistinctBossPatternsUsed => _usedPatterns.Count;
     public bool IsTelegraphing => _isTelegraphing;
 
+    // โครงสร้างข้อมูลอันดับดาเมจผู้เล่นที่ซิงก์ข้ามเครื่องสำหรับแสดงผลบน Top-Center Boss HUD (Damage Meter)
+    public struct BossDamageEntry
+    {
+        public int playerRawEncoded;
+        public string playerName;
+        public int damageDealt;
+        public float damageShare;
+        public bool isLocalPlayer;
+    }
+
     // ตารางเก็บสถิติดาเมจสะสมของผู้เล่นแต่ละคน (ใช้คำนวณ Personal Loot & Damage-Weighted Drop Rate)
     public IReadOnlyDictionary<PlayerRef, float> DamageDealtMap => _damageDealtMap;
+    // รายชื่ออันดับดาเมจของบอสที่ซิงก์ไปยังทุกเครื่องแล้ว (เรียงจากดาเมจมากไปน้อย)
+    public IReadOnlyList<BossDamageEntry> SyncedBossDamageBoard => _syncedBossDamageBoard;
 
     public Transform LockPoint => _lockPoint != null ? _lockPoint : transform;
     public bool IsLockable => IsAlive;
@@ -147,23 +223,66 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     // ---- ตัวแปรภายใน (Private State) ----
     private Transform _lockPoint;
     private GameObject _bossCrownRoot;
+    private NavMeshAgent _navAgent;
     private MaterialPropertyBlock _mpb;
     private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
     private static readonly int ColorId = Shader.PropertyToID("_Color");
+
+    // แคช Hash ของพารามิเตอร์ Animator สำหรับมอนสเตอร์และบอส Golem
+    private static readonly int SpeedParam = Animator.StringToHash("Speed");
+    private static readonly int IsMovingParam = Animator.StringToHash("IsMoving");
+    private static readonly int IsDeadParam = Animator.StringToHash("IsDead");
+    private static readonly int IsStaggeredParam = Animator.StringToHash("IsStaggered");
     private static readonly int HitTrigger = Animator.StringToHash("Hit");
     private static readonly int AttackTrigger = Animator.StringToHash("Attack");
+    private static readonly int HeavyCleaveTrigger = Animator.StringToHash("HeavyCleave");
+    private static readonly int ShockwaveSpinTrigger = Animator.StringToHash("ShockwaveSpin");
+    private static readonly int DarkVolleyTrigger = Animator.StringToHash("DarkVolley");
+    private static readonly int TelegraphTrigger = Animator.StringToHash("Telegraph");
+    private static readonly int StaggerTrigger = Animator.StringToHash("Stagger");
     private static readonly int DieTrigger = Animator.StringToHash("Die");
+
+    private bool _hasSpeedParam;
+    private bool _hasIsMovingParam;
+    private bool _hasIsDeadParam;
+    private bool _hasIsStaggeredParam;
+    private bool _hasHitParam;
+    private bool _hasAttackParam;
+    private bool _hasHeavyCleaveParam;
+    private bool _hasShockwaveSpinParam;
+    private bool _hasDarkVolleyParam;
+    private bool _hasTelegraphParam;
+    private bool _hasStaggerParam;
+    private bool _hasDieParam;
+    private bool _deathAnimPlayed;
 
     private float _nextAttackTime;
     private float _stateTimer;
+    private float _staggerEndTime;
     private float _patrolMoveElapsed;
     private float _deathTime;
     private bool _hasPatrolPoint;
     private Vector3 _patrolPoint;
+    private Vector3 _lastWorldPos;
+    private float _smoothedAnimSpeed;
     private bool _flashing;
     private bool _bossConfigured;
+    // เก็บค่าโซนลาดตระเวนส่วนตัวที่ SandboxWorldSpawner กำหนดมาก่อน Spawned()
+    private bool _hasConfiguredPersonalZone;
+    private Vector3 _configuredZoneAnchor;
+    private float _configuredPatrolRadius;
+    private int _configuredZoneIndex;
     private bool _scalingApplied;
     private bool _isTelegraphing;
+    // ค่าพลังพื้นฐานระดับ 1.0x (1 ผู้เล่น) ก่อนคูณตัวคูณ Co-op เพื่อป้องกันการคูณซ้ำซ้อน
+    private int _baseMaxHealth;
+    private int _baseAttackDamage;
+    private int _baseDefense;
+    // เวลาเริ่มที่ลานบอสว่างไม่มีผู้เล่นเลย (0 คน) เพื่อใช้รีเซ็ตสเกลกลับเป็น 1.0x หลังหมดช่วงต่อสู้
+    private float _bossEmptyZoneSince = -1f;
+    private const float BossOutOfCombatResetSeconds = 4.0f;
+    // ตัวแปรเสริมสำหรับจำลองจำนวนผู้เล่นเพิ่มเติมในลานบอสระหว่างการทดสอบอัตโนมัติ (ค่าปกติ = 0)
+    private int _simulatedExtraBossPlayers;
     private int _bossPatternCycle;
     private int _avoidSign;
     private float _avoidSignUntil;
@@ -171,10 +290,15 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private readonly HashSet<BossAttackPattern> _usedPatterns = new HashSet<BossAttackPattern>();
     private static readonly Collider[] s_overlapBuffer = new Collider[24];
     private static readonly RaycastHit[] s_castBuffer = new RaycastHit[16];
+    private static readonly RaycastHit[] s_groundRayBuffer = new RaycastHit[8];
     private readonly Dictionary<PlayerRef, float> _lastDamageTime = new Dictionary<PlayerRef, float>();
 
     // ตารางบันทึกดาเมจที่ผู้เล่นแต่ละคนทำได้ในการต่อสู้กับมอนสเตอร์/บอสตัวนี้
     private readonly Dictionary<PlayerRef, float> _damageDealtMap = new Dictionary<PlayerRef, float>();
+    // รายการอันดับดาเมจที่ซิงก์ไปยังทุกเครื่องแล้วสำหรับ BossHudUI
+    private readonly List<BossDamageEntry> _syncedBossDamageBoard = new List<BossDamageEntry>(6);
+    // ชื่อจำลองเสริมเฉพาะสำหรับทดสอบ Multi-player Damage Meter ใน Play Mode
+    private readonly Dictionary<int, string> _simulatedNameOverrides = new Dictionary<int, string>();
 
     // ------------------------------------------------------------------ วงจรการทำงาน (Lifecycle)
 
@@ -183,12 +307,50 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         BodyCollider = GetComponent<Collider>();
         if (bodyRenderer == null) bodyRenderer = GetComponentInChildren<Renderer>();
         if (animator == null) animator = GetComponentInChildren<Animator>();
+
+        // ตรวจจับอัตโนมัติว่าใช้โมเดล 3D ที่มีโครงกระดูกจริงหรือไม่ (เช่น Boss Golem)
+        if (!hasRiggedModel && GetComponentInChildren<SkinnedMeshRenderer>() != null)
+            hasRiggedModel = true;
+
+        if (animator != null)
+        {
+            animator.applyRootMotion = false;
+            CacheAnimatorParameters();
+        }
+
+        _navAgent = GetComponent<NavMeshAgent>();
+        if (_navAgent != null) _navAgent.enabled = false;
+
         _mpb = new MaterialPropertyBlock();
 
         var lp = new GameObject("LockPoint").transform;
         lp.SetParent(transform, false);
-        lp.localPosition = new Vector3(0f, 0.6f, 0f);
+        lp.localPosition = new Vector3(0f, hasRiggedModel ? riggedLockPointHeight : 0.6f, 0f);
         _lockPoint = lp;
+    }
+
+    /// <summary>
+    /// ตรวจสอบและแคชพารามิเตอร์ที่มีอยู่จริงใน Animator Controller เพื่อป้องกัน Warning ตอนรัน
+    /// </summary>
+    private void CacheAnimatorParameters()
+    {
+        if (animator == null || animator.runtimeAnimatorController == null) return;
+        foreach (var p in animator.parameters)
+        {
+            int h = p.nameHash;
+            if (h == SpeedParam) _hasSpeedParam = true;
+            else if (h == IsMovingParam) _hasIsMovingParam = true;
+            else if (h == IsDeadParam) _hasIsDeadParam = true;
+            else if (h == IsStaggeredParam) _hasIsStaggeredParam = true;
+            else if (h == HitTrigger) _hasHitParam = true;
+            else if (h == AttackTrigger) _hasAttackParam = true;
+            else if (h == HeavyCleaveTrigger) _hasHeavyCleaveParam = true;
+            else if (h == ShockwaveSpinTrigger) _hasShockwaveSpinParam = true;
+            else if (h == DarkVolleyTrigger) _hasDarkVolleyParam = true;
+            else if (h == TelegraphTrigger) _hasTelegraphParam = true;
+            else if (h == StaggerTrigger) _hasStaggerParam = true;
+            else if (h == DieTrigger) _hasDieParam = true;
+        }
     }
 
     public override void Spawned()
@@ -196,38 +358,95 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         IsSpawned = true;
         if (!All.Contains(this)) All.Add(this);
         _damageDealtMap.Clear();
+        _deathAnimPlayed = false;
+        _lastWorldPos = transform.position;
+        _smoothedAnimSpeed = 0f;
 
         if (Object.HasStateAuthority)
         {
-            if (ScaledLevel < 1) ScaledLevel = DetermineTargetScaleLevel();
-            ApplyDynamicScaling(ScaledLevel);
+            // ใช้เลเวลคงที่ของโซนที่ SandboxWorldSpawner กำหนดมา (ไม่สเกลตามผู้เล่นเลเวลสูงสุดในห้อง)
+            if (ScaledLevel < 1) ScaledLevel = ResolveFallbackZoneLevel();
+            CoopPeakPlayerCount = 1;
+            ActivePlayersInBossZone = 0;
+            _bossEmptyZoneSince = -1f;
+            _simulatedExtraBossPlayers = 0;
+            ApplyZoneLevel(ScaledLevel);
+            NetworkMaxHealth = MaxHealth;
             CurrentHealth = MaxHealth;
-            HomePosition = transform.position;
+
+            // กำหนดจุดศูนย์กลางและรัศมีโซนลาดตระเวนส่วนตัวของมอนสเตอร์ตัวนี้ (ไม่ใช้จุดกลางแคมป์ร่วมกับตัวอื่น)
+            HomePosition = _hasConfiguredPersonalZone ? _configuredZoneAnchor : transform.position;
+            PersonalPatrolRadius = _hasConfiguredPersonalZone && _configuredPatrolRadius > 0.25f
+                ? _configuredPatrolRadius
+                : patrolRadius;
+            PersonalZoneIndex = _hasConfiguredPersonalZone ? _configuredZoneIndex : 0;
             TargetId = default;
+
+            // เชื่อมต่อ NavMeshAgent อัตโนมัติเฉพาะเมื่อฉากมีการ Bake NavMesh แล้วเท่านั้น
+            TryInitNavMeshAgent();
 
             // ให้มอนสเตอร์แต่ละตัวเริ่มเดินลาดตระเวนทันทีแบบเหลื่อมเวลากันเล็กน้อย เพื่อไม่ให้ยืนนิ่งเป็นหุ่นปั้น
             _stateTimer = UnityEngine.Random.Range(0.15f, 0.85f);
             State = NpcState.Idle;
-            Debug.Log($"[EnemyNPC] {name} Lv.{ScaledLevel} (Boss={IsBoss}, Camp={CampId}) spawned. HP={CurrentHealth}/{MaxHealth}, ATK={AttackDamage}, DEF={Defense}.");
+            Debug.Log($"[EnemyNPC] {name} Lv.{ScaledLevel} (Boss={IsBoss}, Rigged={hasRiggedModel}, NavMesh={IsUsingNavMesh}, Camp={CampId}, ZoneIdx={PersonalZoneIndex}, ZoneR={PersonalPatrolRadius:0.0}m) spawned at {HomePosition}. HP={CurrentHealth}/{MaxHealth}, ATK={AttackDamage}, DEF={Defense}.");
         }
         else
         {
-            ApplyDynamicScaling(Mathf.Max(1, ScaledLevel));
+            // เครื่อง Remote Proxy ต้องปิด NavMeshAgent เพื่อไม่ให้ชนกับการซิงก์ตำแหน่งของ NetworkTransform
+            if (_navAgent != null) _navAgent.enabled = false;
+            ApplyZoneLevel(Mathf.Max(1, ScaledLevel));
+            ApplyCoopStatsFromPeak();
         }
 
         RefreshVisuals();
     }
 
-    private static int DetermineTargetScaleLevel()
+    /// <summary>
+    /// ตรวจสอบว่ามีพื้นที่ NavMesh ใต้ตัวมอนสเตอร์หรือไม่ หากมีจะเปิดใช้งาน NavMeshAgent แบบ Hybrid
+    /// </summary>
+    private void TryInitNavMeshAgent()
     {
-        int highest = 1;
-        for (int i = 0; i < PlayerCombat.All.Count; i++)
+        if (!useNavMeshWhenAvailable)
         {
-            var p = PlayerCombat.All[i];
-            if (p != null && p.IsSpawned && p.NetworkLevel > highest)
-                highest = p.NetworkLevel;
+            if (_navAgent != null) _navAgent.enabled = false;
+            return;
         }
-        return Mathf.Max(1, highest);
+
+        if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 3.0f, NavMesh.AllAreas))
+        {
+            if (_navAgent == null) _navAgent = gameObject.AddComponent<NavMeshAgent>();
+            _navAgent.updateRotation = false;
+            _navAgent.stoppingDistance = 0.25f;
+            _navAgent.acceleration = 24f;
+            _navAgent.angularSpeed = 360f;
+            _navAgent.radius = IsBoss ? 1.0f : 0.45f;
+            _navAgent.height = IsBoss ? 3.2f : 1.9f;
+            _navAgent.obstacleAvoidanceType = ObstacleAvoidanceType.HighQualityObstacleAvoidance;
+            _navAgent.enabled = true;
+            _navAgent.Warp(hit.position);
+        }
+        else if (_navAgent != null)
+        {
+            _navAgent.enabled = false;
+        }
+    }
+
+    private void StopNavAgent()
+    {
+        if (IsUsingNavMesh)
+        {
+            _navAgent.isStopped = true;
+            if (_navAgent.hasPath) _navAgent.ResetPath();
+        }
+    }
+
+    /// <summary>
+    /// คืนค่าเลเวลพื้นฐานประจำโซนกรณีไม่ได้เกิดผ่าน SandboxWorldSpawner (มอนทั่วไป Lv.1, บอส Lv.5)
+    /// ยกเลิกระบบสเกลตามผู้เล่นเลเวลสูงสุดในห้องเพื่อรองรับโครงสร้าง Central Server MMORPG
+    /// </summary>
+    private int ResolveFallbackZoneLevel()
+    {
+        return IsBoss ? 5 : 1;
     }
 
     private void OnBossFlagChanged()
@@ -240,42 +459,254 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     }
 
     /// <summary>
-    /// ปรับสเกลค่าพลังของมอนสเตอร์และบอสตามเลเวลของผู้เล่นอัตโนมัติ
+    /// กำหนดค่าพลังของมอนสเตอร์และบอสตามเลเวลคงที่ประจำพื้นที่ (Zone-Based Level)
     /// </summary>
-    public void ApplyDynamicScaling(int targetLevel)
+    public void ApplyZoneLevel(int zoneLevel)
     {
-        targetLevel = Mathf.Max(1, targetLevel);
-        if (_scalingApplied && ScaledLevel == targetLevel) return;
+        zoneLevel = Mathf.Max(1, zoneLevel);
+        if (_scalingApplied && ScaledLevel == zoneLevel) return;
         _scalingApplied = true;
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
-            ScaledLevel = targetLevel;
+            ScaledLevel = zoneLevel;
 
         if (IsBoss)
         {
             ApplyBossVisualAndCore();
-            MaxHealth = 750 + (targetLevel - 1) * 220;
-            AttackDamage = 24 + (targetLevel - 1) * 5;
-            Defense = 2 + (targetLevel - 1) * 3;
-            experienceReward = 300 + (targetLevel - 1) * 80;
+            _baseMaxHealth = 750 + (zoneLevel - 1) * 220;
+            _baseAttackDamage = 24 + (zoneLevel - 1) * 5;
+            _baseDefense = 2 + (zoneLevel - 1) * 3;
+            experienceReward = 300 + (zoneLevel - 1) * 80;
             maxDamagePerHit = 1500;
         }
         else
         {
-            MaxHealth = 120 + (targetLevel - 1) * 45;
-            AttackDamage = 8 + (targetLevel - 1) * 2;
-            Defense = (targetLevel - 1) * 2;
-            experienceReward = 50 + (targetLevel - 1) * 18;
+            _baseMaxHealth = 120 + (zoneLevel - 1) * 45;
+            _baseAttackDamage = 8 + (zoneLevel - 1) * 2;
+            _baseDefense = (zoneLevel - 1) * 2;
+            experienceReward = 50 + (zoneLevel - 1) * 18;
             maxDamagePerHit = 900;
         }
+
+        int mult = (IsBoss && IsSpawned) ? Mathf.Max(1, CoopPeakPlayerCount) : 1;
+        MaxHealth = _baseMaxHealth * mult;
+        AttackDamage = _baseAttackDamage * mult;
+        Defense = _baseDefense * mult;
+
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
+            NetworkMaxHealth = MaxHealth;
 
         if (IsSpawned && State != NpcState.Dead && CurrentHealth > 0)
             CurrentHealth = MaxHealth;
     }
 
+    /// <summary>
+    /// อัปเดตค่าพลังบอสตามตัวคูณ CoopPeakPlayerCount บนทุกเครื่อง (ซิงก์ทั้ง Host และ Remote Clients)
+    /// </summary>
+    private void OnCoopScaleChanged()
+    {
+        if (!IsSpawned || !IsBoss) return;
+        ApplyCoopStatsFromPeak();
+    }
+
+    private void ApplyCoopStatsFromPeak()
+    {
+        if (!IsBoss) return;
+        if (_baseMaxHealth <= 0)
+        {
+            int lvl = Mathf.Max(5, ScaledLevel);
+            _baseMaxHealth = 750 + (lvl - 1) * 220;
+            _baseAttackDamage = 24 + (lvl - 1) * 5;
+            _baseDefense = 2 + (lvl - 1) * 3;
+        }
+
+        int mult = Mathf.Max(1, CoopPeakPlayerCount);
+        MaxHealth = _baseMaxHealth * mult;
+        AttackDamage = _baseAttackDamage * mult;
+        Defense = _baseDefense * mult;
+    }
+
+    /// <summary>
+    /// ตรวจสอบจำนวนผู้เล่นในลานบอสแบบเรียลไทม์ฝั่ง State Authority:
+    ///   - เพิ่มพลังชีวิต (MaxHP/CurrentHP ตามสัดส่วน %), ดาเมจ และพลังป้องกัน +1.0x (+100%) ต่อผู้เล่นที่เข้ามาเพิ่มแต่ละคน
+    ///   - กฎ Anti-Cheese: หากมีผู้เล่นเดินออกระหว่างสู้ จะไม่ลด MaxHP หรือ CurrentHP ลงเด็ดขาด (ล็อกไว้ที่ Peak สูงสุดของรอบนั้น)
+    ///   - รีเซ็ตกลับเป็น 1.0x เฉพาะเมื่อบอสตาย/เกิดใหม่ หรือเมื่อผู้เล่นทั้งหมด (0 คน) ออกจากลานและจบการรีเซ็ตนอกการต่อสู้แล้วเท่านั้น
+    /// </summary>
+    private void TickBossCoopZoneScaling()
+    {
+        if (!IsBoss || !IsAlive || !Object.HasStateAuthority) return;
+
+        int activeCount = CountLivingPlayersInBossZone();
+        ActivePlayersInBossZone = activeCount;
+
+        if (activeCount > 0)
+        {
+            _bossEmptyZoneSince = -1f;
+            int desiredPeak = Mathf.Max(1, activeCount);
+            if (desiredPeak > CoopPeakPlayerCount)
+            {
+                ScaleBossUpToMultiplier(desiredPeak, activeCount);
+            }
+            return;
+        }
+
+        // กรณีไม่มีผู้เล่นอยู่ในลานเลย (activeCount == 0):
+        // หากบอสยังอยู่นอกการต่อสู้ (Idle/Patrol) ครบระยะเวลา BossOutOfCombatResetSeconds และมีการสเกลค้างอยู่หรือเลือดลด -> รีเซ็ตกลับ 1.0x
+        if (State == NpcState.Idle || State == NpcState.Patrol)
+        {
+            bool needsReset = CoopPeakPlayerCount > 1 || CurrentHealth < MaxHealth || _damageDealtMap.Count > 0;
+            if (needsReset)
+            {
+                if (_bossEmptyZoneSince < 0f)
+                {
+                    _bossEmptyZoneSince = Time.time;
+                }
+                else if (Time.time - _bossEmptyZoneSince >= BossOutOfCombatResetSeconds)
+                {
+                    ResetBossCoopScalingToBaseline("all players left Boss Arena (out-of-combat reset)");
+                }
+            }
+            else
+            {
+                _bossEmptyZoneSince = -1f;
+            }
+        }
+        else if (State == NpcState.Chasing || State == NpcState.Attacking)
+        {
+            // หากบอสกำลังไล่ล่าแต่ลานบอสว่างเปล่าและเป้าหมายหายไปแล้ว ให้กลับจุดเกิดเพื่อรีเซ็ต
+            PlayerCombat target = ResolveTarget();
+            if (target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target))
+            {
+                BeginReturn("all players left Boss Arena");
+            }
+        }
+    }
+
+    /// <summary>
+    /// นับจำนวนผู้เล่นที่ยังมีชีวิตและยืนอยู่ภายในรัศมีลานบอส (รวมจำนวนผู้เล่นจำลองสำหรับการทดสอบอัตโนมัติถ้ามี)
+    /// </summary>
+    public int CountLivingPlayersInBossZone()
+    {
+        Vector3 arenaCenter = SandboxWorldSpawner.Instance != null
+            ? SandboxWorldSpawner.Instance.BossArenaCenter
+            : HomePosition;
+        float arenaRadius = SandboxWorldSpawner.Instance != null
+            ? SandboxWorldSpawner.Instance.BossArenaProximityRadius
+            : 18f;
+
+        int count = 0;
+        for (int i = 0; i < PlayerCombat.All.Count; i++)
+        {
+            var p = PlayerCombat.All[i];
+            if (p == null || !p.IsSpawned || p.IsDead) continue;
+            if (SafeZone.IsPlayerInAnySafeZone(p)) continue;
+            if (PlanarDistance(p.transform.position, arenaCenter) <= arenaRadius)
+                count++;
+        }
+        return Mathf.Max(0, count + _simulatedExtraBossPlayers);
+    }
+
+    /// <summary>
+    /// ขยายค่าพลังบอสขึ้นเป็นตัวคูณใหม่ (newMultiplier เท่า) โดยคงสัดส่วน % พลังชีวิตปัจจุบันไว้เท่าเดิม
+    /// </summary>
+    private void ScaleBossUpToMultiplier(int newMultiplier, int activeCount)
+    {
+        if (!IsBoss || !Object.HasStateAuthority) return;
+        newMultiplier = Mathf.Max(1, newMultiplier);
+        if (newMultiplier <= CoopPeakPlayerCount) return;
+
+        if (_baseMaxHealth <= 0)
+        {
+            int lvl = Mathf.Max(5, ScaledLevel);
+            _baseMaxHealth = 750 + (lvl - 1) * 220;
+            _baseAttackDamage = 24 + (lvl - 1) * 5;
+            _baseDefense = 2 + (lvl - 1) * 3;
+        }
+
+        float prevMax = Mathf.Max(1, MaxHealth);
+        float hpFraction = Mathf.Clamp01(CurrentHealth / prevMax);
+
+        CoopPeakPlayerCount = newMultiplier;
+        MaxHealth = _baseMaxHealth * newMultiplier;
+        NetworkMaxHealth = MaxHealth;
+        AttackDamage = _baseAttackDamage * newMultiplier;
+        Defense = _baseDefense * newMultiplier;
+        CurrentHealth = Mathf.Clamp(Mathf.RoundToInt(MaxHealth * hpFraction), 1, MaxHealth);
+
+        Debug.Log($"[EnemyNPC] BOSS CO-OP SCALING UP -> {newMultiplier}x (ActivePlayersInZone={activeCount}): HP={CurrentHealth}/{MaxHealth} ({hpFraction * 100f:0}%), ATK={AttackDamage}, DEF={Defense}.");
+    }
+
+    /// <summary>
+    /// รีเซ็ตค่าพลังและตัวคูณ Co-op ของบอสกลับสู่ระดับพื้นฐาน 1.0x (เรียกเฉพาะเมื่อลานว่าง 0 คนและจบการต่อสู้แล้ว)
+    /// </summary>
+    public void ResetBossCoopScalingToBaseline(string reason)
+    {
+        if (!IsBoss || !Object.HasStateAuthority) return;
+        if (_baseMaxHealth <= 0)
+        {
+            int lvl = Mathf.Max(5, ScaledLevel);
+            _baseMaxHealth = 750 + (lvl - 1) * 220;
+            _baseAttackDamage = 24 + (lvl - 1) * 5;
+            _baseDefense = 2 + (lvl - 1) * 3;
+        }
+
+        CoopPeakPlayerCount = 1;
+        MaxHealth = _baseMaxHealth;
+        NetworkMaxHealth = _baseMaxHealth;
+        AttackDamage = _baseAttackDamage;
+        Defense = _baseDefense;
+        CurrentHealth = MaxHealth;
+        _damageDealtMap.Clear();
+        _syncedBossDamageBoard.Clear();
+        _simulatedNameOverrides.Clear();
+        _bossEmptyZoneSince = -1f;
+        if (IsSpawned && Object != null && Object.IsValid && Object.HasStateAuthority)
+            RPC_SyncBossDamageBoard(default);
+        Debug.Log($"[EnemyNPC] BOSS CO-OP RESET -> 1x baseline ({reason}): HP={CurrentHealth}/{MaxHealth}, ATK={AttackDamage}, DEF={Defense}.");
+    }
+
+    /// <summary>
+    /// ตัวช่วยทดสอบสำหรับ Play Mode: จำลองจำนวนผู้เล่นเพิ่มเติมในลานบอส (+1, +2, 0) และประมวลผลสเกลทันที
+    /// </summary>
+    public void SetSimulatedExtraBossPlayersForTest(int extraPlayers)
+    {
+        if (!IsBoss || !Object.HasStateAuthority) return;
+        _simulatedExtraBossPlayers = Mathf.Max(0, extraPlayers);
+        TickBossCoopZoneScaling();
+    }
+
+    /// <summary>
+    /// เมธอดเดิมสำหรับความเข้ากันได้ย้อนหลัง (ส่งต่อให้ ApplyZoneLevel โดยตรง)
+    /// </summary>
+    public void ApplyDynamicScaling(int targetLevel)
+    {
+        ApplyZoneLevel(targetLevel);
+    }
+
+    /// <summary>
+    /// กำหนดจุดศูนย์กลางและรัศมีโซนลาดตระเวนส่วนตัว (Individual Patrol Zone) ให้กับมอนสเตอร์แต่ละตัวแยกกัน
+    /// เพื่อไม่ให้มอนสเตอร์ในแคมป์เดียวกันเดินกระจุกรวมกัน โดยยังคงสังกัด CampId เดิมสำหรับหีบสมบัติและการเกิดใหม่
+    /// </summary>
+    public void ConfigurePersonalPatrolZone(Vector3 anchorPosition, float personalRadius, int zoneIndex = 0)
+    {
+        float clampedRadius = Mathf.Clamp(personalRadius, 1.5f, 8.0f);
+        patrolRadius = clampedRadius;
+        _hasConfiguredPersonalZone = true;
+        _configuredZoneAnchor = anchorPosition;
+        _configuredPatrolRadius = clampedRadius;
+        _configuredZoneIndex = zoneIndex;
+
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
+        {
+            HomePosition = anchorPosition;
+            PersonalPatrolRadius = clampedRadius;
+            PersonalZoneIndex = zoneIndex;
+        }
+    }
+
     public void ApplyBossConfiguration()
     {
         ApplyBossVisualAndCore();
-        ApplyDynamicScaling(Mathf.Max(1, ScaledLevel));
+        ApplyZoneLevel(Mathf.Max(5, ScaledLevel));
     }
 
     private void ApplyBossVisualAndCore()
@@ -293,10 +724,11 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         returnSpeed = 4.5f;
         maxHitDistance = 7.5f;
 
-        transform.localScale = new Vector3(2.2f, 2.3f, 2.2f);
-        if (_lockPoint != null) _lockPoint.localPosition = new Vector3(0f, 0.85f, 0f);
+        transform.localScale = hasRiggedModel ? transform.localScale : new Vector3(2.2f, 2.3f, 2.2f);
+        if (_lockPoint != null) _lockPoint.localPosition = new Vector3(0f, hasRiggedModel ? riggedLockPointHeight : 0.85f, 0f);
 
-        if (_bossCrownRoot == null)
+        // สร้างมงกุฎและไหล่ Primitive เฉพาะกรณีที่ใช้ Capsule สำรองเท่านั้น (หากเป็นโมเดล Golem 3D จริงไม่ต้องสร้างทับ)
+        if (!hasRiggedModel && _bossCrownRoot == null)
         {
             _bossCrownRoot = new GameObject("BossVisualCrown");
             _bossCrownRoot.transform.SetParent(transform, false);
@@ -323,15 +755,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         part.transform.SetParent(parent, false);
         part.transform.localPosition = localPos;
         part.transform.localScale = localScale;
-        var r = part.GetComponent<Renderer>();
-        if (r != null)
-        {
-            var mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(mpb);
-            mpb.SetColor(BaseColorId, color);
-            mpb.SetColor(ColorId, color);
-            r.SetPropertyBlock(mpb);
-        }
+        UrpMaterialHelper.ApplyLitColor(part.GetComponent<Renderer>(), color);
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
@@ -339,8 +763,28 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         IsSpawned = false;
         All.Remove(this);
         StopAllCoroutines();
+        if (_navAgent != null) _navAgent.enabled = false;
         _bossAttackRoutine = null;
         _isTelegraphing = false;
+    }
+
+    private void Update()
+    {
+        if (!IsSpawned || animator == null || animator.runtimeAnimatorController == null) return;
+
+        float dt = Mathf.Max(0.0001f, Time.deltaTime);
+        Vector3 pos = transform.position;
+        Vector3 delta = pos - _lastWorldPos;
+        delta.y = 0f;
+        _lastWorldPos = pos;
+
+        float rawSpeed = State == NpcState.Dead || State == NpcState.Staggered ? 0f : (delta.magnitude / dt);
+        _smoothedAnimSpeed = Mathf.Lerp(_smoothedAnimSpeed, rawSpeed, 1f - Mathf.Exp(-10f * dt));
+
+        if (_hasSpeedParam) animator.SetFloat(SpeedParam, _smoothedAnimSpeed);
+        if (_hasIsMovingParam) animator.SetBool(IsMovingParam, _smoothedAnimSpeed > 0.15f);
+        if (_hasIsDeadParam) animator.SetBool(IsDeadParam, State == NpcState.Dead);
+        if (_hasIsStaggeredParam) animator.SetBool(IsStaggeredParam, State == NpcState.Staggered);
     }
 
     // ------------------------------------------------------------------ ระบบตรวจสอบการลอบสังหาร (Stealth Assassination & Vision Cone)
@@ -396,18 +840,43 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         if (!IsSpawned || !Object.HasStateAuthority) return;
 
+        // อัปเดตระบบสเกลพลังบอสแบบ Co-op (+1x ต่อผู้เล่น และห้ามลด HP เมื่อผู้เล่นออกกลางคัน)
+        if (IsBoss && State != NpcState.Dead)
+        {
+            TickBossCoopZoneScaling();
+        }
+
         float dt = Runner.DeltaTime;
         switch (State)
         {
-            case NpcState.Idle: TickIdle(dt); break;
-            case NpcState.Patrol: TickPatrol(dt); break;
-            case NpcState.Chasing: TickChasing(dt); break;
-            case NpcState.Attacking: TickAttacking(dt); break;
-            case NpcState.Returning: TickReturning(dt); break;
-            case NpcState.Dead: TickDead(); return;
+            case NpcState.Idle:
+                StopNavAgent();
+                TickIdle(dt);
+                break;
+            case NpcState.Patrol:
+                TickPatrol(dt);
+                break;
+            case NpcState.Chasing:
+                TickChasing(dt);
+                break;
+            case NpcState.Attacking:
+                StopNavAgent();
+                TickAttacking(dt);
+                break;
+            case NpcState.Returning:
+                TickReturning(dt);
+                break;
+            case NpcState.Staggered:
+                StopNavAgent();
+                TickStaggered(dt);
+                break;
+            case NpcState.Dead:
+                StopNavAgent();
+                TickDead();
+                return;
         }
 
-        if (IsSpawned && Object != null && Object.IsValid && State != NpcState.Dead)
+        if (IsSpawned && Object != null && Object.IsValid && State != NpcState.Dead && !IsUsingNavMesh)
         {
             Vector3 pos = transform.position;
             if (ResolveObstaclePenetration(ref pos))
@@ -415,19 +884,39 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
     }
 
+    /// <summary>
+    /// ประมวลผลช่วงเวลาที่มอนสเตอร์/บอสติดสถานะชะงักจากการถูกผู้เล่น Perfect Parry
+    /// </summary>
+    private void TickStaggered(float dt)
+    {
+        if (Time.time < _staggerEndTime) return;
+
+        PlayerCombat target = ResolveTarget();
+        if (target != null && !target.IsDead && !SafeZone.IsPlayerInAnySafeZone(target))
+        {
+            ChangeState(NpcState.Chasing, "recovered from parry stagger");
+        }
+        else
+        {
+            _stateTimer = 0.4f;
+            ChangeState(NpcState.Idle, "recovered from parry stagger");
+        }
+    }
+
     private void TickIdle(float dt)
     {
         if (TryAcquireNearestPlayer()) return;
 
+        float activePatrolRadius = PatrolRadius;
         _stateTimer -= dt;
-        if (_stateTimer <= 0f && patrolRadius > 0.5f)
+        if (_stateTimer <= 0f && activePatrolRadius > 0.5f)
         {
             if (TryPickPatrolWaypoint(out Vector3 waypoint))
             {
                 _patrolPoint = waypoint;
                 _hasPatrolPoint = true;
                 _patrolMoveElapsed = 0f;
-                ChangeState(NpcState.Patrol, "territory patrol");
+                ChangeState(NpcState.Patrol, "personal zone patrol");
             }
             else
             {
@@ -437,19 +926,36 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     }
 
     /// <summary>
-    /// สุ่มหาจุดเดินลาดตระเวนในอาณาเขตแคมป์ โดยเว้นระยะห่างจากจุดเดิมและไม่เข้าเขต Safe Zone
+    /// สุ่มหาจุดเดินลาดตระเวนภายในโซนส่วนตัว (HomePosition + PersonalPatrolRadius) ของมอนสเตอร์ตัวนี้เท่านั้น
+    /// พร้อมตรวจไม่ให้ล้ำเข้าไปใน Safe Zone หรือทับซ้อนกับโซนส่วนตัวของมอนสเตอร์ตัวอื่น เพื่อป้องกันการเดินกระจุกตัว
     /// </summary>
     private bool TryPickPatrolWaypoint(out Vector3 waypoint)
     {
-        for (int attempt = 0; attempt < 6; attempt++)
+        float activeRadius = Mathf.Max(1.2f, PatrolRadius);
+        for (int attempt = 0; attempt < 10; attempt++)
         {
             float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
-            float dist = UnityEngine.Random.Range(patrolRadius * 0.35f, patrolRadius);
+            float dist = UnityEngine.Random.Range(activeRadius * 0.35f, activeRadius);
             Vector3 candidate = HomePosition + new Vector3(Mathf.Cos(angle) * dist, 0f, Mathf.Sin(angle) * dist);
             candidate.y = transform.position.y;
 
             if (SafeZone.IsPointInAnySafeZone(candidate, 1.0f)) continue;
-            if (PlanarDistance(transform.position, candidate) < 1.2f) continue;
+            if (PlanarDistance(transform.position, candidate) < 1.1f) continue;
+
+            // ตรวจสอบไม่ให้จุดเดินล้ำเข้าเขตโซนส่วนตัวของมอนสเตอร์ตัวอื่น
+            bool overlapsOtherZone = false;
+            for (int i = 0; i < All.Count; i++)
+            {
+                EnemyNPC other = All[i];
+                if (other == null || other == this || !other.IsSpawned || !other.IsAlive || other.IsBoss) continue;
+                float minClearance = other.PatrolRadius + 0.5f;
+                if (PlanarDistance(candidate, other.HomePosition) < minClearance)
+                {
+                    overlapsOtherZone = true;
+                    break;
+                }
+            }
+            if (overlapsOtherZone) continue;
 
             waypoint = candidate;
             return true;
@@ -469,6 +975,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             return;
         }
 
+        // หากมอนสเตอร์หลุดออกนอกรัศมีโซนส่วนตัวของตัวเอง ให้เบี่ยงเป้าหมายกลับเข้าจุด HomePosition ทันที
+        float activeRadius = PatrolRadius;
+        if (PlanarDistance(transform.position, HomePosition) > activeRadius + 1.0f)
+        {
+            _patrolPoint = HomePosition;
+        }
+
         _patrolMoveElapsed += dt;
         float remaining = MoveTowards(_patrolPoint, patrolSpeed, dt);
         // หากเดินถึงจุดหมาย หรือใช้เวลาเดินนานเกิน 4.5 วินาที ให้เปลี่ยนจุดลาดตระเวนใหม่เพื่อไม่ให้ติดกำแพง
@@ -476,7 +989,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         {
             _hasPatrolPoint = false;
             _stateTimer = UnityEngine.Random.Range(idleWaitRange.x, idleWaitRange.y);
-            ChangeState(NpcState.Idle, "reached patrol waypoint");
+            ChangeState(NpcState.Idle, "reached personal patrol waypoint");
         }
     }
 
@@ -649,10 +1162,29 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         if (MoveTowards(HomePosition, returnSpeed, dt) <= 0.35f)
         {
-            CurrentHealth = MaxHealth;
             TargetId = default;
-            _damageDealtMap.Clear();
             _stateTimer = UnityEngine.Random.Range(idleWaitRange.x, idleWaitRange.y);
+
+            if (IsBoss)
+            {
+                // สำหรับบอส: รีเซ็ตตัวคูณ Co-op กลับเป็น 1x เฉพาะเมื่อไม่มีผู้เล่นอยู่ในลานบอสแล้ว (active == 0) เท่านั้น!
+                if (CountLivingPlayersInBossZone() == 0)
+                {
+                    ResetBossCoopScalingToBaseline("returned home with 0 players in Boss Arena");
+                }
+                else
+                {
+                    // หากยังมีผู้เล่นอยู่ในลาน คงค่าสเกลและ MaxHP เดิมไว้ (Anti-Cheese)
+                    CurrentHealth = MaxHealth;
+                    _damageDealtMap.Clear();
+                }
+            }
+            else
+            {
+                CurrentHealth = MaxHealth;
+                _damageDealtMap.Clear();
+            }
+
             ChangeState(NpcState.Idle, "arrived home, health & aggro reset");
         }
     }
@@ -688,6 +1220,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         return true;
     }
 
+    /// <summary>
+    /// ส่งสัญญาณเรียกเพื่อนร่วมแคมป์เฉพาะตัวที่อยู่ใกล้ในระยะ campAllyAlertRadius (ป้องกันมอนสเตอร์ที่อยู่ห่างกันคนละโซนส่วนตัววิ่งกรูมารวมกัน)
+    /// </summary>
     private void BroadcastCampAggro(PlayerCombat target)
     {
         if (target == null || !target.IsSpawned || CampId <= 0 || IsBoss || SafeZone.IsPlayerInAnySafeZone(target)) return;
@@ -696,6 +1231,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         {
             EnemyNPC ally = All[i];
             if (ally == null || !ally.IsSpawned || !ally.IsAlive || ally == this || ally.CampId != CampId) continue;
+            if (PlanarDistance(transform.position, ally.transform.position) > campAllyAlertRadius) continue;
             ally.RPC_JoinCampAggro(target.Object.Id);
         }
     }
@@ -765,6 +1301,25 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         float dist = delta.magnitude;
         if (dist < 0.0001f) return 0f;
 
+        // โหมด Hybrid NavMesh: ใช้ NavMeshAgent นำทางอัตโนมัติเมื่อฉากมีการ Bake NavMesh แล้ว
+        if (IsUsingNavMesh)
+        {
+            Vector3 navDest = destination;
+            EnforceSafeZoneExclusion(ref navDest);
+            _navAgent.speed = speed;
+            _navAgent.isStopped = false;
+            _navAgent.SetDestination(navDest);
+
+            Vector3 velDir = _navAgent.desiredVelocity;
+            velDir.y = 0f;
+            if (velDir.sqrMagnitude > 0.01f)
+                FaceDirection(velDir.normalized, dt);
+            else
+                FaceDirection(delta / dist, dt);
+
+            return PlanarDistance(transform.position, destination);
+        }
+
         Vector3 desiredDir = delta / dist;
         Vector3 steeredDir = ComputeObstacleAvoidanceDir(pos, desiredDir, Mathf.Min(dist, obstacleCheckDistance));
 
@@ -781,11 +1336,52 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
         ResolveObstaclePenetration(ref nextPos);
         EnforceSafeZoneExclusion(ref nextPos);
-        nextPos.y = pos.y;
+        if (snapToGround)
+            SnapPositionToGround(ref nextPos, dt);
+        else
+            nextPos.y = pos.y;
 
         transform.position = nextPos;
         FaceDirection(finalDir, dt);
         return PlanarDistance(nextPos, destination);
+    }
+
+    /// <summary>
+    /// ยิง Raycast ลงพื้นแบบไม่จัดสรรหน่วยความจำใหม่ เพื่อปรับความสูง Y ให้เดินขึ้นเนิน/สะพานได้โดยไม่ลอยหรือจมพื้น
+    /// </summary>
+    private void SnapPositionToGround(ref Vector3 pos, float dt)
+    {
+        float originOffset = hasRiggedModel ? 1.5f : 0.9f;
+        Vector3 origin = new Vector3(pos.x, pos.y + originOffset, pos.z);
+        int hits = Physics.RaycastNonAlloc(origin, Vector3.down, s_groundRayBuffer, originOffset + 3.5f, groundSnapMask, QueryTriggerInteraction.Ignore);
+
+        bool found = false;
+        float bestY = float.NegativeInfinity;
+        for (int i = 0; i < hits; i++)
+        {
+            var col = s_groundRayBuffer[i].collider;
+            if (col == null) continue;
+            if (col.transform.IsChildOf(transform)) continue;
+            if (col.attachedRigidbody != null) continue;
+            if (col.GetComponentInParent<PlayerCombat>() != null) continue;
+            if (col.GetComponentInParent<EnemyNPC>() != null) continue;
+
+            float y = s_groundRayBuffer[i].point.y;
+            if (y > bestY)
+            {
+                bestY = y;
+                found = true;
+            }
+        }
+
+        if (!found) return;
+
+        float targetY = bestY;
+        if (!hasRiggedModel && BodyCollider is CapsuleCollider cap)
+        {
+            targetY += cap.height * 0.5f * Mathf.Abs(transform.lossyScale.y);
+        }
+        pos.y = Mathf.MoveTowards(pos.y, targetY, 14f * dt);
     }
 
     private static void EnforceSafeZoneExclusion(ref Vector3 candidatePos)
@@ -970,7 +1566,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     // ------------------------------------------------------------------ ระบบรับดาเมจและบันทึกสัดส่วนดาเมจรายบุคคล
 
     /// <summary>
-    /// บันทึกดาเมจสะสมของผู้เล่นแต่ละคนลงใน _damageDealtMap เพื่อใช้คำนวณอัตราดรอป Personal Loot ตอนตาย
+    /// บันทึกดาเมจสะสมของผู้เล่นแต่ละคนลงใน _damageDealtMap และรายงานต่อไปยังตารางดาเมจสะสมประจำแคมป์ (SandboxWorldSpawner)
     /// </summary>
     public void RecordPlayerDamage(PlayerRef player, float amount)
     {
@@ -979,6 +1575,127 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             _damageDealtMap[player] = current + amount;
         else
             _damageDealtMap[player] = amount;
+
+        // สะสมดาเมจรวมทั้งแคมป์เพื่อใช้ล็อกหีบสมบัติเฉพาะผู้มีส่วนร่วมในการต่อสู้
+        SandboxWorldSpawner.Instance?.RecordCampDamage(CampId, IsBoss, player, amount);
+
+        // หากเป็นบอส ให้กระจายตารางอันดับดาเมจล่าสุดไปยังทุกเครื่องเพื่อแสดงบน BossHudUI แบบเรียลไทม์
+        if (IsBoss && IsSpawned && Object != null && Object.IsValid && Object.HasStateAuthority)
+        {
+            BroadcastBossDamageBoard();
+        }
+    }
+
+    /// <summary>
+    /// ตัวช่วยทดสอบสำหรับ Play Mode: จำลองผู้เล่นคนที่ 2 ทำดาเมจใส่บอสพร้อมชื่อแสดงผลเพื่อตรวจสอบ Damage Meter หลายผู้เล่น
+    /// </summary>
+    public void RecordSimulatedBossDamageForTest(PlayerRef simulatedPlayer, string displayName, float amount)
+    {
+        if (!IsBoss || simulatedPlayer == PlayerRef.None || amount <= 0f) return;
+        if (!string.IsNullOrEmpty(displayName))
+            _simulatedNameOverrides[simulatedPlayer.RawEncoded] = displayName;
+        RecordPlayerDamage(simulatedPlayer, amount);
+    }
+
+    /// <summary>
+    /// บีบอัดตารางดาเมจบอสเป็นข้อความขนาดเล็ก ("raw:dmg;...") ไม่เกิน 62 ตัวอักษรแล้วส่งผ่าน RPC ไปยังทุกเครื่อง
+    /// </summary>
+    private void BroadcastBossDamageBoard()
+    {
+        if (_damageDealtMap.Count == 0)
+        {
+            RPC_SyncBossDamageBoard(default);
+            return;
+        }
+
+        var list = new List<KeyValuePair<PlayerRef, float>>(_damageDealtMap);
+        list.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+        var sb = new StringBuilder(64);
+        for (int i = 0; i < list.Count; i++)
+        {
+            int dmgInt = Mathf.Max(1, Mathf.RoundToInt(list[i].Value));
+            string token = $"{list[i].Key.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{dmgInt.ToString(CultureInfo.InvariantCulture)}";
+            int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
+            if (sb.Length + needed > 62) break;
+            if (sb.Length > 0) sb.Append(';');
+            sb.Append(token);
+        }
+
+        RPC_SyncBossDamageBoard(sb.ToString());
+    }
+
+    /// <summary>
+    /// รับข้อมูลตารางอันดับดาเมจของบอสบนทุกเครื่อง (Host และ Client) และแปลงเป็นรายการพร้อมชื่อผู้เล่น + % ดาเมจ
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_SyncBossDamageBoard(NetworkString<_64> payload)
+    {
+        _syncedBossDamageBoard.Clear();
+        string rawStr = payload.ToString();
+        if (string.IsNullOrEmpty(rawStr)) return;
+
+        var parsed = new List<(int rawEncoded, int dmg)>(6);
+        int totalDamage = 0;
+
+        string[] tokens = rawStr.Split(';');
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            if (string.IsNullOrEmpty(tokens[i])) continue;
+            string[] parts = tokens[i].Split(':');
+            if (parts.Length < 2) continue;
+            if (int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int rawEnc) &&
+                int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int dmg) &&
+                dmg > 0)
+            {
+                parsed.Add((rawEnc, dmg));
+                totalDamage += dmg;
+            }
+        }
+
+        if (totalDamage <= 0) return;
+
+        parsed.Sort((a, b) => b.dmg.CompareTo(a.dmg));
+        int localRaw = (Runner != null && Runner.IsRunning && Runner.LocalPlayer != PlayerRef.None)
+            ? Runner.LocalPlayer.RawEncoded
+            : -1;
+
+        for (int i = 0; i < parsed.Count; i++)
+        {
+            int rawEnc = parsed[i].rawEncoded;
+            int dmg = parsed[i].dmg;
+            _syncedBossDamageBoard.Add(new BossDamageEntry
+            {
+                playerRawEncoded = rawEnc,
+                playerName = ResolvePlayerDisplayName(rawEnc),
+                damageDealt = dmg,
+                damageShare = Mathf.Clamp01(dmg / (float)totalDamage),
+                isLocalPlayer = rawEnc == localRaw
+            });
+        }
+    }
+
+    /// <summary>
+    /// ค้นหาชื่อจริง (Nickname) ของผู้เล่นจาก PlayerRef RawEncoded เพื่อแสดงใน Damage Meter ของบอส
+    /// </summary>
+    private string ResolvePlayerDisplayName(int rawEncoded)
+    {
+        if (_simulatedNameOverrides.TryGetValue(rawEncoded, out string simName) && !string.IsNullOrEmpty(simName))
+            return simName;
+
+        PlayerRef pRef = PlayerRef.FromEncoded(rawEncoded);
+        for (int i = 0; i < PlayerCombat.All.Count; i++)
+        {
+            var pc = PlayerCombat.All[i];
+            if (pc == null || !pc.IsSpawned || pc.Object == null || !pc.Object.IsValid) continue;
+            if (pc.Object.StateAuthority == pRef || pc.Object.InputAuthority == pRef)
+            {
+                var cap = pc.GetComponent<PlayerCapsule>();
+                if (cap != null && !string.IsNullOrEmpty(cap.Nick.Value))
+                    return cap.Nick.Value;
+            }
+        }
+        return $"Player {pRef.PlayerId}";
     }
 
     /// <summary>
@@ -1068,21 +1785,93 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         return (source == PlayerRef.None || (Runner != null && source == Runner.LocalPlayer)) ? PlayerCombat.Local : null;
     }
 
+    /// <summary>
+    /// รับคำสั่งชะงัก/เสียหลัก (Stagger) จากผู้เล่นที่ทำ Perfect Parry สำเร็จ (ส่งข้ามเครื่องไปยัง State Authority ของศัตรู)
+    /// </summary>
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_ApplyParryStagger(float durationSeconds)
+    {
+        if (!IsSpawned || !Object.HasStateAuthority || !IsAlive) return;
+
+        float dur = Mathf.Clamp(durationSeconds, 0.25f, 3.0f);
+        if (_bossAttackRoutine != null)
+        {
+            StopCoroutine(_bossAttackRoutine);
+            _bossAttackRoutine = null;
+        }
+        _isTelegraphing = false;
+        StopNavAgent();
+
+        _staggerEndTime = Time.time + dur;
+        _nextAttackTime = Mathf.Max(_nextAttackTime, _staggerEndTime + 0.35f);
+        ChangeState(NpcState.Staggered, $"parried ({dur:0.00}s)");
+        RPC_PlayStaggerFx(dur);
+    }
+
+    /// <summary>
+    /// ซิงก์อนิเมชันและป้ายแจ้งเตือนเมื่อศัตรูติดสถานะ Stagger บนทุกเครื่อง
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_PlayStaggerFx(float durationSeconds)
+    {
+        if (animator != null)
+        {
+            if (_hasStaggerParam) animator.SetTrigger(StaggerTrigger);
+            if (_hasIsStaggeredParam) animator.SetBool(IsStaggeredParam, true);
+        }
+        Vector3 popupPos = LockPoint != null ? LockPoint.position + Vector3.up * 0.75f : transform.position + Vector3.up * 2.1f;
+        FloatingDamagePopup.SpawnWarning(popupPos, "STAGGERED!", new Color(1f, 0.84f, 0.18f, 1f));
+        Staggered?.Invoke(this, durationSeconds);
+    }
+
     private void Die(PlayerRef killer)
     {
         TargetId = default;
         if (_bossAttackRoutine != null) { StopCoroutine(_bossAttackRoutine); _bossAttackRoutine = null; }
         _isTelegraphing = false;
+        if (_navAgent != null) _navAgent.enabled = false;
         _deathTime = Time.time;
         ChangeState(NpcState.Dead, $"killed by {killer}");
 
-        // คำนวณส่วนแบ่งดาเมจและดรอปไอเทมส่วนตัว (Personal Instanced Loot) ให้ผู้เล่นทุกคนที่มีส่วนร่วม
+        // 1. ส่ง Targeted RPC สร้างไอเทมดรอปส่วนตัวแบบ Client-Local เฉพาะผู้ที่มีส่วนร่วมทำดาเมจ (damage > 0)
         SpawnPersonalInstancedLoot(killer);
+
+        // 2. ตรวจสอบฝั่ง State Authority ว่าการตายครั้งนี้ทำให้แคมป์หรือบอสถูกเคลียร์สมบูรณ์หรือไม่ เพื่อซิงก์สิทธิ์หีบสมบัติให้ทุกเครื่อง
+        NotifyCampClearIfLastSurvivor();
     }
 
     /// <summary>
-    /// สร้างไอเทมดรอปส่วนตัว (Personal Instanced Loot) แยกให้ผู้เล่นแต่ละคนที่มีส่วนร่วมทำดาเมจ
-    /// โดยใช้อัตราดรอปที่ถ่วงน้ำหนักตามสัดส่วนดาเมจ (Top DPS ได้โบนัสโอกาสออก Epic/Legendary สูงสุด)
+    /// ตรวจสอบว่าเป็นมอนสเตอร์ตัวสุดท้ายของแคมป์/บอสหรือไม่ หากใช่จะส่งรายชื่อผู้มีส่วนร่วมทำดาเมจทั้งหมดไปยังทุกเครื่องเพื่อสร้างหีบสมบัติแบบล็อกสิทธิ์
+    /// </summary>
+    private void NotifyCampClearIfLastSurvivor()
+    {
+        if (!Object.HasStateAuthority || SandboxWorldSpawner.Instance == null) return;
+
+        for (int i = 0; i < All.Count; i++)
+        {
+            EnemyNPC other = All[i];
+            if (other == null || other == this || !other.IsSpawned || !other.IsAlive) continue;
+            if (IsBoss)
+            {
+                if (other.IsBoss || other.CampId == SandboxWorldSpawner.BossCampId) return;
+            }
+            else if (!other.IsBoss && other.CampId == CampId)
+            {
+                return;
+            }
+        }
+
+        string payload = SandboxWorldSpawner.Instance.BuildCampContributorPayload(CampId, IsBoss);
+        Vector3 chestPos = IsBoss
+            ? SandboxWorldSpawner.Instance.BossArenaCenter + new Vector3(0f, 0f, 2.2f)
+            : SandboxWorldSpawner.Instance.GetCampCenter(CampId);
+
+        RPC_NotifyCampCleared(CampId, IsBoss, chestPos, payload);
+    }
+
+    /// <summary>
+    /// ส่ง Targeted RPC (Rpc_SpawnLocalLoot) ไปยังผู้เล่นแต่ละคนที่มีส่วนร่วมทำดาเมจ (damage > 0) เท่านั้น
+    /// เพื่อให้แต่ละเครื่องสร้างไอเทมตกแบบ Client-Local บนจอตัวเอง 100% (ไม่มี Ghost Object บนจอคนอื่น)
     /// </summary>
     private void SpawnPersonalInstancedLoot(PlayerRef fallbackKiller)
     {
@@ -1093,77 +1882,117 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             out PlayerRef topDpsPlayer,
             out List<PlayerRef> participants);
 
-        WorldItem prefabToUse = lootPrefab;
-        if (prefabToUse == null && InventoryManager.Local != null)
-            prefabToUse = InventoryManager.Local.WorldItemPrefab;
+        if (Runner == null || !Runner.IsRunning) return;
 
         for (int i = 0; i < participants.Count; i++)
         {
             PlayerRef participant = participants[i];
+            if (participant == PlayerRef.None) continue;
+
             float dealt = _damageDealtMap.TryGetValue(participant, out float d) ? d : totalDamage;
+            if (dealt <= 0f) continue;
+
             float share = totalDamage > 0f ? Mathf.Clamp01(dealt / totalDamage) : 1f;
             bool isTopDps = participant == topDpsPlayer;
 
-            // สุ่มไอเทมส่วนตัวตามสัดส่วนดาเมจของผู้เล่นคนนี้
-            ItemData rolledItem = LootDropSystem.RollDamageWeightedLoot(
-                IsBoss,
-                share,
-                isTopDps,
-                out ItemTier rolledTier,
-                out LootDropSystem.WeightedTierOdds odds);
+            // ตรวจสอบโอกาสดรอปไอเทมสำหรับมอนสเตอร์ทั่วไป (~26%–34% ตามสัดส่วนดาเมจ ส่วนบอสการันตีดรอปเสมอ)
+            // แม้ไม่ดรอปไอเทม ผู้เล่นทุกคนที่ร่วมสู้ยังคงได้รับ EXP ตามปกติ
+            ItemData rolledItem = null;
+            ItemTier rolledTier = ItemTier.Normal;
+            LootDropSystem.WeightedTierOdds odds = default;
+            bool shouldDropItem = IsBoss || LootDropSystem.RollNormalEnemyShouldDrop(share, isTopDps);
 
-            if (rolledItem != null && prefabToUse != null && Runner != null && Runner.IsRunning)
+            if (shouldDropItem)
             {
-                Vector2 offset2D = UnityEngine.Random.insideUnitCircle * 1.15f;
-                Vector3 dropPos = new Vector3(transform.position.x + offset2D.x, 0.4f, transform.position.z + offset2D.y);
-
-                WorldItem.Spawn(
-                    Runner,
-                    prefabToUse,
-                    dropPos,
-                    rolledItem,
-                    1,
-                    allowedLooter: participant,
-                    isPlayerDropped: false,
-                    enhancementLevel: 0);
-
-                Debug.Log($"[PersonalLoot] {name} dropped personal [{ItemData.GetTierDisplayName(rolledTier)}] '{rolledItem.displayName}' for {participant} (Share={share * 100f:0}%, TopDPS={isTopDps}, EpicOdds={odds.epicChance * 100f:0.0}%, LegOdds={odds.legendaryChance * 100f:0.0}%).");
+                rolledItem = LootDropSystem.RollDamageWeightedLoot(
+                    IsBoss,
+                    share,
+                    isTopDps,
+                    out rolledTier,
+                    out odds,
+                    isChest: false);
             }
 
-            // มอบค่าประสบการณ์ (EXP) ให้ผู้เล่นทุกคนที่มีส่วนร่วม
+            Vector2 offset2D = UnityEngine.Random.insideUnitCircle * 1.15f;
+            Vector3 dropPos = new Vector3(transform.position.x + offset2D.x, 0.4f, transform.position.z + offset2D.y);
             int expShare = Mathf.Max(10, Mathf.RoundToInt(experienceReward * Mathf.Lerp(0.6f, 1.0f, share)));
-            RPC_AwardParticipantReward(participant, expShare, share, isTopDps, rolledItem != null ? rolledItem.displayName : "");
+            string itemId = rolledItem != null ? rolledItem.itemId : "";
+
+            // ส่ง Targeted RPC เฉพาะเจาะจงไปยัง PlayerRef เจ้าของสิทธิ์เท่านั้น
+            Rpc_SpawnLocalLoot(participant, itemId, 1, 0, dropPos, expShare, share, isTopDps);
+
+            if (rolledItem != null)
+            {
+                Debug.Log($"[PersonalLoot] Sent targeted client-local drop [{ItemData.GetTierDisplayName(rolledTier)}] '{rolledItem.displayName}' to {participant} (Share={share * 100f:0}%, TopDPS={isTopDps}, EpicOdds={odds.epicChance * 100f:0.0}%, LegOdds={odds.legendaryChance * 100f:0.0}%).");
+            }
+            else
+            {
+                Debug.Log($"[PersonalLoot] Normal enemy no-item roll (DropRate={LootDropSystem.GetNormalEnemyDropChance(share, isTopDps) * 100f:0}%) -> Granted +{expShare} EXP only to {participant} (Share={share * 100f:0}%).");
+            }
         }
     }
 
-    // ------------------------------------------------------------------ Network RPCs สำหรับแสดงผลทุกเครื่อง
+    // ------------------------------------------------------------------ Network RPCs สำหรับ Personal Loot และ Camp Clear
 
+    /// <summary>
+    /// Targeted RPC ส่งตรงเฉพาะผู้เล่นที่มีส่วนร่วมทำดาเมจเท่านั้น เพื่อสร้าง LocalPersonalLoot แบบ Client-Local และมอบ EXP
+    /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_AwardParticipantReward(PlayerRef recipient, int expAmount, float damageShare, NetworkBool isTopDps, string droppedItemName)
+    public void Rpc_SpawnLocalLoot(
+        [RpcTarget] PlayerRef targetPlayer,
+        NetworkString<_32> itemId,
+        int quantity,
+        int enhancementLevel,
+        Vector3 dropPos,
+        int expAmount,
+        float damageShare,
+        NetworkBool isTopDps)
     {
         if (Runner == null) return;
-        if (Runner.LocalPlayer == recipient || recipient == PlayerRef.None)
+        if (targetPlayer != PlayerRef.None && Runner.LocalPlayer != targetPlayer) return;
+
+        string idStr = itemId.ToString();
+        ItemData itemData = !string.IsNullOrEmpty(idStr) ? ItemRegistry.Get(idStr) : null;
+        if (itemData != null)
+        {
+            string sourceTag = IsBoss ? "Boss Personal Loot" : "Personal Loot";
+            LocalPersonalLoot.SpawnLocal(dropPos, itemData, Mathf.Max(1, quantity), Mathf.Max(0, enhancementLevel), LocalPersonalLoot.DefaultLifetimeSeconds, sourceTag);
+        }
+
+        if (expAmount > 0)
         {
             if (InventoryManager.Local != null) InventoryManager.Local.AddExperience(expAmount);
             else if (PlayerCombat.Local != null) PlayerCombat.Local.AddExperience(expAmount);
-
-            string rankTag = isTopDps ? "TOP DPS ★" : $"{damageShare * 100f:0}% DMG";
-            if (!string.IsNullOrEmpty(droppedItemName))
-            {
-                PlayerStatusHud.Instance?.ShowToast($"{rankTag} Personal Drop: {droppedItemName} (+{expAmount} EXP)",
-                    isTopDps ? new Color(1f, 0.84f, 0.22f) : new Color(0.45f, 0.90f, 1f), 3.0f);
-            }
         }
 
-        if (animator != null) animator.SetTrigger(DieTrigger);
-        onDeath?.Invoke();
+        string rankTag = isTopDps ? "TOP DPS ★" : $"{damageShare * 100f:0}% DMG";
+        if (itemData != null)
+        {
+            PlayerStatusHud.Instance?.ShowToast($"{rankTag} Personal Drop: {itemData.displayName} (+{expAmount} EXP)",
+                isTopDps ? new Color(1f, 0.84f, 0.22f) : new Color(0.45f, 0.90f, 1f), 3.0f);
+        }
+        else if (expAmount > 0)
+        {
+            PlayerStatusHud.Instance?.ShowToast($"{rankTag} +{expAmount} EXP", new Color(0.45f, 0.90f, 1f), 2.5f);
+        }
+    }
+
+    /// <summary>
+    /// กระจายผลสรุปการเคลียร์แคมป์/บอสพร้อมรายชื่อผู้ร่วมทำดาเมจจาก State Authority ไปยังทุกเครื่องเพื่อสร้างและล็อกสิทธิ์ LootChest
+    /// ใช้ NetworkString&lt;_64&gt; เพื่อให้ขนาด Payload รวมต่ำกว่าขีดจำกัด 512 ไบต์ของ Photon Fusion 2 RPC เสมอ
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_NotifyCampCleared(int clearedCampId, NetworkBool isBossCamp, Vector3 chestPos, NetworkString<_64> contributorPayload)
+    {
+        SandboxWorldSpawner.Instance?.HandleAuthoritativeCampCleared(clearedCampId, isBossCamp, chestPos, contributorPayload.ToString());
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_HitFeedback(int damage, NetworkBool isCrit, int comboStep, PlayerRef attacker)
     {
-        if (animator != null) animator.SetTrigger(HitTrigger);
+        if (animator != null && _hasHitParam) animator.SetTrigger(HitTrigger);
         onHit?.Invoke();
+        Damaged?.Invoke(this, damage, isCrit);
         if (!_flashing && gameObject.activeInHierarchy) StartCoroutine(FlashRoutine());
 
         FloatingDamagePopup.Spawn(LockPoint != null ? LockPoint.position : transform.position + Vector3.up * 1.4f, damage, isCrit, comboStep);
@@ -1173,15 +2002,29 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_PlayAttackFx()
     {
-        if (animator != null) animator.SetTrigger(AttackTrigger);
+        if (animator != null && _hasAttackParam) animator.SetTrigger(AttackTrigger);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_BossTelegraph(byte patternByte, Vector3 centerPos, Vector3 dir, float duration)
     {
         if (!gameObject.activeInHierarchy) return;
-        if (animator != null) animator.SetTrigger(AttackTrigger);
-        StartCoroutine(TelegraphVisualRoutine((BossAttackPattern)patternByte, centerPos, dir, duration));
+        BossAttackPattern pattern = (BossAttackPattern)patternByte;
+        if (animator != null)
+        {
+            // สั่งเล่นอนิเมชันเฉพาะของแต่ละท่าบอสใน BossGolemAnimator (ถ้ามี) หรือ Fallback ไป Trigger ทั่วไป
+            if (pattern == BossAttackPattern.HeavyCleave && _hasHeavyCleaveParam)
+                animator.SetTrigger(HeavyCleaveTrigger);
+            else if (pattern == BossAttackPattern.ShockwaveSpinAoE && _hasShockwaveSpinParam)
+                animator.SetTrigger(ShockwaveSpinTrigger);
+            else if (pattern == BossAttackPattern.DarkVolleyAndCharge && _hasDarkVolleyParam)
+                animator.SetTrigger(DarkVolleyTrigger);
+            else if (_hasTelegraphParam)
+                animator.SetTrigger(TelegraphTrigger);
+            else if (_hasAttackParam)
+                animator.SetTrigger(AttackTrigger);
+        }
+        StartCoroutine(TelegraphVisualRoutine(pattern, centerPos, dir, duration));
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
@@ -1204,6 +2047,16 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private IEnumerator TelegraphVisualRoutine(BossAttackPattern pattern, Vector3 centerPos, Vector3 dir, float duration)
     {
+        string castName = pattern switch
+        {
+            BossAttackPattern.HeavyCleave => "Heavy Cleave",
+            BossAttackPattern.ShockwaveSpinAoE => "360° Shockwave",
+            _ => "Dark Volley"
+        };
+        ActiveTelegraphName = castName;
+        ActiveTelegraphDuration = Mathf.Max(0.05f, duration);
+        ActiveTelegraphEndTime = Time.time + ActiveTelegraphDuration;
+
         string warnText = pattern switch
         {
             BossAttackPattern.HeavyCleave => "! HEAVY CLEAVE !",
@@ -1225,15 +2078,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         disc.transform.position = targetPos;
         disc.transform.localScale = new Vector3(0.5f, 0.02f, 0.5f);
 
-        var r = disc.GetComponent<Renderer>();
-        if (r != null)
-        {
-            var mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(mpb);
-            mpb.SetColor(BaseColorId, new Color(1f, 0.16f, 0.08f, 0.65f));
-            mpb.SetColor(ColorId, new Color(1f, 0.16f, 0.08f, 0.65f));
-            r.SetPropertyBlock(mpb);
-        }
+        // ใช้ URP Unlit Transparent ถาวรสำหรับวงแจ้งเตือนท่าบอส (ป้องกันสีชมพูใน Standalone Build)
+        UrpMaterialHelper.ApplyTransparentColor(disc.GetComponent<Renderer>(), new Color(1f, 0.16f, 0.08f, 0.55f));
 
         float t = 0f;
         while (t < duration && disc != null)
@@ -1253,15 +2099,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         var col = ring.GetComponent<Collider>();
         if (col != null) Destroy(col);
         ring.transform.position = new Vector3(centerPos.x, 0.10f, centerPos.z);
-        var r = ring.GetComponent<Renderer>();
-        if (r != null)
-        {
-            var mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(mpb);
-            mpb.SetColor(BaseColorId, new Color(1f, 0.48f, 0.10f, 0.85f));
-            mpb.SetColor(ColorId, new Color(1f, 0.48f, 0.10f, 0.85f));
-            r.SetPropertyBlock(mpb);
-        }
+        UrpMaterialHelper.ApplyTransparentColor(ring.GetComponent<Renderer>(), new Color(1f, 0.48f, 0.10f, 0.72f));
 
         float elapsed = 0f;
         while (elapsed < 0.30f && ring != null)
@@ -1280,7 +2118,15 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         SetColor(Color.white);
         yield return new WaitForSeconds(0.1f);
         _flashing = false;
-        RefreshVisuals();
+        if (hasRiggedModel && bodyRenderer != null)
+        {
+            // คืนค่า Material URP เดิมของโมเดล 3D Golem โดยไม่ทาสีทับพื้นผิว
+            bodyRenderer.SetPropertyBlock(null);
+        }
+        else
+        {
+            RefreshVisuals();
+        }
     }
 
     private void OnHealthChanged() { }
@@ -1288,6 +2134,21 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private void OnStateChanged()
     {
         if (!IsSpawned) return;
+        if (State == NpcState.Dead && !_deathAnimPlayed)
+        {
+            _deathAnimPlayed = true;
+            if (animator != null)
+            {
+                if (_hasIsDeadParam) animator.SetBool(IsDeadParam, true);
+                if (_hasDieParam) animator.SetTrigger(DieTrigger);
+            }
+            onDeath?.Invoke();
+            Died?.Invoke(this);
+        }
+        if (animator != null && _hasIsStaggeredParam)
+        {
+            animator.SetBool(IsStaggeredParam, State == NpcState.Staggered);
+        }
         RefreshVisuals();
     }
 
@@ -1296,9 +2157,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         bool dead = State == NpcState.Dead;
         if (BodyCollider != null) BodyCollider.enabled = !dead;
 
+        // สำหรับโมเดล 3D จริง (เช่น Boss Golem) ให้รักษาสีและ Texture URP เดิมเอาไว้
+        if (hasRiggedModel) return;
+
         if (IsBoss)
         {
             SetColor(dead ? new Color(0.22f, 0.18f, 0.20f)
+                : State == NpcState.Staggered ? new Color(1.0f, 0.85f, 0.18f)
                 : State == NpcState.Attacking ? new Color(1.0f, 0.15f, 0.08f)
                 : State == NpcState.Chasing ? new Color(0.88f, 0.12f, 0.22f)
                 : new Color(0.62f, 0.08f, 0.18f));
@@ -1306,6 +2171,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         else
         {
             SetColor(dead ? new Color(0.35f, 0.35f, 0.35f)
+                : State == NpcState.Staggered ? new Color(1.0f, 0.85f, 0.18f)
                 : State == NpcState.Attacking ? new Color(0.95f, 0.2f, 0.2f)
                 : State == NpcState.Chasing ? new Color(0.95f, 0.55f, 0.15f)
                 : State == NpcState.Returning ? new Color(0.4f, 0.7f, 0.95f)
@@ -1316,6 +2182,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private void SetColor(Color c)
     {
         if (bodyRenderer == null) return;
+        UrpMaterialHelper.EnsureValidUrpMaterial(bodyRenderer);
         bodyRenderer.GetPropertyBlock(_mpb);
         _mpb.SetColor(BaseColorId, c);
         _mpb.SetColor(ColorId, c);
@@ -1331,15 +2198,40 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         var cam = Camera.main;
         if (cam == null) return;
 
-        float topOffset = IsBoss ? 2.8f : 1.5f;
+        float topOffset = hasRiggedModel ? riggedOverheadBarHeight : (IsBoss ? 2.8f : 1.5f);
         Vector3 sp = cam.WorldToScreenPoint(transform.position + Vector3.up * topOffset);
         if (sp.z <= 0f || sp.z > (IsBoss ? 48f : 32f)) return;
 
-        float w = IsBoss ? 148f : 72f;
-        float h = IsBoss ? 11f : 7f;
+        // สำหรับบอส: เมื่อ Top-Center BossHudUI แสดงผลอยู่แล้ว ไม่ต้องวาดหลอดเลือดลอยซ้อนบนหัวบอส (แสดงเฉพาะป้าย Staggered ถ้าติด Stagger)
+        if (IsBoss && BossHudUI.IsDisplayingBoss(this))
+        {
+            if (State == NpcState.Staggered)
+            {
+                var prevCol = GUI.color;
+                float sy = Screen.height - sp.y;
+                var stagStyle = new GUIStyle(GUI.skin.label)
+                {
+                    alignment = TextAnchor.MiddleCenter,
+                    fontSize = 12,
+                    fontStyle = FontStyle.Bold,
+                    wordWrap = false
+                };
+                GUI.color = new Color(0.14f, 0.08f, 0.0f, 0.85f);
+                Rect stagBox = new Rect(sp.x - 108f, sy - 16f, 216f, 22f);
+                GUI.DrawTexture(stagBox, Texture2D.whiteTexture);
+                GUI.color = new Color(1f, 0.88f, 0.20f, 1f);
+                GUI.Label(stagBox, "STAGGERED (COUNTER 1.25x)", stagStyle);
+                GUI.color = prevCol;
+            }
+            return;
+        }
+
+        int displayMaxHp = Mathf.Max(1, ScaledMaxHealth);
+        float w = IsBoss ? 168f : 72f;
+        float h = IsBoss ? 10f : 7f;
         float x = sp.x - w * 0.5f;
         float y = Screen.height - sp.y - h * 0.5f;
-        float frac = Mathf.Clamp01(CurrentHealth / (float)Mathf.Max(1, MaxHealth));
+        float frac = Mathf.Clamp01(CurrentHealth / (float)displayMaxHp);
 
         var prev = GUI.color;
         GUI.color = new Color(0f, 0f, 0f, 0.75f);
@@ -1353,11 +2245,29 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         {
             alignment = TextAnchor.MiddleCenter,
             fontSize = IsBoss ? 12 : 10,
-            fontStyle = FontStyle.Bold
+            fontStyle = FontStyle.Bold,
+            wordWrap = false
         };
-        GUI.color = IsBoss ? new Color(1f, 0.85f, 0.25f) : new Color(0.92f, 0.94f, 0.98f);
-        string title = IsBoss ? $"★ Lv.{ScaledLevel} BOSS Sovereign Golem ({CurrentHealth}/{MaxHealth})" : $"Lv.{ScaledLevel}";
-        GUI.Label(new Rect(sp.x - 110f, y - 18f, 220f, 18f), title, labelStyle);
+        string title = IsBoss ? $"Lv.{ScaledLevel} Sovereign Golem" : $"Lv.{ScaledLevel}";
+        float titleW = IsBoss ? 220f : 120f;
+        Rect titleRect = new Rect(sp.x - titleW * 0.5f, y - 22f, titleW, 20f);
+        if (IsBoss)
+        {
+            GUI.color = new Color(0.05f, 0.04f, 0.06f, 0.72f);
+            GUI.DrawTexture(titleRect, Texture2D.whiteTexture);
+        }
+        GUI.color = IsBoss ? new Color(1f, 0.88f, 0.28f) : new Color(0.92f, 0.94f, 0.98f);
+        GUI.Label(titleRect, title, labelStyle);
+
+        // แสดงป้ายแจ้งเตือนสถานะ Stagger เมื่อถูก Perfect Parry
+        if (State == NpcState.Staggered)
+        {
+            GUI.color = new Color(0.14f, 0.08f, 0.0f, 0.85f);
+            Rect stagRect = new Rect(sp.x - 88f, y - 39f, 176f, 20f);
+            GUI.DrawTexture(stagRect, Texture2D.whiteTexture);
+            GUI.color = new Color(1f, 0.88f, 0.20f, 1f);
+            GUI.Label(stagRect, "★ STAGGERED (COUNTER 1.25x)", labelStyle);
+        }
 
         // แสดงป้ายแจ้งเตือนเมื่อผู้เล่นย่องเข้าด้านหลังในระยะลอบสังหาร (Stealth Assassination Prompt)
         var local = PlayerCombat.Local;
@@ -1371,6 +2281,20 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
 
         GUI.color = prev;
+    }
+
+    /// <summary>
+    /// วาดเส้นขอบเขตโซนลาดตระเวนส่วนตัว (สีฟ้า), ระยะตรวจจับ (สีเหลือง), และระยะ Leash กลับบ้าน (สีแดง) ในหน้าต่าง Scene View
+    /// </summary>
+    private void OnDrawGizmosSelected()
+    {
+        Vector3 anchor = PersonalZoneAnchor;
+        Gizmos.color = new Color(0.20f, 0.85f, 1.0f, 0.75f);
+        Gizmos.DrawWireSphere(anchor, PatrolRadius);
+        Gizmos.color = new Color(1.0f, 0.85f, 0.20f, 0.45f);
+        Gizmos.DrawWireSphere(transform.position, aggroRadius);
+        Gizmos.color = new Color(1.0f, 0.25f, 0.20f, 0.25f);
+        Gizmos.DrawWireSphere(anchor, leashRadius);
     }
 }
 
@@ -1394,16 +2318,8 @@ public sealed class BossDarkProjectile : MonoBehaviour
         orb.transform.position = origin;
         orb.transform.localScale = new Vector3(0.58f, 0.58f, 0.58f);
 
-        var r = orb.GetComponent<Renderer>();
-        if (r != null)
-        {
-            var mpb = new MaterialPropertyBlock();
-            r.GetPropertyBlock(mpb);
-            Color darkPurple = new Color(0.75f, 0.14f, 0.95f, 1f);
-            mpb.SetColor("_BaseColor", darkPurple);
-            mpb.SetColor("_Color", darkPurple);
-            r.SetPropertyBlock(mpb);
-        }
+        // ใช้ URP Unlit ถาวรสำหรับลูกไฟพลังงานมืดของบอส (ไม่เป็นสีชมพูใน Standalone Build)
+        UrpMaterialHelper.ApplyUnlitColor(orb.GetComponent<Renderer>(), new Color(0.75f, 0.14f, 0.95f, 1f));
 
         var proj = orb.AddComponent<BossDarkProjectile>();
         proj._owner = owner;

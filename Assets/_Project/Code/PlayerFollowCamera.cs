@@ -64,6 +64,17 @@ public class PlayerFollowCamera : MonoBehaviour
     public LayerMask collisionMask = ~0;
     public float zoomOutSpeed = 6f;
 
+    [Header("Combat Camera Shake (แรงสั่นกล้องขณะต่อสู้)")]
+    // ความถี่การสั่นของกล้อง (ยิ่งสูงยิ่งสั่นถี่ให้ความรู้สึกปะทะรุนแรง)
+    [SerializeField] private float shakeFrequency = 28f;
+    // ระยะเยื้องตำแหน่งสูงสุดของแรงสั่นกล้อง (เมตร)
+    [SerializeField] private float maxShakeOffset = 0.45f;
+    // มุมเอียงแกน Z สูงสุดขณะกล้องสั่น (องศา)
+    [SerializeField] private float maxShakeRollDegrees = 2.5f;
+
+    // อ้างอิงกล้องหลักที่กำลังทำงานอยู่ เพื่อให้ระบบต่อสู้เรียกสั่งสั่นกล้องได้ทันที
+    public static PlayerFollowCamera Active { get; private set; }
+
     public bool LookEnabled { get; set; } = true;
 
     public CameraMode Mode
@@ -86,7 +97,48 @@ public class PlayerFollowCamera : MonoBehaviour
     private Transform _boundTarget;
     private readonly RaycastHit[] _hits = new RaycastHit[8];
 
+    // ตัวแปรภายในสำหรับระบบสั่นกล้อง (ลบค่าเยื้องเดิมออกก่อนคำนวณเฟรมถัดไปเพื่อป้องกันกล้องไหล)
+    private float _shakeIntensity;
+    private float _shakeDuration;
+    private float _shakeRemaining;
+    private float _shakeSeed;
+    private Vector3 _lastAppliedShakeOffset;
+
     // ------------------------------------------------------------------ public API
+
+    /// <summary>
+    /// สั่งสั่นกล้องบนกล้องที่ใช้งานอยู่ปัจจุบัน (ใช้เรียกจากระบบต่อสู้, Parry หรือบอส)
+    /// </summary>
+    public static void ShakeActive(float intensity, float duration)
+    {
+        if (Active != null)
+            Active.TriggerShake(intensity, duration);
+    }
+
+    /// <summary>
+    /// สั่งสั่นกล้องด้วยความแรงและระยะเวลาที่กำหนด พร้อมลดทอนความแรงลงอย่างนุ่มนวล
+    /// </summary>
+    public void TriggerShake(float intensity, float duration)
+    {
+        if (intensity <= 0f || duration <= 0f) return;
+
+        float currentEffective = _shakeRemaining > 0f && _shakeDuration > 0.001f
+            ? _shakeIntensity * (_shakeRemaining / _shakeDuration)
+            : 0f;
+
+        if (intensity >= currentEffective)
+        {
+            _shakeIntensity = Mathf.Clamp01(intensity);
+            _shakeDuration = Mathf.Max(0.03f, duration);
+            _shakeRemaining = _shakeDuration;
+            _shakeSeed = Random.Range(0f, 999f);
+        }
+        else
+        {
+            // หากมีแรงสั่นเดิมที่แรงกว่าอยู่ ให้ยืดเวลาเล็กน้อยโดยไม่ลดความแรงเดิม
+            _shakeRemaining = Mathf.Max(_shakeRemaining, duration * 0.6f);
+        }
+    }
 
     /// <summary>Enter (non-null) or leave (null) Target-Lock mode.</summary>
     public void SetLockTarget(Transform lockTarget)
@@ -102,8 +154,20 @@ public class PlayerFollowCamera : MonoBehaviour
 
     // ------------------------------------------------------------------ unity
 
+    private void OnEnable()
+    {
+        Active = this;
+    }
+
     private void OnDisable()
     {
+        if (Active == this) Active = null;
+        if (_lastAppliedShakeOffset != Vector3.zero)
+        {
+            transform.position -= _lastAppliedShakeOffset;
+            _lastAppliedShakeOffset = Vector3.zero;
+        }
+        _shakeRemaining = 0f;
         ReleaseCursor();
         UnbindCapsule();
     }
@@ -112,18 +176,53 @@ public class PlayerFollowCamera : MonoBehaviour
     {
         if (target == null) return;
 
+        // ล้างค่าเยื้องจากแรงสั่นเฟรมก่อนออกก่อนคำนวณตำแหน่งกล้องใหม่ (ป้องกันการไหลในโหมด Legacy / Tactical)
+        if (_lastAppliedShakeOffset != Vector3.zero)
+        {
+            transform.position -= _lastAppliedShakeOffset;
+            _lastAppliedShakeOffset = Vector3.zero;
+        }
+
         if (!useActionCamera)
         {
             ReleaseCursor();
             UnbindCapsule();
             LegacyUpdate();
+            ApplyCameraShake(Time.unscaledDeltaTime);
             return;
         }
 
         BindCapsule();
         UpdateCursor();
         ActionUpdate();
+        ApplyCameraShake(Time.unscaledDeltaTime);
         LogModeIfChanged();
+    }
+
+    /// <summary>
+    /// ประมวลผลแรงสั่นของกล้องแบบ Perlin Noise และลดความแรงลงตามเวลาจริง (unscaledDeltaTime)
+    /// </summary>
+    private void ApplyCameraShake(float dt)
+    {
+        if (_shakeRemaining <= 0f || _shakeDuration <= 0.001f) return;
+
+        _shakeRemaining = Mathf.Max(0f, _shakeRemaining - dt);
+        float progress = _shakeRemaining / _shakeDuration;
+        float damper = progress * progress; // ลดทอนแบบโค้งกำลังสองให้นุ่มนวลตอนจบ
+        float strength = _shakeIntensity * damper;
+
+        float t = Time.unscaledTime * shakeFrequency + _shakeSeed;
+        float nx = (Mathf.PerlinNoise(t, 0.37f) - 0.5f) * 2f;
+        float ny = (Mathf.PerlinNoise(0.73f, t) - 0.5f) * 2f;
+        float nz = (Mathf.PerlinNoise(t * 0.7f, t * 0.7f) - 0.5f) * 2f;
+
+        Vector3 offsetLocal = new Vector3(nx, ny, 0f) * (strength * maxShakeOffset);
+        Vector3 worldOffset = transform.rotation * offsetLocal;
+        transform.position += worldOffset;
+        _lastAppliedShakeOffset = worldOffset;
+
+        float roll = nz * strength * maxShakeRollDegrees;
+        transform.rotation = transform.rotation * Quaternion.Euler(0f, 0f, roll);
     }
 
     // ------------------------------------------------------------------ legacy

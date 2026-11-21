@@ -25,8 +25,6 @@ public class SafeZone : MonoBehaviour
 
     public event Action<bool> LocalPlayerSafeZoneChanged;
 
-    private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
-    private static readonly int ColorId = Shader.PropertyToID("_Color");
     private TextMeshPro _worldSign;
 
     public static SafeZone EnsureAt(Vector3 position, float zoneRadius = 7.5f)
@@ -120,7 +118,8 @@ public class SafeZone : MonoBehaviour
             crystal.transform.localPosition = new Vector3(0f, 0.62f, 0f);
             crystal.transform.localScale = new Vector3(0.55f, 0.25f, 0.55f);
             crystal.transform.localRotation = Quaternion.Euler(0f, 45f, 0f);
-            Tint(crystal.GetComponent<Renderer>(), rimColor);
+            // ใช้ URP Unlit ถาวรสำหรับคริสตัลตะเกียงเรืองแสง เพื่อไม่ให้กลายเป็นสีชมพูใน Standalone Build
+            UrpMaterialHelper.ApplyUnlitColor(crystal.GetComponent<Renderer>(), rimColor);
         }
 
         // Warm Sanctuary Light
@@ -145,14 +144,12 @@ public class SafeZone : MonoBehaviour
         _worldSign.textWrappingMode = TextWrappingModes.NoWrap;
     }
 
+    /// <summary>
+    /// ทาสีพื้นและเสา Comfort Zone ผ่าน UrpMaterialHelper เพื่อให้ผูกกับ URP Lit Material ถาวรเสมอ (แก้ปัญหาสีชมพูตอน Build)
+    /// </summary>
     private static void Tint(Renderer r, Color c)
     {
-        if (r == null) return;
-        var mpb = new MaterialPropertyBlock();
-        r.GetPropertyBlock(mpb);
-        mpb.SetColor(BaseColorId, c);
-        mpb.SetColor(ColorId, c);
-        r.SetPropertyBlock(mpb);
+        UrpMaterialHelper.ApplyLitColor(r, c);
     }
 
     private void Update()

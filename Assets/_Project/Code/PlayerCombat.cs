@@ -66,6 +66,24 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     [Min(0.1f)] [SerializeField] private float dodgeDuration = 0.45f;
     [Min(0.5f)] [SerializeField] private float dodgeDistance = 4.2f;
 
+    [Header("Timed Parry (ปัดป้องสมบูรณ์ / Perfect Block)")]
+    // หน้าต่างเวลาหลังจากกดเริ่มตั้งการ์ดที่จะนับเป็น Perfect Parry (รับดาเมจ 0 + ศัตรูติด Stagger)
+    [Range(0.05f, 0.50f)] [SerializeField] private float parryWindowSeconds = 0.25f;
+    // คูลดาวน์ขั้นต่ำระหว่างการเปิดหน้าต่าง Parry แต่ละครั้ง เพื่อป้องกันการกดย้ำปุ่มบล็อกรัวๆ
+    [Range(0.10f, 1.50f)] [SerializeField] private float parryCooldownSeconds = 0.45f;
+    // ระยะเวลาที่มอนสเตอร์ทั่วไปจะติดสถานะ Stagger เมื่อถูก Perfect Parry
+    [Range(0.3f, 3.0f)] [SerializeField] private float parryEnemyStaggerDuration = 1.45f;
+    // ระยะเวลาที่บอสจะติดสถานะ Stagger เมื่อถูก Perfect Parry ในระยะประชิด
+    [Range(0.2f, 2.0f)] [SerializeField] private float parryBossStaggerDuration = 0.70f;
+    // โบนัส Stamina ที่คืนให้เมื่อปัดป้องสมบูรณ์สำเร็จ
+    [Min(0f)] [SerializeField] private float parryStaminaReward = 12f;
+
+    [Header("Combat Feel (Hit-Stop & Camera Shake)")]
+    // เปิด/ปิดการชะลอภาพอนิเมชันชั่วคราว (Micro Hit-Stop) เฉพาะฝั่งผู้เล่นเมื่อฟันโดนหรือ Parry สำเร็จ
+    [SerializeField] private bool enableCombatHitStop = true;
+    // เปิด/ปิดแรงสั่นกล้องตามน้ำหนักการปะทะ
+    [SerializeField] private bool enableCameraShake = true;
+
     [Header("Stamina")]
     [Min(10f)] [SerializeField] private float maxStamina = DefaultMaxStamina;
     [Min(1f)] [SerializeField] private float sprintStaminaPerSecond = 15f;
@@ -95,7 +113,9 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     [SerializeField] private float respawnDelaySeconds = 3f;
 
     [Header("Debug")]
+#pragma warning disable CS0414
     [SerializeField] private bool showDebugHud = false;
+#pragma warning restore CS0414
 
     [Header("Events (all peers)")]
     public UnityEvent onAttackStarted;
@@ -113,6 +133,12 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     /// <summary>Replicated blocking stance.</summary>
     [Networked, OnChangedRender(nameof(OnBlockingChanged))]
     public NetworkBool IsBlocking { get; set; }
+
+    /// <summary>
+    /// สถานะชักดาบ/เก็บดาบที่ซิงก์ผ่าน Photon Fusion ไปยังทุกเครื่องในห้อง (true = ถือดาบพร้อมสู้, false = เก็บดาบไว้กลางหลังในโหมดสำรวจ)
+    /// </summary>
+    [Networked, OnChangedRender(nameof(OnWeaponDrawnChanged))]
+    public NetworkBool IsWeaponDrawn { get; set; }
 
     /// <summary>Replicated current combo step (1..3).</summary>
     [Networked]
@@ -203,14 +229,23 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
     public float CurrentStamina => _isSpawned ? NetworkStamina : maxStamina;
     public bool CanSprint => !IsDead && CurrentStamina > 0.5f && !_sprintExhaustedCooldown;
-    public bool CanAttack => !IsDead && !IsInSafeZone && !SafeZone.IsPointInAnySafeZone(transform.position) && CurrentStamina > 0f;
+    // ต้องชักดาบออกมาก่อน (IsWeaponDrawn) และอยู่นอกเขตปลอดภัยจึงจะโจมตีได้
+    public bool CanAttack => !IsDead && IsWeaponDrawn && !IsInSafeZone && !SafeZone.IsPointInAnySafeZone(transform.position) && CurrentStamina > 0f;
     public bool CanDodge => !IsDead && CurrentStamina > 0f;
+    // ข้อความแจ้งเตือนเมื่อผู้เล่นพยายามโจมตีหรือป้องกันขณะยังเก็บดาบอยู่กลางหลัง
+    public const string DrawWeaponPromptMessage = "Press [1] to Draw Weapon";
     public bool IsDead => _isSpawned && NetworkHealth <= 0;
     public bool IsHitWindowOpen { get; private set; }
     public bool IsDodging => Time.time < _dodgeInvulnerableUntil;
     public Collider WeaponHitbox => weaponHitbox;
     public GameObject BlockVfxObject => _blockVfxRoot;
     public bool IsBlockVfxActive => _blockVfxRoot != null && _blockVfxRoot.activeSelf;
+    // อัตราการลดดาเมจขณะตั้งการ์ดปกติ (เช่น 0.75 = 75%)
+    public float BlockDamageReduction => blockDamageReduction;
+    // ช่วงเวลาหน้าต่างปัดป้องสมบูรณ์ (วินาที)
+    public float ParryWindowSeconds => parryWindowSeconds;
+    // ตรวจสอบว่าผู้เล่นกำลังอยู่ในหน้าต่างเวลา Perfect Parry หรือไม่
+    public bool IsInParryWindow => IsBlocking && (Time.time - _blockStartedTime <= parryWindowSeconds);
 
     // อ้างอิงรูปแบบโจมตีปัจจุบัน (สำหรับสั่งเล่นอนิเมชันและคำนวณตัวคูณดาเมจ)
     public PlayerAttackKind CurrentAttackKind { get; private set; } = PlayerAttackKind.LightCombo;
@@ -253,6 +288,20 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
     /// <summary>true = died, false = revived. Raised on every peer.</summary>
     public event Action<bool> DeathStateChanged;
+
+    // ---- อีเวนต์การต่อสู้สำหรับทีม Audio / VFX / UI (Team Handoff Contract) ----
+    // ยิงบนทุก Peer เมื่อตัวละครเริ่มออกท่าโจมตี (รูปแบบท่า, จังหวะคอมโบ 1..3)
+    public event Action<PlayerAttackKind, int> AttackPerformed;
+    // ยิงเมื่อดาบฟันโดนมอนสเตอร์/บอส (เป้าหมาย, ดาเมจสุทธิ, ติดคริหรือไม่)
+    public event Action<EnemyNPC, int, bool> HitLanded;
+    // ยิงบนทุก Peer เมื่อทำ Perfect Parry สำเร็จ (ส่งศัตรูผู้โจมตีมาด้วยถ้ามี)
+    public event Action<EnemyNPC> ParrySucceeded;
+    // ยิงบนทุก Peer เมื่อตั้งการ์ดรับดาเมจปกติสำเร็จ (ดาเมจหลังหักลดแล้ว)
+    public event Action<int> BlockImpacted;
+    // ยิงบนทุก Peer เมื่อ Stamina หมดขณะตั้งการ์ดจนการ์ดแตก
+    public event Action GuardBroken;
+    // ยิงบนทุก Peer เมื่อผู้เล่นชักดาบ (true) หรือเก็บดาบ (false)
+    public event Action<bool> WeaponDrawnChanged;
 
     /// <summary>Every spawned player on this peer (local + remote proxies). Used by NPC AI and the map.</summary>
     public static readonly List<PlayerCombat> All = new List<PlayerCombat>();
@@ -298,11 +347,17 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
     // Local (input side)
     private float _nextLocalAttackTime;
+    private float _lastLocalAttackTime = -100f;
+    private int _localPredictedComboStep;
     private float _bufferedUntil = -1f;
     private bool _bufferedHeavy;
     private float _nextLocalDodgeTime;
     private float _overrideBlockUntil;
     private bool _localBlockingSent;
+    // ตัวหน่วงคูลดาวน์การสลับชัก/เก็บดาบ (ปุ่ม 1) และเวลาล่าสุดที่แสดงข้อความเตือนแต่ละประเภทแยกกัน
+    private float _nextWeaponToggleTime;
+    private float _lastSheathedPromptTime = -10f;
+    private float _lastSafeZonePromptTime = -10f;
 
     // Authority side
     private float _nextAuthorityAttackTime;
@@ -311,6 +366,9 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     private int _authorityComboStep;
     private int _sequenceCounter;
     private float _dodgeInvulnerableUntil;
+    private float _blockStartedTime = -100f;
+    private float _nextParryReadyTime = -100f;
+    private float _parryFlashUntil = -100f;
     private float _nextStaminaRegenTime;
     private bool _sprintExhaustedCooldown;
     private int _attackBuffBonus;
@@ -321,6 +379,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     private GameObject _blockVfxRoot;
     private Transform _blockDome;
     private Transform _blockRing;
+    private Renderer _blockDomeRenderer;
+    private MaterialPropertyBlock _blockDomeMpb;
 
     // Shared: running hit window
     private Coroutine _hitWindowRoutine;
@@ -464,10 +524,6 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         _blockVfxRoot.transform.SetParent(transform, false);
         _blockVfxRoot.transform.localPosition = Vector3.zero;
 
-        Shader shader = Shader.Find("Sprites/Default");
-        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null) shader = Shader.Find("Unlit/Color");
-
         // ปรับระดับความสูงของโล่พลังงาน Block VFX ให้ตรงกับตัวละครที่มีจุดหมุนอยู่ที่เท้า (GreatSwordGirl) vs กึ่งกลางตัว
         float yOffset = (_capsule != null && _capsule.CharacterVisual == transform) ? 1.0f : 0f;
 
@@ -478,18 +534,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         dome.transform.SetParent(_blockVfxRoot.transform, false);
         dome.transform.localPosition = new Vector3(0f, 0.15f + yOffset, 0.25f);
         dome.transform.localScale = new Vector3(1.35f, 1.65f, 1.15f);
-        var domeRenderer = dome.GetComponent<Renderer>();
-        if (domeRenderer != null)
-        {
-            domeRenderer.shadowCastingMode = ShadowCastingMode.Off;
-            domeRenderer.receiveShadows = false;
-            if (shader != null)
-            {
-                var mat = new Material(shader);
-                mat.color = new Color(0.18f, 0.78f, 1.0f, 0.26f);
-                domeRenderer.sharedMaterial = mat;
-            }
-        }
+        // ใช้ URP Unlit Transparent ถาวรแทน Shader.Find("Sprites/Default") เพื่อป้องกันการถูก Strip ใน Standalone Build
+        UrpMaterialHelper.ApplyTransparentColor(dome.GetComponent<Renderer>(), new Color(0.18f, 0.78f, 1.0f, 0.26f), disableShadows: true);
         _blockDome = dome.transform;
 
         GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -499,18 +545,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         ring.transform.SetParent(_blockVfxRoot.transform, false);
         ring.transform.localPosition = new Vector3(0f, -0.92f + yOffset, 0f);
         ring.transform.localScale = new Vector3(1.65f, 0.02f, 1.65f);
-        var ringRenderer = ring.GetComponent<Renderer>();
-        if (ringRenderer != null)
-        {
-            ringRenderer.shadowCastingMode = ShadowCastingMode.Off;
-            ringRenderer.receiveShadows = false;
-            if (shader != null)
-            {
-                var mat = new Material(shader);
-                mat.color = new Color(0.25f, 0.90f, 1.0f, 0.58f);
-                ringRenderer.sharedMaterial = mat;
-            }
-        }
+        UrpMaterialHelper.ApplyTransparentColor(ring.GetComponent<Renderer>(), new Color(0.25f, 0.90f, 1.0f, 0.58f), disableShadows: true);
         _blockRing = ring.transform;
 
         _blockVfxRoot.SetActive(false);
@@ -527,6 +562,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             Local = this;
             Debug.Log($"[PlayerCombat] Local player registered ({name}, id={Object.Id}).");
             CombatHud.EnsureFor(this);
+            BossHudUI.EnsureFor(this);
         }
 
         if (Object.HasStateAuthority)
@@ -534,10 +570,15 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             if (NetworkLevel < 1) NetworkLevel = 1;
             NetworkHealth = MaxHealth;
             NetworkStamina = MaxStamina;
+            bool startInSafeZone = SafeZone.IsPointInAnySafeZone(transform.position);
+            IsInSafeZone = startInSafeZone;
+            // เริ่มต้นแบบเก็บดาบไว้กลางหลังเสมอ (โหมดสำรวจ/เขตปลอดภัย) ผู้เล่นกด [1] นอกเขตปลอดภัยเพื่อชักดาบ
+            IsWeaponDrawn = false;
         }
 
         ApplyHealthState(forceNotify: true);
         UpdateBlockVfxVisual(IsBlocking && !IsDead);
+        _animationDriver?.SyncWeaponDrawnImmediate(IsWeaponDrawn && !IsInSafeZone);
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
@@ -856,7 +897,15 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public override void FixedUpdateNetwork()
     {
         if (!_isSpawned || !Object.HasStateAuthority) return;
-        IsInSafeZone = SafeZone.IsPointInAnySafeZone(transform.position);
+        bool inSafe = SafeZone.IsPointInAnySafeZone(transform.position);
+        IsInSafeZone = inSafe;
+
+        // เมื่อเดินเข้าสู่เขตปลอดภัย (Comfort Zone) ให้เก็บดาบและปิดสถานะต่อสู้อัตโนมัติทันที
+        if (inSafe && (IsWeaponDrawn || IsBlocking))
+        {
+            SetAuthorityWeaponDrawn(false);
+        }
+
         TickStaminaRegen(Runner.DeltaTime);
     }
 
@@ -864,14 +913,26 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     {
         if (_blockVfxRoot != null && _blockVfxRoot.activeSelf)
         {
+            bool parryFlash = Time.time < _parryFlashUntil;
             if (_blockDome != null)
             {
-                float s = 1f + Mathf.Sin(Time.time * 6f) * 0.035f;
+                float s = parryFlash ? 1.22f : (1f + Mathf.Sin(Time.time * 6f) * 0.035f);
                 _blockDome.localScale = new Vector3(1.35f * s, 1.65f * s, 1.15f * s);
+                if (_blockDomeRenderer == null) _blockDomeRenderer = _blockDome.GetComponent<Renderer>();
+                if (_blockDomeRenderer != null)
+                {
+                    _blockDomeMpb ??= new MaterialPropertyBlock();
+                    Color shieldColor = parryFlash
+                        ? new Color(1.0f, 0.92f, 0.35f, 0.55f)
+                        : (IsInParryWindow ? new Color(0.32f, 0.98f, 1.0f, 0.34f) : new Color(0.18f, 0.72f, 1.0f, 0.24f));
+                    _blockDomeMpb.SetColor("_BaseColor", shieldColor);
+                    _blockDomeMpb.SetColor("_Color", shieldColor);
+                    _blockDomeRenderer.SetPropertyBlock(_blockDomeMpb);
+                }
             }
             if (_blockRing != null)
             {
-                float r = 1.65f + Mathf.Sin(Time.time * 4.5f) * 0.08f;
+                float r = parryFlash ? 2.25f : (1.65f + Mathf.Sin(Time.time * 4.5f) * 0.08f);
                 _blockRing.localScale = new Vector3(r, 0.02f, r);
             }
         }
@@ -892,27 +953,62 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             return;
         }
 
+        // ตรวจจับปุ่ม [1] สำหรับชักดาบ / เก็บดาบด้วยตนเองนอกเขตปลอดภัย
+        if (PollWeaponTogglePressed())
+        {
+            TryToggleWeaponDraw();
+        }
+
         if (PollDodgePressed())
         {
             TryRequestDodge();
         }
 
+        bool inSafeNow = IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position);
+
         if (Application.isFocused && Time.time >= _overrideBlockUntil)
         {
-            bool wantBlock = !IsDodging && CurrentStamina > 0f && PollBlockHeld();
+            bool blockPressedNow = PollBlockJustPressed();
+            bool wantBlock = !IsDodging && !inSafeNow && IsWeaponDrawn && CurrentStamina > 0f && PollBlockHeld();
+            if (blockPressedNow && !inSafeNow && !IsWeaponDrawn)
+            {
+                NotifyWeaponMustBeDrawn();
+            }
             SetBlockingInput(wantBlock);
         }
 
         // รองรับทั้งโจมตีปกติ (LMB -> Light / Run / Jump / Stealth Assassination) และโจมตีหนัก (R -> Heavy / RunHeavy / JumpHeavy)
         if (PollAttackPressed())
         {
-            _bufferedUntil = Time.time + inputBufferSeconds;
-            _bufferedHeavy = false;
+            if (inSafeNow)
+            {
+                NotifySafeZoneWeaponsDisabled();
+            }
+            else if (!IsWeaponDrawn)
+            {
+                NotifyWeaponMustBeDrawn();
+            }
+            else
+            {
+                _bufferedUntil = Time.time + inputBufferSeconds;
+                _bufferedHeavy = false;
+            }
         }
         else if (PollHeavyAttackPressed())
         {
-            _bufferedUntil = Time.time + inputBufferSeconds;
-            _bufferedHeavy = true;
+            if (inSafeNow)
+            {
+                NotifySafeZoneWeaponsDisabled();
+            }
+            else if (!IsWeaponDrawn)
+            {
+                NotifyWeaponMustBeDrawn();
+            }
+            else
+            {
+                _bufferedUntil = Time.time + inputBufferSeconds;
+                _bufferedHeavy = true;
+            }
         }
 
         if (_bufferedUntil >= Time.time && Time.time >= _nextLocalAttackTime && !IsDodging)
@@ -1067,10 +1163,146 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
     private static bool PollDodgePressed()
     {
-        if (!Application.isFocused || GameplayInput.IsBlocked) return false;
+        if (!Application.isFocused || GameplayInput.IsBlocked || IsAnyTextFieldFocused()) return false;
 
         var kb = Keyboard.current;
         return kb != null && (kb.spaceKey.wasPressedThisFrame || kb.leftCtrlKey.wasPressedThisFrame);
+    }
+
+    /// <summary>
+    /// ตรวจจับปุ่มเลข [1] สำหรับสลับชักดาบ / เก็บดาบ (บล็อกอัตโนมัติเมื่อเปิดหน้าต่าง UI หรือกำลังพิมพ์ข้อความ)
+    /// </summary>
+    private static bool PollWeaponTogglePressed()
+    {
+        if (!Application.isFocused || GameplayInput.IsBlocked || IsAnyTextFieldFocused()) return false;
+        if (InventoryUI.Instance != null && InventoryUI.Instance.IsOpen) return false;
+        if (MapManager.Instance != null && MapManager.Instance.IsWorldMapOpen) return false;
+
+        var kb = Keyboard.current;
+        return kb != null && (kb.digit1Key.wasPressedThisFrame || kb.numpad1Key.wasPressedThisFrame);
+    }
+
+    /// <summary>
+    /// ตรวจจับจังหวะกดปุ่มบล็อกครั้งแรกในเฟรมนี้ เพื่อแจ้งเตือนให้ชักดาบหากยังเก็บดาบอยู่
+    /// </summary>
+    private static bool PollBlockJustPressed()
+    {
+        if (!Application.isFocused || GameplayInput.IsBlocked) return false;
+        var kb = Keyboard.current;
+        if (kb != null && kb.leftAltKey.wasPressedThisFrame) return true;
+        var mouse = Mouse.current;
+        if (mouse != null && mouse.rightButton.wasPressedThisFrame)
+        {
+            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return false;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นกำลังพิมพ์ในช่อง InputField หรือไม่ เพื่อไม่ให้ปุ่มลัดทำงานชนกับการพิมพ์
+    /// </summary>
+    private static bool IsAnyTextFieldFocused()
+    {
+        if (EventSystem.current == null) return false;
+        var selected = EventSystem.current.currentSelectedGameObject;
+        if (selected == null) return false;
+        return selected.GetComponent<TMP_InputField>() != null || selected.GetComponent<UnityEngine.UI.InputField>() != null;
+    }
+
+    /// <summary>
+    /// แสดงข้อความแจ้งเตือนแบบหน่วงเวลาให้กด [1] ชักดาบก่อนโจมตีหรือตั้งการ์ด
+    /// </summary>
+    public void NotifyWeaponMustBeDrawn()
+    {
+        if (Time.unscaledTime - _lastSheathedPromptTime < 1.4f) return;
+        _lastSheathedPromptTime = Time.unscaledTime;
+        PlayerStatusHud.Instance?.ShowToast(DrawWeaponPromptMessage, new Color(1f, 0.84f, 0.25f), 2.2f);
+        Debug.Log($"[PlayerCombat] Combat action blocked while sheathed: {DrawWeaponPromptMessage}");
+    }
+
+    private void NotifySafeZoneWeaponsDisabled()
+    {
+        if (Time.unscaledTime - _lastSafeZonePromptTime < 1.4f) return;
+        _lastSafeZonePromptTime = Time.unscaledTime;
+        PlayerStatusHud.Instance?.ShowToast("Comfort Zone: Weapons Disabled", new Color(0.32f, 0.96f, 0.72f), 2.0f);
+    }
+
+    /// <summary>
+    /// สลับสถานะชักดาบ / เก็บดาบด้วยตนเอง (เรียกจากปุ่ม [1] หรือสคริปต์ทดสอบ)
+    /// </summary>
+    public bool TryToggleWeaponDraw()
+    {
+        return TrySetWeaponDrawn(!IsWeaponDrawn);
+    }
+
+    /// <summary>
+    /// สั่งเปลี่ยนสถานะชักดาบ (true) หรือเก็บดาบ (false) พร้อมซิงก์ผ่าน Photon Fusion ไปยังทุกเครื่อง
+    /// </summary>
+    public bool TrySetWeaponDrawn(bool drawn)
+    {
+        if (!_isSpawned || !IsLocallyControlled || IsDead) return false;
+        if (Time.time < _nextWeaponToggleTime) return false;
+
+        bool inSafe = IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position);
+        if (drawn && inSafe)
+        {
+            NotifySafeZoneWeaponsDisabled();
+            return false;
+        }
+
+        if (IsWeaponDrawn == drawn) return false;
+
+        _nextWeaponToggleTime = Time.time + 0.32f;
+        _bufferedUntil = -1f;
+        if (!drawn && _localBlockingSent) SetBlockingInput(false);
+
+        if (Object.HasStateAuthority)
+            SetAuthorityWeaponDrawn(drawn);
+        else
+            RPC_SetWeaponDrawn(drawn);
+
+        return true;
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_SetWeaponDrawn(NetworkBool drawn)
+    {
+        if (!Object.HasStateAuthority) return;
+        SetAuthorityWeaponDrawn(drawn);
+    }
+
+    /// <summary>
+    /// อัปเดตสถานะการชักดาบฝั่ง State Authority (บังคับเก็บดาบเสมอหากอยู่ในเขตปลอดภัยหรือตาย)
+    /// </summary>
+    private void SetAuthorityWeaponDrawn(bool wantDrawn)
+    {
+        if (!Object.HasStateAuthority) return;
+
+        bool inSafe = IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position);
+        bool effectiveDrawn = !IsDead && !inSafe && wantDrawn;
+
+        if (!effectiveDrawn)
+        {
+            if (IsBlocking) SetAuthorityBlockingState(false);
+            if (IsHitWindowOpen) CloseHitWindow();
+        }
+
+        if (IsWeaponDrawn == effectiveDrawn) return;
+
+        IsWeaponDrawn = effectiveDrawn;
+        Debug.Log($"[PlayerCombat] Weapon stance changed -> {(effectiveDrawn ? "DRAWN (Combat Ready)" : "SHEATHED (Exploration Mode)")}.");
+    }
+
+    /// <summary>
+    /// Callback บนทุกเครื่องเมื่อค่า Networked IsWeaponDrawn เปลี่ยนแปลง (อัปเดตแอนิเมชันและแจ้ง Event ให้ทีม UI/Audio)
+    /// </summary>
+    private void OnWeaponDrawnChanged()
+    {
+        if (!_isSpawned) return;
+        bool drawn = IsWeaponDrawn && !IsInSafeZone && !IsDead;
+        _animationDriver?.NotifyWeaponDrawnChanged(drawn);
+        WeaponDrawnChanged?.Invoke(drawn);
     }
 
     /// <summary>
@@ -1079,6 +1311,78 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public bool TryRequestAttack()
     {
         return TryRequestAttackKind(ResolveContextualLightAttackKind());
+    }
+
+    /// <summary>
+    /// คำนวณระยะเวลา Cooldown และช่วงเปิด Hitbox ของแต่ละรูปแบบท่าโจมตีให้สอดคล้องกับความเร็วอนิเมชันจริง
+    /// </summary>
+    public void GetAttackTiming(PlayerAttackKind kind, int comboStep, out float cooldown, out float hitDelay, out float hitDuration)
+    {
+        float baseCd = Mathf.Max(0.15f, attackCooldown);
+        float baseDelay = Mathf.Max(0.02f, hitWindowDelay);
+        float baseDur = Mathf.Max(0.08f, hitWindowDuration);
+
+        switch (kind)
+        {
+            case PlayerAttackKind.HeavyCombo:
+                cooldown = baseCd * 1.28f;
+                hitDelay = Mathf.Max(0.14f, baseDelay * 1.9f);
+                hitDuration = baseDur * 1.15f;
+                break;
+
+            case PlayerAttackKind.RunAttack:
+                cooldown = baseCd * 0.95f;
+                hitDelay = baseDelay;
+                hitDuration = baseDur;
+                break;
+
+            case PlayerAttackKind.RunHeavyAttack:
+                cooldown = baseCd * 1.22f;
+                hitDelay = Mathf.Max(0.13f, baseDelay * 1.7f);
+                hitDuration = baseDur * 1.15f;
+                break;
+
+            case PlayerAttackKind.JumpAttack:
+                cooldown = baseCd * 0.92f;
+                hitDelay = Mathf.Max(0.05f, baseDelay * 0.8f);
+                hitDuration = baseDur;
+                break;
+
+            case PlayerAttackKind.JumpHeavyAttack:
+            case PlayerAttackKind.RunJumpHeavyAttack:
+                cooldown = baseCd * 1.35f;
+                hitDelay = Mathf.Max(0.16f, baseDelay * 2.1f);
+                hitDuration = baseDur * 1.25f;
+                break;
+
+            case PlayerAttackKind.StealthAssassination:
+                cooldown = baseCd * 1.35f;
+                hitDelay = baseDelay * 1.2f;
+                hitDuration = baseDur * 1.2f;
+                break;
+
+            case PlayerAttackKind.SpellCast:
+                cooldown = baseCd * 1.05f;
+                hitDelay = Mathf.Max(0.14f, baseDelay * 1.8f);
+                hitDuration = baseDur * 0.75f;
+                break;
+
+            default:
+                // LightCombo: จังหวะที่ 1-2 ออกไว, จังหวะปิดคอมโบที่ 3 หนักแน่นขึ้นเล็กน้อย
+                if (comboStep >= 3)
+                {
+                    cooldown = baseCd * 1.05f;
+                    hitDelay = baseDelay * 1.15f;
+                    hitDuration = baseDur;
+                }
+                else
+                {
+                    cooldown = baseCd * 0.85f;
+                    hitDelay = baseDelay;
+                    hitDuration = baseDur * 0.85f;
+                }
+                break;
+        }
     }
 
     /// <summary>
@@ -1092,6 +1396,11 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             Debug.Log("[PlayerCombat] Attack prevented: Inside Comfort Zone (Safe Haven).");
             return false;
         }
+        if (!IsWeaponDrawn)
+        {
+            NotifyWeaponMustBeDrawn();
+            return false;
+        }
         if (CurrentStamina <= 0f)
         {
             Debug.Log("[PlayerCombat] Attack prevented: Stamina depleted.");
@@ -1099,7 +1408,14 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         }
         if (Time.time < _nextLocalAttackTime) return false;
 
-        _nextLocalAttackTime = Time.time + attackCooldown;
+        int predictedStep = (Time.time - _lastLocalAttackTime <= comboResetSeconds)
+            ? (_localPredictedComboStep % 3) + 1
+            : 1;
+        _localPredictedComboStep = predictedStep;
+        _lastLocalAttackTime = Time.time;
+
+        GetAttackTiming(kind, predictedStep, out float attackCd, out _, out _);
+        _nextLocalAttackTime = Time.time + attackCd;
         _lastCombatActivityTime = Time.time;
 
         if (kind == PlayerAttackKind.LightCombo)
@@ -1195,7 +1511,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public void SetBlockingInput(bool blocking, float holdSeconds = 0f)
     {
         if (!_isSpawned || !IsLocallyControlled) return;
-        if (IsDead || CurrentStamina <= 0f) blocking = false;
+        bool inSafe = IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position);
+        if (IsDead || inSafe || !IsWeaponDrawn || CurrentStamina <= 0f) blocking = false;
         if (holdSeconds > 0f) _overrideBlockUntil = Time.time + holdSeconds;
 
         if (_capsule != null)
@@ -1205,14 +1522,46 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         _localBlockingSent = blocking;
         if (Object.HasStateAuthority)
         {
-            IsBlocking = !IsDead && blocking;
-            UpdateBlockVfxVisual(IsBlocking);
-            RPC_BroadcastBlocking(IsBlocking);
+            SetAuthorityBlockingState(!IsDead && blocking);
         }
         else
         {
             RPC_SetBlocking(blocking);
         }
+    }
+
+    /// <summary>
+    /// อัปเดตสถานะการตั้งการ์ดฝั่ง State Authority พร้อมบันทึกเวลาเริ่มตั้งการ์ดสำหรับหน้าต่าง Perfect Parry
+    /// </summary>
+    private void SetAuthorityBlockingState(bool wantBlock)
+    {
+        if (!Object.HasStateAuthority) return;
+
+        bool inSafe = IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position);
+        bool effectiveBlock = !IsDead && !inSafe && IsWeaponDrawn && NetworkStamina > 0f && wantBlock;
+        bool wasBlocking = IsBlocking;
+        IsBlocking = effectiveBlock;
+
+        if (effectiveBlock && !wasBlocking)
+        {
+            // เปิดหน้าต่าง Perfect Parry เฉพาะเมื่อพ้นคูลดาวน์ Parry แล้ว (ป้องกันการกดบล็อกรัวๆ เพื่อโกง Parry)
+            if (Time.time >= _nextParryReadyTime)
+            {
+                _blockStartedTime = Time.time;
+                _nextParryReadyTime = Time.time + parryCooldownSeconds;
+            }
+            else
+            {
+                _blockStartedTime = -100f;
+            }
+        }
+        else if (!effectiveBlock)
+        {
+            _blockStartedTime = -100f;
+        }
+
+        UpdateBlockVfxVisual(IsBlocking);
+        RPC_BroadcastBlocking(IsBlocking);
     }
 
     // ------------------------------------------------------------------ 2. RPC pipeline
@@ -1240,6 +1589,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         if (!Object.HasStateAuthority) return;
         if (IsDead) return;
         if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)) return;
+        if (!IsWeaponDrawn) return;
         if (NetworkStamina <= 0f) return;
 
         float now = Time.time;
@@ -1251,19 +1601,21 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             : attackStaminaCost;
         if (!TryConsumeAuthorityStamina(staminaCost)) return;
 
-        _nextAuthorityAttackTime = now + attackCooldown;
+        if (now - _lastAuthorityAttackTime <= comboResetSeconds)
+            _authorityComboStep = (_authorityComboStep % 3) + 1;
+        else
+            _authorityComboStep = 1;
+
+        GetAttackTiming(kind, _authorityComboStep, out float attackCd, out _, out _);
+        _nextAuthorityAttackTime = now + attackCd;
         _lastCombatActivityTime = now;
 
         if (IsBlocking)
         {
             IsBlocking = false;
+            _blockStartedTime = -100f;
             UpdateBlockVfxVisual(false);
         }
-
-        if (now - _lastAuthorityAttackTime <= comboResetSeconds)
-            _authorityComboStep = (_authorityComboStep % 3) + 1;
-        else
-            _authorityComboStep = 1;
 
         _lastAuthorityAttackTime = now;
         ComboStep = _authorityComboStep;
@@ -1304,18 +1656,47 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
         if (attackVfx != null) attackVfx.Play();
         onAttackStarted?.Invoke();
+        AttackPerformed?.Invoke(kind, comboStep);
 
         if (_hitWindowRoutine != null) StopCoroutine(_hitWindowRoutine);
-        _hitWindowRoutine = StartCoroutine(HitWindowRoutine());
+        _hitWindowRoutine = StartCoroutine(HitWindowRoutine(kind, comboStep));
     }
 
     /// <summary>
-    /// ซิงก์อนิเมชันรับแรงกระแทกขณะตั้งการ์ด (Block Hit) ข้ามเครือข่าย
+    /// ซิงก์อนิเมชันรับแรงกระแทกขณะตั้งการ์ดปกติ (Block Hit) ข้ามเครือข่ายพร้อมแจ้ง Event
     /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_BroadcastBlockHit()
+    public void RPC_BroadcastBlockHit(int reducedDamage = 0)
     {
         if (!IsDead) _animationDriver?.PlayBlockImpact();
+        if (enableCameraShake && IsLocallyControlled)
+            PlayerFollowCamera.ShakeActive(0.10f, 0.10f);
+        BlockImpacted?.Invoke(reducedDamage);
+    }
+
+    /// <summary>
+    /// ซิงก์เอฟเฟกต์ปัดป้องสมบูรณ์ (Perfect Parry) ไปยังทุกเครื่อง พร้อม Hit-Stop, Camera Shake และ Event
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastParrySuccess(NetworkId attackerNpcId)
+    {
+        if (IsDead) return;
+        _parryFlashUntil = Time.time + 0.25f;
+        _animationDriver?.PlayParryImpact();
+
+        EnemyNPC attackerNpc = null;
+        if (Runner != null && attackerNpcId.IsValid && Runner.TryFindObject(attackerNpcId, out NetworkObject npcObj) && npcObj != null)
+            attackerNpc = npcObj.GetComponent<EnemyNPC>();
+
+        FloatingDamagePopup.SpawnWarning(transform.position + Vector3.up * 2.25f, "PERFECT PARRY!", new Color(0.28f, 0.96f, 1.0f, 1f));
+
+        if (IsLocallyControlled)
+        {
+            if (enableCombatHitStop) _animationDriver?.TriggerHitStop(0.065f, 0.05f);
+            if (enableCameraShake) PlayerFollowCamera.ShakeActive(0.22f, 0.14f);
+        }
+
+        ParrySucceeded?.Invoke(attackerNpc);
     }
 
     /// <summary>
@@ -1325,6 +1706,9 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public void RPC_BroadcastGuardBreak()
     {
         if (!IsDead) _animationDriver?.PlayGuardBreak();
+        if (enableCameraShake && IsLocallyControlled)
+            PlayerFollowCamera.ShakeActive(0.22f, 0.18f);
+        GuardBroken?.Invoke();
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
@@ -1373,10 +1757,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     public void RPC_SetBlocking(NetworkBool blocking)
     {
-        if (!Object.HasStateAuthority) return;
-        IsBlocking = !IsDead && NetworkStamina > 0f && blocking;
-        UpdateBlockVfxVisual(IsBlocking);
-        RPC_BroadcastBlocking(IsBlocking);
+        SetAuthorityBlockingState(blocking);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
@@ -1409,7 +1790,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
     // ------------------------------------------------------------------ 3. hit window
 
-    private IEnumerator HitWindowRoutine()
+    private IEnumerator HitWindowRoutine(PlayerAttackKind kind, int comboStep)
     {
         CloseHitWindow();
 
@@ -1419,9 +1800,10 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         }
         else
         {
-            if (hitWindowDelay > 0f) yield return new WaitForSeconds(hitWindowDelay);
+            GetAttackTiming(kind, comboStep, out _, out float delay, out float duration);
+            if (delay > 0f) yield return new WaitForSeconds(delay);
             OpenHitWindow();
-            yield return new WaitForSeconds(Mathf.Min(hitWindowDuration, hitWindowSafetyTimeout));
+            yield return new WaitForSeconds(Mathf.Min(duration, hitWindowSafetyTimeout));
         }
 
         CloseHitWindow();
@@ -1580,11 +1962,37 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             };
         }
 
+        bool isStaggerCounter = npc.IsStaggered;
+        if (isStaggerCounter)
+        {
+            // โจมตีสวนกลับใส่ศัตรูที่ติดสถานะ Stagger จาก Perfect Parry -> โบนัสความเสียหาย 1.25x และติดคริติคอลเสมอ
+            mult *= 1.25f;
+            isCrit = true;
+        }
+
         int finalDamage = Mathf.Max(1, Mathf.RoundToInt(totalAtk * mult));
         _lastCombatActivityTime = Time.time;
 
-        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} ({CurrentAttackKind}, Combo {ComboStep}{(isCrit ? " CRIT!" : "")}) hit NPC {npc.name} (id={id}) for {finalDamage} (TotalATK={totalAtk}).");
+        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} ({CurrentAttackKind}, Combo {ComboStep}{(isCrit ? " CRIT!" : "")}{(isStaggerCounter ? " COUNTER!" : "")}) hit NPC {npc.name} (id={id}) for {finalDamage} (TotalATK={totalAtk}).");
         npc.RPC_TakeDamageWithCrit(finalDamage, isCrit, ComboStep);
+        HitLanded?.Invoke(npc, finalDamage, isCrit);
+
+        // ตอบสนองความหนักแน่นของการฟันฝั่งเครื่องผู้เล่น (Network-Safe Hit-Stop & Camera Shake)
+        if (IsLocallyControlled)
+        {
+            if (enableCombatHitStop)
+            {
+                float hitStopDur = isStealthStrike ? 0.08f
+                    : (isHeavyStrike || isStaggerCounter || ComboStep >= 3 ? 0.055f : 0.03f);
+                _animationDriver?.TriggerHitStop(hitStopDur, 0.06f);
+            }
+            if (enableCameraShake)
+            {
+                float shakeAmp = isStealthStrike ? 0.28f
+                    : (isHeavyStrike || isStaggerCounter || ComboStep >= 3 ? 0.17f : (isCrit ? 0.11f : 0.065f));
+                PlayerFollowCamera.ShakeActive(shakeAmp, isStealthStrike ? 0.18f : 0.12f);
+            }
+        }
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
@@ -1630,7 +2038,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             ? Mathf.Clamp(patternDamageOverride, 1, maxAllowed)
             : npc.CurrentAttackDamage;
         Debug.Log($"[PlayerCombat] {npc.name} hits {name} for {incoming}.");
-        RPC_TakeDamage(incoming);
+        ApplyIncomingDamageAuthority(incoming, npc);
     }
 
     public void HealSelf(int amount)
@@ -1641,10 +2049,18 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         Debug.Log($"[PlayerCombat] Healed {NetworkHealth - before} ({before} -> {NetworkHealth}/{MaxHealth}).");
     }
 
-    // ------------------------------------------------------------------ 5. health, defense & block stamina drain
+    // ------------------------------------------------------------------ 5. health, defense, timed parry & block stamina drain
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.StateAuthority)]
     public void RPC_TakeDamage(int damage)
+    {
+        ApplyIncomingDamageAuthority(damage, attackerNpc: null);
+    }
+
+    /// <summary>
+    /// ประมวลผลดาเมจขาเข้าฝั่ง State Authority: ตรวจสอบ i-frame, Perfect Parry, Sustained Block, Defense และสถานะตาย
+    /// </summary>
+    private void ApplyIncomingDamageAuthority(int damage, EnemyNPC attackerNpc)
     {
         if (!Object.HasStateAuthority) return;
         if (IsDead || IsDodging) return;
@@ -1653,10 +2069,42 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         _lastCombatActivityTime = Time.time;
         damage = Mathf.Clamp(damage, 0, maxDamagePerHit);
 
-        // Apply Defense from Equipped Gear (Armor / Shield / Pants)
+        // 1. ตรวจสอบ Perfect Parry ก่อน (กดตั้งการ์ดทันเวลาภายใน parryWindowSeconds -> รับดาเมจ 0 + คืน Stamina + ทำให้ศัตรู Stagger)
+        if (IsBlocking && NetworkStamina > 0f && (Time.time - _blockStartedTime <= parryWindowSeconds))
+        {
+            if (parryStaminaReward > 0f)
+            {
+                NetworkStamina = Mathf.Min(MaxStamina, NetworkStamina + parryStaminaReward);
+                _sprintExhaustedCooldown = false;
+            }
+            // รีเซ็ตคูลดาวน์ Parry สั้นลงเมื่อปัดป้องสำเร็จ เพื่อเปิดโอกาสปัดป้องท่าต่อเนื่องได้
+            _nextParryReadyTime = Time.time + 0.15f;
+
+            NetworkId attackerNetId = (attackerNpc != null && attackerNpc.Object != null && attackerNpc.Object.IsValid)
+                ? attackerNpc.Object.Id
+                : default;
+            RPC_BroadcastParrySuccess(attackerNetId);
+
+            if (attackerNpc != null && attackerNpc.IsAlive)
+            {
+                float distToAttacker = Vector3.Distance(transform.position, attackerNpc.transform.position);
+                bool canStagger = !attackerNpc.IsBoss || distToAttacker <= 7.5f;
+                if (canStagger)
+                {
+                    float staggerDur = attackerNpc.IsBoss ? parryBossStaggerDuration : parryEnemyStaggerDuration;
+                    attackerNpc.RPC_ApplyParryStagger(staggerDur);
+                }
+            }
+
+            Debug.Log($"[PlayerCombat] PERFECT PARRY! Blocked {damage} dmg cleanly from {(attackerNpc != null ? attackerNpc.name : "attacker")}.");
+            return;
+        }
+
+        // 2. หักค่าป้องกันจากอุปกรณ์สวมใส่ (Armor / Shield / Pants)
         if (TotalDefense > 0)
             damage = Mathf.Max(1, damage - TotalDefense);
 
+        // 3. ตั้งการ์ดป้องกันปกติ (Sustained Block: ลดดาเมจ 75% และใช้ Stamina)
         if (IsBlocking && NetworkStamina > 0f)
         {
             damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1f - blockDamageReduction)));
@@ -1664,6 +2112,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             if (NetworkStamina <= 0f)
             {
                 IsBlocking = false;
+                _blockStartedTime = -100f;
                 _localBlockingSent = false;
                 if (_capsule != null) _capsule.SpeedMultiplier = 1f;
                 UpdateBlockVfxVisual(false);
@@ -1674,7 +2123,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             else
             {
                 // เล่นอนิเมชันรับแรงปะทะขณะตั้งการ์ด (Block Hit) บนทุกเครื่อง
-                RPC_BroadcastBlockHit();
+                RPC_BroadcastBlockHit(damage);
             }
         }
         if (damage <= 0) return;
@@ -1735,7 +2184,11 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         bool dead = health <= 0;
 
         if (!forceNotify && health < _lastHealthValue && !dead)
+        {
             _animationDriver?.PlayHitReaction();
+            if (enableCameraShake && IsLocallyControlled)
+                PlayerFollowCamera.ShakeActive(0.13f, 0.11f);
+        }
         _lastHealthValue = health;
 
         HealthChanged?.Invoke(health, MaxHealth);
@@ -1751,7 +2204,11 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
         if (dead)
         {
-            if (Object.HasStateAuthority && IsBlocking) IsBlocking = false;
+            if (Object.HasStateAuthority)
+            {
+                if (IsBlocking) IsBlocking = false;
+                if (IsWeaponDrawn) IsWeaponDrawn = false;
+            }
             UpdateBlockVfxVisual(false);
             if (_hitWindowRoutine != null) { StopCoroutine(_hitWindowRoutine); _hitWindowRoutine = null; }
             CloseHitWindow();
@@ -1791,344 +2248,3 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 #endif
 }
 
-/// <summary>
-/// World-space 3D floating damage number &amp; Combo Critical Hit popup.
-/// </summary>
-public sealed class FloatingDamagePopup : MonoBehaviour
-{
-    public static readonly List<FloatingDamagePopup> ActivePopups = new List<FloatingDamagePopup>();
-
-    public int DamageAmount { get; private set; }
-    public bool IsCritical { get; private set; }
-    public int ComboStep { get; private set; }
-
-    private TextMeshPro _tmp;
-    private Vector3 _startPos;
-    private float _spawnTime;
-    private const float Lifetime = 1.05f;
-
-    public static FloatingDamagePopup Spawn(Vector3 worldPos, int amount, bool isCrit, int comboStep = 1)
-    {
-        var go = new GameObject(isCrit ? $"FloatingCritPopup_{amount}" : $"FloatingDamagePopup_{amount}");
-        Vector2 jitter = UnityEngine.Random.insideUnitCircle * 0.25f;
-        go.transform.position = worldPos + new Vector3(jitter.x, 0.35f, jitter.y);
-
-        var popup = go.AddComponent<FloatingDamagePopup>();
-        popup.Init(amount, isCrit, comboStep);
-        return popup;
-    }
-
-    public static FloatingDamagePopup SpawnWarning(Vector3 worldPos, string text, Color color)
-    {
-        var go = new GameObject("FloatingWarningPopup");
-        go.transform.position = worldPos;
-        var popup = go.AddComponent<FloatingDamagePopup>();
-        popup.InitText(text, color, fontSize: 4.5f, isCrit: true);
-        return popup;
-    }
-
-    private void InitText(string text, Color color, float fontSize, bool isCrit)
-    {
-        DamageAmount = 0;
-        IsCritical = isCrit;
-        ComboStep = 1;
-        _startPos = transform.position;
-        _spawnTime = Time.unscaledTime;
-
-        _tmp = gameObject.AddComponent<TextMeshPro>();
-        _tmp.alignment = TextAlignmentOptions.Center;
-        _tmp.textWrappingMode = TextWrappingModes.NoWrap;
-        _tmp.fontStyle = FontStyles.Bold;
-        _tmp.text = text;
-        _tmp.fontSize = fontSize;
-        _tmp.color = color;
-
-        if (!ActivePopups.Contains(this)) ActivePopups.Add(this);
-    }
-
-    private void Init(int amount, bool isCrit, int comboStep)
-    {
-        DamageAmount = amount;
-        IsCritical = isCrit;
-        ComboStep = comboStep;
-        _startPos = transform.position;
-        _spawnTime = Time.unscaledTime;
-
-        _tmp = gameObject.AddComponent<TextMeshPro>();
-        _tmp.alignment = TextAlignmentOptions.Center;
-        _tmp.textWrappingMode = TextWrappingModes.NoWrap;
-        _tmp.fontStyle = FontStyles.Bold;
-
-        if (isCrit)
-        {
-            _tmp.text = $"CRIT!\n-{amount}";
-            _tmp.fontSize = comboStep >= 3 ? 5.2f : 4.4f;
-            _tmp.color = comboStep >= 3
-                ? new Color(1.0f, 0.38f, 0.08f, 1f)
-                : new Color(1.0f, 0.78f, 0.12f, 1f);
-        }
-        else
-        {
-            _tmp.text = $"-{amount}";
-            _tmp.fontSize = 3.2f;
-            _tmp.color = new Color(1.0f, 0.95f, 0.78f, 1f);
-        }
-
-        if (!ActivePopups.Contains(this)) ActivePopups.Add(this);
-    }
-
-    private void OnDestroy()
-    {
-        ActivePopups.Remove(this);
-    }
-
-    private void Update()
-    {
-        float age = Time.unscaledTime - _spawnTime;
-        if (age >= Lifetime)
-        {
-            Destroy(gameObject);
-            return;
-        }
-
-        float t = Mathf.Clamp01(age / Lifetime);
-        float rise = (IsCritical ? 1.35f : 0.95f) * t;
-        transform.position = _startPos + Vector3.up * rise;
-
-        float scale = IsCritical
-            ? (t < 0.18f ? Mathf.Lerp(0.6f, 1.35f, t / 0.18f) : Mathf.Lerp(1.35f, 1.0f, (t - 0.18f) / 0.82f))
-            : 1.0f;
-        transform.localScale = Vector3.one * scale;
-
-        var cam = Camera.main;
-        if (cam != null)
-            transform.rotation = cam.transform.rotation;
-
-        if (_tmp != null && t > 0.6f)
-        {
-            Color c = _tmp.color;
-            c.a = Mathf.Clamp01(1f - (t - 0.6f) / 0.4f);
-            _tmp.color = c;
-        }
-    }
-}
-
-/// <summary>
-/// Local player HUD (HP bar, Stamina bar, Combo counter, Crosshair, and screen-space damage/crit popups).
-/// </summary>
-public sealed class CombatHud : MonoBehaviour
-{
-    private struct Popup
-    {
-        public Transform target;
-        public string label;
-        public Color color;
-        public bool isCrit;
-        public float startedAt;
-    }
-
-    private const float PopupLifetime = 1.05f;
-    private const float ComboTimeout = 2.5f;
-    private static CombatHud _localHud;
-    private readonly List<Popup> _popups = new List<Popup>(16);
-    private PlayerCombat _combat;
-    private TargetLockSystem _lock;
-    private int _lastHealth = -1;
-    private int _combo;
-    private float _lastComboTime = -100f;
-
-    public static void EnsureFor(PlayerCombat combat)
-    {
-        if (combat == null || !combat.IsLocallyControlled) return;
-        if (combat.GetComponent<CombatHud>() == null) combat.gameObject.AddComponent<CombatHud>();
-        PlayerStatusHud.EnsureFor(combat);
-    }
-
-    public static void NotifyGoldGained(int amount, string source)
-    {
-        if (_localHud == null || amount <= 0) return;
-        var local = PlayerCombat.Local;
-        if (local != null)
-            _localHud.AddTextPopup(local.transform, $"+{amount} GOLD", new Color(1f, 0.86f, 0.18f), isCrit: true);
-        PlayerStatusHud.Instance?.ShowToast($"+{amount} Gold ({source})", new Color(1f, 0.86f, 0.22f));
-    }
-
-    public static void NotifyEnemyDamaged(EnemyNPC enemy, int amount, PlayerRef attacker, bool isCrit = false, int comboStep = 1)
-    {
-        if (_localHud == null || enemy == null || amount <= 0) return;
-
-        Color c = isCrit
-            ? (comboStep >= 3 ? new Color(1f, 0.42f, 0.10f) : new Color(1f, 0.82f, 0.12f))
-            : new Color(1f, 0.94f, 0.72f);
-
-        _localHud.AddTextPopup(enemy.LockPoint, isCrit ? $"CRIT! -{amount}" : $"-{amount}", c, isCrit);
-
-        var local = PlayerCombat.Local;
-        if (local != null && local.Runner != null && local.Runner.LocalPlayer == attacker)
-        {
-            _localHud._combo = Time.unscaledTime - _localHud._lastComboTime <= ComboTimeout ? _localHud._combo + 1 : 1;
-            _localHud._lastComboTime = Time.unscaledTime;
-            Debug.Log($"[CombatHud] Damage dealt: {amount}{(isCrit ? " (CRIT!)" : "")}; combo {_localHud._combo}.");
-        }
-    }
-
-    private void Awake()
-    {
-        _combat = GetComponent<PlayerCombat>();
-        _lock = GetComponent<TargetLockSystem>();
-    }
-
-    private void OnEnable()
-    {
-        if (_combat != null) _combat.HealthChanged += OnHealthChanged;
-    }
-
-    private void Start()
-    {
-        _localHud = this;
-        if (_combat != null) _lastHealth = _combat.NetworkHealth;
-        Debug.Log("[CombatHud] Local tactical crosshair, HP & Stamina bars, and combat text enabled.");
-    }
-
-    private void OnDisable()
-    {
-        if (_combat != null) _combat.HealthChanged -= OnHealthChanged;
-        if (_localHud == this) _localHud = null;
-    }
-
-    private void Update()
-    {
-        if (_combo > 0 && Time.unscaledTime - _lastComboTime > ComboTimeout) _combo = 0;
-        for (int i = _popups.Count - 1; i >= 0; i--)
-            if (_popups[i].target == null || Time.unscaledTime - _popups[i].startedAt > PopupLifetime) _popups.RemoveAt(i);
-    }
-
-    private void OnHealthChanged(int current, int max)
-    {
-        if (_lastHealth >= 0 && current < _lastHealth)
-        {
-            int damage = _lastHealth - current;
-            AddTextPopup(transform, $"-{damage}", new Color(1f, 0.25f, 0.25f), isCrit: false);
-            Debug.Log($"[CombatHud] Local player received {damage} damage ({current}/{max}).");
-        }
-        _lastHealth = current;
-    }
-
-    private void AddTextPopup(Transform target, string label, Color color, bool isCrit)
-    {
-        _popups.Add(new Popup { target = target, label = label, isCrit = isCrit, color = color, startedAt = Time.unscaledTime });
-    }
-
-    public static bool IsCrosshairVisible =>
-        (MapManager.Instance == null || !MapManager.Instance.IsWorldMapOpen) && !GameplayInput.IsBlocked;
-
-    private void OnGUI()
-    {
-        if (_localHud != this || Event.current.type != EventType.Repaint) return;
-        DrawCrosshair();
-        if (!GameplayInput.IsBlocked)
-        {
-            DrawPopups();
-            DrawCombo();
-        }
-    }
-
-    private void DrawStatus()
-    {
-        if (_combat == null || !_combat.IsSpawned) return;
-        const float width = 268f, hpHeight = 24f, staHeight = 20f;
-        float x = 28f, y = Screen.height - 92f;
-
-        float hpFrac = Mathf.Clamp01(_combat.NetworkHealth / (float)Mathf.Max(1, _combat.MaxHealth));
-        float staFrac = Mathf.Clamp01(_combat.CurrentStamina / Mathf.Max(1f, _combat.MaxStamina));
-
-        var old = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f, .76f);
-        GUI.DrawTexture(new Rect(x - 4f, y - 4f, width + 8f, hpHeight + staHeight + 34f), Texture2D.whiteTexture);
-
-        GUI.color = new Color(.18f, .05f, .06f, 1f);
-        GUI.DrawTexture(new Rect(x, y, width, hpHeight), Texture2D.whiteTexture);
-        GUI.color = Color.Lerp(new Color(.85f, .12f, .16f), new Color(.18f, .86f, .35f), hpFrac);
-        GUI.DrawTexture(new Rect(x, y, width * hpFrac, hpHeight), Texture2D.whiteTexture);
-
-        GUI.color = Color.white;
-        GUIStyle hpLabel = new GUIStyle(GUI.skin.label) { fontSize = 14, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-        GUI.Label(new Rect(x + 8f, y, width - 16f, hpHeight), $"HP  {_combat.NetworkHealth} / {_combat.MaxHealth}", hpLabel);
-
-        float staY = y + hpHeight + 4f;
-        GUI.color = new Color(.08f, .12f, .16f, 1f);
-        GUI.DrawTexture(new Rect(x, staY, width, staHeight), Texture2D.whiteTexture);
-        Color staColor = _combat.CurrentStamina <= 15f
-            ? new Color(1.0f, 0.35f, 0.12f)
-            : Color.Lerp(new Color(0.95f, 0.65f, 0.12f), new Color(0.20f, 0.82f, 0.98f), staFrac);
-        GUI.color = staColor;
-        GUI.DrawTexture(new Rect(x, staY, width * staFrac, staHeight), Texture2D.whiteTexture);
-
-        GUI.color = Color.white;
-        GUIStyle staLabel = new GUIStyle(GUI.skin.label) { fontSize = 12, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft };
-        GUI.Label(new Rect(x + 8f, staY, width - 16f, staHeight), $"STAMINA  {_combat.CurrentStamina:0} / {_combat.MaxStamina:0}", staLabel);
-
-        GUIStyle caption = new GUIStyle(GUI.skin.label) { fontSize = 11, fontStyle = FontStyle.Bold, alignment = TextAnchor.UpperLeft };
-        string statusText = _combat.IsBlocking
-            ? "GUARD ACTIVE (70% DMG REDUCTION)"
-            : (_combat.CurrentStamina <= 0.5f ? "EXHAUSTED (RECOVERING STAMINA)" : (_combat.IsInCombat ? "STATUS: IN COMBAT" : "STATUS: COMBAT READY"));
-        if (_combat.ActiveBuffDamageBonus > 0)
-            statusText += $"  |  +ATK {_combat.ActiveBuffDamageBonus} ({_combat.ActiveBuffRemainingSeconds:0}s)";
-        GUI.Label(new Rect(x, staY + staHeight + 3f, width + 80f, 18f), statusText, caption);
-
-        GUI.color = old;
-    }
-
-    private void DrawCrosshair()
-    {
-        if (!IsCrosshairVisible) return;
-
-        bool locked = _lock != null && _lock.IsLocked;
-        Color color = locked ? new Color(1f, 0.72f, 0.12f) : new Color(0.9f, 0.95f, 1f);
-        float radius = locked ? 15f : 10f;
-        float thickness = locked ? 3f : 2f;
-        float x = Screen.width * .5f, y = Screen.height * .5f;
-        var old = GUI.color;
-        GUI.color = color;
-        GUI.DrawTexture(new Rect(x - radius - 7f, y - thickness * .5f, 6f, thickness), Texture2D.whiteTexture);
-        GUI.DrawTexture(new Rect(x + radius + 1f, y - thickness * .5f, 6f, thickness), Texture2D.whiteTexture);
-        GUI.DrawTexture(new Rect(x - thickness * .5f, y - radius - 7f, thickness, 6f), Texture2D.whiteTexture);
-        GUI.DrawTexture(new Rect(x - thickness * .5f, y + radius + 1f, thickness, 6f), Texture2D.whiteTexture);
-        GUI.DrawTexture(new Rect(x - 1.5f, y - 1.5f, 3f, 3f), Texture2D.whiteTexture);
-        GUI.color = old;
-    }
-
-    private void DrawPopups()
-    {
-        var cam = Camera.main;
-        if (cam == null) return;
-        var old = GUI.color;
-        for (int i = 0; i < _popups.Count; i++)
-        {
-            Popup popup = _popups[i];
-            float t = Mathf.Clamp01((Time.unscaledTime - popup.startedAt) / PopupLifetime);
-            Vector3 screen = cam.WorldToScreenPoint(popup.target.position + Vector3.up * (1.5f + t * .9f));
-            if (screen.z <= 0f) continue;
-
-            GUI.color = new Color(popup.color.r, popup.color.g, popup.color.b, 1f - t);
-            GUIStyle style = new GUIStyle(GUI.skin.label)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = popup.isCrit ? 26 : 21,
-                fontStyle = FontStyle.Bold
-            };
-            GUI.Label(new Rect(screen.x - 95f, Screen.height - screen.y - 20f, 190f, 36f), popup.label, style);
-        }
-        GUI.color = old;
-    }
-
-    private void DrawCombo()
-    {
-        if (_combo <= 1) return;
-        float age = Time.unscaledTime - _lastComboTime;
-        GUI.color = new Color(1f, 0.85f, .2f, Mathf.Clamp01(1f - age / ComboTimeout));
-        GUIStyle style = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 23, fontStyle = FontStyle.Bold };
-        GUI.Label(new Rect(Screen.width * .5f - 110f, Screen.height * .5f + 45f, 220f, 35f), $"COMBO x{_combo}", style);
-        GUI.color = Color.white;
-    }
-}

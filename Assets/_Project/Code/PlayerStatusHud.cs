@@ -314,6 +314,12 @@ public class PlayerStatusHud : MonoBehaviour
                 _readinessText.color = new Color(0.32f, 0.98f, 0.72f, 1f);
                 _readinessText.text = "SAFE ZONE";
             }
+            else if (!_combat.IsWeaponDrawn)
+            {
+                _readinessDot.color = new Color(0.35f, 0.76f, 0.98f, 1f);
+                _readinessText.color = new Color(0.58f, 0.88f, 1f, 1f);
+                _readinessText.text = "EXPLORATION";
+            }
             else if (inCombat)
             {
                 float pulse = 0.7f + Mathf.Sin(Time.unscaledTime * 8f) * 0.3f;
@@ -379,9 +385,14 @@ public class PlayerStatusHud : MonoBehaviour
                 _pointsNoticeText.text = $"BLADE BUFF: +{_combat.ActiveBuffDamageBonus} ATK ({_combat.ActiveBuffRemainingSeconds:0}s)";
                 _pointsNoticeText.color = new Color(0.35f, 0.95f, 0.72f, 1f);
             }
+            else if (!_combat.IsWeaponDrawn)
+            {
+                _pointsNoticeText.text = "Exploration Mode • Press [1] to Draw GreatSword  |  [2-7] Hotbar";
+                _pointsNoticeText.color = new Color(0.62f, 0.88f, 1f, 0.98f);
+            }
             else
             {
-                _pointsNoticeText.text = "[I / Tab] Gear & Blacksmith  |  [M] Map  |  [J] Item Guide";
+                _pointsNoticeText.text = "[1] Sheathe  |  [2-7] Hotbar  |  [I] Gear  |  [M] Map  |  [J] Guide";
                 _pointsNoticeText.color = new Color(0.76f, 0.80f, 0.88f, 0.95f);
             }
         }

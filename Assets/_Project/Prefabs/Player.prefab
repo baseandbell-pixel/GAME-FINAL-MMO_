@@ -1942,16 +1942,23 @@ MonoBehaviour:
   nameLabel: {fileID: 3959170726157461673}
   characterVisual: {fileID: 1944122895396941018}
   animator: {fileID: 5483912845624833696}
+  networkAnimator: {fileID: 0}
   moveXParameter: MoveX
   moveYParameter: MoveY
   sprintParameter: IsSprinting
   overheadNameFontSize: 3
   overheadNameScale: 0.75
   overheadNameOffset: {x: 0, y: 1.42, z: 0}
+  walkSpeed: 2.2
   moveSpeed: 6
   runSpeed: 1.6
   acceleration: 40
+  deceleration: 22
   rotationSpeed: 12
+  jumpKey: 20
+  crouchKey: 17
+  jumpVelocity: 5.8
+  gravity: -20
   detachNameLabel: 1
   rotateTowardsMovement: 1
   strafeInActionCamera: 1
@@ -1962,6 +1969,10 @@ MonoBehaviour:
       Data: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
   _NetworkMove: {x: 0, y: 0}
   _NetworkSprinting:
+    RawValue: 0
+  _NetworkGrounded:
+    RawValue: 1
+  _NetworkCrouching:
     RawValue: 0
 --- !u!114 &8734651610118505881
 MonoBehaviour:
@@ -1992,6 +2003,13 @@ MonoBehaviour:
   dodgeCooldown: 0.75
   dodgeDuration: 0.45
   dodgeDistance: 4.2
+  parryWindowSeconds: 0.25
+  parryCooldownSeconds: 0.45
+  parryEnemyStaggerDuration: 1.45
+  parryBossStaggerDuration: 0.7
+  parryStaminaReward: 12
+  enableCombatHitStop: 1
+  enableCameraShake: 1
   maxStamina: 100
   sprintStaminaPerSecond: 15
   attackStaminaCost: 15
@@ -2014,6 +2032,8 @@ MonoBehaviour:
   _NetworkHealth: 100
   _NetworkStamina: 100
   _IsBlocking:
+    RawValue: 0
+  _IsWeaponDrawn:
     RawValue: 0
   _ComboStep: 1
   _NetworkLevel: 1
@@ -2044,7 +2064,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e8a658aa5d91ba64784df068020ff398, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InventoryManager
-  capacity: 24
+  capacity: 48
   worldItemPrefab: {fileID: 6507998983499857821, guid: 1f3dda27c4c498b4fb91d3d916ec6506, type: 3}
   createUi: 1
 --- !u!114 &431166334951252831
@@ -2081,10 +2101,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerAnimationDriver
   animator: {fileID: 5483912845624833696}
+  networkAnimator: {fileID: 0}
   swordHand: {fileID: 8578920357810093620}
   swordBack: {fileID: 110398276086683624}
   locomotionDampTime: 0.08
   alwaysArmedInSandbox: 1
+  drawSocketSwapDelay: 0.18
+  sheatheSocketSwapDelay: 0.3
+  minIdleVariationWait: 7
+  maxIdleVariationWait: 13
 --- !u!1 &5579243513453936096
 GameObject:
   m_ObjectHideFlags: 0

@@ -126,6 +126,9 @@ public class PlayerCapsule : NetworkBehaviour
     private bool sprintHeld;
     private bool _jumpQueued;
     private float _overrideMoveUntil;
+    // คิววาร์ปสำหรับซิงก์ผ่าน FixedUpdateNetwork ของ Photon Fusion 2 (ป้องกันการเด้งกลับเมื่อเรียกจาก Coroutine/Respawn)
+    private bool _hasPendingTeleport;
+    private Vector3 _pendingTeleportPos;
 
     private bool isOwner;
     private MaterialPropertyBlock _mpb;
@@ -245,9 +248,17 @@ public class PlayerCapsule : NetworkBehaviour
     }
 
     /// <summary>
-    /// วาร์ปตัวละครไปยังตำแหน่งเป้าหมายอย่างปลอดภัย (รองรับทั้ง CharacterController และ Rigidbody)
+    /// วาร์ปตัวละครไปยังตำแหน่งเป้าหมายอย่างปลอดภัย (รองรับทั้ง CharacterController, Rigidbody และ Photon Fusion 2 FixedUpdateNetwork)
     /// </summary>
     public void TeleportCharacter(Vector3 targetPosition)
+    {
+        ApplyTeleportImmediate(targetPosition);
+        // บันทึกคิวไว้ยืนยันอีกครั้งภายใน FixedUpdateNetwork เพื่อให้ NetworkTransform ซิงก์ตรงทุก Peer โดยไม่โดนดึงกลับ
+        _hasPendingTeleport = true;
+        _pendingTeleportPos = targetPosition;
+    }
+
+    private void ApplyTeleportImmediate(Vector3 targetPosition)
     {
         bool ccWasEnabled = _cc != null && _cc.enabled;
         if (ccWasEnabled) _cc.enabled = false;
@@ -264,10 +275,11 @@ public class PlayerCapsule : NetworkBehaviour
 
         _ccHorizontalVel = Vector3.zero;
         _ccVerticalVel = 0f;
+        _dashUntil = -1f;
         transform.position = targetPosition;
         Physics.SyncTransforms();
 
-        if (_networkTransform != null)
+        if (_networkTransform != null && Object != null && Object.IsValid && Object.HasStateAuthority)
             _networkTransform.Teleport(targetPosition, transform.rotation);
 
         if (ccWasEnabled) _cc.enabled = true;
@@ -360,6 +372,14 @@ public class PlayerCapsule : NetworkBehaviour
     public override void FixedUpdateNetwork()
     {
         if (!isOwner) return;
+
+        // ประมวลผลการวาร์ปในรอบ FixedUpdateNetwork ของ Fusion เพื่อให้ NetworkTransform อัปเดตตำแหน่งถาวรไม่เด้งกลับ
+        if (_hasPendingTeleport)
+        {
+            _hasPendingTeleport = false;
+            ApplyTeleportImmediate(_pendingTeleportPos);
+            return;
+        }
 
         if (_cc != null && _cc.enabled)
         {

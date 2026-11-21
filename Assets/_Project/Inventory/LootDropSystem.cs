@@ -4,13 +4,16 @@ using UnityEngine;
 
 /// <summary>
 /// ระบบคำนวณอัตราดรอปไอเทมตามสัดส่วนดาเมจที่ทำได้ (Damage-Contribution Weighted Personal Loot System)
-/// แก้ไขปัญหาแย่งของระหว่าง Host กับ Client โดย:
-///   1. ผู้เล่นทุกคนที่มีส่วนร่วมทำดาเมจใส่มอนสเตอร์หรือบอส จะได้รับไอเทมดรอปส่วนตัวแยกกัน (Personal Instanced Loot)
-///   2. ผู้ที่ทำดาเมจสูงสุด (Top DPS) จะได้โบนัสโอกาสออกไอเทมระดับ Epic และ Legendary สูงที่สุด
-///   3. ผู้ที่ทำดาเมจรองลงมา ยังคงมีโอกาสได้ลุ้นไอเทมระดับ Epic และ Legendary จริง (ไม่เป็น 0%) แต่มีเปอร์เซ็นต์ลดหลั่นตามสัดส่วนดาเมจ
+/// ปรับสมดุล Progression ใหม่ให้ไอเทมหายากมีคุณค่าและกระเป๋าไม่ล้น:
+///   1. มอนสเตอร์ทั่วไปมีโอกาสดรอปไอเทม ~26%–34% (เฉลี่ย 30%) แทนการดรอป 100% ทุกตัว (แต่ยังคงได้รับ EXP ทุกครั้ง)
+///   2. เมื่อดรอปจากมอนสเตอร์ทั่วไปจะเน้นระดับ Normal (74/20/5/1%) ส่วนหีบสมบัติแคมป์ใช้ 62/25/10/3% และบอสใช้ 35/40/18/7%
+///   3. ผู้ที่ทำดาเมจสูงสุด (Top DPS) ได้โบนัสตัวคูณโอกาสออกระดับ Epic และ Legendary สูงขึ้นตามสัดส่วนดาเมจ
 /// </summary>
 public static class LootDropSystem
 {
+    // โอกาสพื้นฐานที่มอนสเตอร์ทั่วไปจะดรอปไอเทม 1 ชิ้นเมื่อตาย (30% — อยู่ในช่วง 25%–35%)
+    public const float NormalEnemyDropChance = 0.30f;
+
     /// <summary>
     /// โครงสร้างเก็บค่าโอกาสออกไอเทมแต่ละระดับ (0..1 รวมกันได้ 1.0) สำหรับผู้เล่นแต่ละคน
     /// </summary>
@@ -25,56 +28,93 @@ public static class LootDropSystem
     }
 
     /// <summary>
+    /// คำนวณโอกาสที่มอนสเตอร์ทั่วไปจะดรอปไอเทมให้ผู้เล่นคนนี้ (26% ถึง 34% ตามสัดส่วนดาเมจและ Top DPS)
+    /// </summary>
+    public static float GetNormalEnemyDropChance(float damageShare, bool isTopDps)
+    {
+        float clampedShare = Mathf.Clamp01(damageShare);
+        float chance = Mathf.Lerp(0.26f, 0.32f, clampedShare);
+        if (isTopDps) chance += 0.02f;
+        return Mathf.Clamp(chance, 0.25f, 0.35f);
+    }
+
+    /// <summary>
+    /// สุ่มตรวจสอบว่ามอนสเตอร์ทั่วไปตัวนี้จะดรอปไอเทมให้ผู้เล่นหรือไม่ (EXP จะยังได้รับเสมอแม้ไม่ดรอปไอเทม)
+    /// </summary>
+    public static bool RollNormalEnemyShouldDrop(float damageShare, bool isTopDps, float? fixedRoll01 = null)
+    {
+        float chance = GetNormalEnemyDropChance(damageShare, isTopDps);
+        float roll = fixedRoll01.HasValue ? Mathf.Clamp01(fixedRoll01.Value) : Random.value;
+        return roll < chance;
+    }
+
+    /// <summary>
     /// คำนวณโอกาสออกไอเทมแต่ละระดับ (Normal, Rare, Epic, Legendary) จากสัดส่วนดาเมจของผู้เล่น
     /// </summary>
-    /// <param name="isBoss">เป็นบอสหรือไม่</param>
+    /// <param name="isBoss">เป็นบอสหรือหีบบอสหรือไม่</param>
     /// <param name="damageShare">สัดส่วนดาเมจที่ผู้เล่นทำได้ (0.0 ถึง 1.0)</param>
     /// <param name="isTopDps">เป็นผู้เล่นที่ทำดาเมจสูงสุดในการต่อสู้นี้หรือไม่</param>
-    public static WeightedTierOdds CalculatePlayerTierOdds(bool isBoss, float damageShare, bool isTopDps)
+    /// <param name="isChest">เป็นหีบสมบัติหรือไม่ (true = ตารางหีบแคมป์ 62/25/10/3%, false = ตารางมอนสเตอร์ 74/20/5/1%)</param>
+    public static WeightedTierOdds CalculatePlayerTierOdds(bool isBoss, float damageShare, bool isTopDps, bool isChest = false)
     {
         float clampedShare = Mathf.Clamp01(damageShare);
 
-        // ตัวคูณโอกาสได้ของระดับสูง (Epic / Legendary):
-        // - หากเป็น Top DPS: ได้รับตัวคูณโบนัสสูงสุด (1.35x ถึง 1.65x สำหรับ Legendary และ 1.25x ถึง 1.45x สำหรับ Epic)
-        // - หากเป็นผู้ทำดาเมจรอง: ยังคงมีโอกาสออก Epic / Legendary จริงเสมอ (0.55x ถึง 1.10x ตามสัดส่วนดาเมจ)
+        // ตัวคูณโอกาสได้ของระดับสูง (Epic / Legendary) แบบปรับสมดุลใหม่:
+        // - Top DPS: ได้โบนัสตัวคูณ 1.25x ถึง 1.50x สำหรับ Legendary และ 1.18x ถึง 1.35x สำหรับ Epic
+        // - ผู้ทำดาเมจรอง: ได้ 0.55x ถึง 1.00x ตามสัดส่วนดาเมจ (ยังมีโอกาสได้ของแรร์จริงแต่ไม่เฟ้อ)
         float legendaryMult = isTopDps
-            ? Mathf.Lerp(1.35f, 1.65f, clampedShare)
-            : Mathf.Lerp(0.55f, 1.10f, clampedShare);
+            ? Mathf.Lerp(1.25f, 1.50f, clampedShare)
+            : Mathf.Lerp(0.55f, 1.00f, clampedShare);
 
         float epicMult = isTopDps
-            ? Mathf.Lerp(1.25f, 1.45f, clampedShare)
-            : Mathf.Lerp(0.60f, 1.10f, clampedShare);
+            ? Mathf.Lerp(1.18f, 1.35f, clampedShare)
+            : Mathf.Lerp(0.62f, 1.00f, clampedShare);
 
         if (isBoss)
         {
-            // บอส: พื้นฐาน Rare 30%, Epic 45%, Legendary 25%
-            float leg = Mathf.Clamp(ItemRegistry.BossLegendaryChance * legendaryMult, 0.08f, 0.50f);
-            float epic = Mathf.Clamp(ItemRegistry.BossEpicChance * epicMult, 0.20f, 0.65f);
-            if (leg + epic > 0.90f)
-            {
-                float scale = 0.90f / (leg + epic);
-                leg *= scale;
-                epic *= scale;
-            }
-            float rare = Mathf.Max(0.05f, 1f - (leg + epic));
+            // บอสและหีบบอส: พื้นฐาน Normal 35%, Rare 40%, Epic 18%, Legendary 7%
+            float leg = Mathf.Clamp(ItemRegistry.BossLegendaryChance * legendaryMult, 0.03f, 0.14f);
+            float epic = Mathf.Clamp(ItemRegistry.BossEpicChance * epicMult, 0.10f, 0.28f);
+            float rare = Mathf.Clamp(ItemRegistry.BossRareChance * Mathf.Lerp(0.90f, 1.06f, clampedShare), 0.30f, 0.46f);
+            float normal = Mathf.Max(0.15f, 1f - (leg + epic + rare));
 
+            float sum = normal + rare + epic + leg;
             return new WeightedTierOdds
             {
-                normalChance = 0f,
-                rareChance = rare,
-                epicChance = epic,
-                legendaryChance = leg,
+                normalChance = normal / sum,
+                rareChance = rare / sum,
+                epicChance = epic / sum,
+                legendaryChance = leg / sum,
+                damageShare = clampedShare,
+                isTopDps = isTopDps
+            };
+        }
+        else if (isChest)
+        {
+            // หีบสมบัติแคมป์: พื้นฐาน Normal 62%, Rare 25%, Epic 10%, Legendary 3%
+            float leg = Mathf.Clamp(ItemRegistry.LegendaryChance * legendaryMult, 0.015f, 0.06f);
+            float epic = Mathf.Clamp(ItemRegistry.EpicChance * epicMult, 0.055f, 0.15f);
+            float rare = Mathf.Clamp(ItemRegistry.RareChance * Mathf.Lerp(0.88f, 1.08f, clampedShare), 0.18f, 0.30f);
+            float normal = Mathf.Max(0.42f, 1f - (leg + epic + rare));
+
+            float sum = normal + rare + epic + leg;
+            return new WeightedTierOdds
+            {
+                normalChance = normal / sum,
+                rareChance = rare / sum,
+                epicChance = epic / sum,
+                legendaryChance = leg / sum,
                 damageShare = clampedShare,
                 isTopDps = isTopDps
             };
         }
         else
         {
-            // มอนสเตอร์ทั่วไป / แคมป์: พื้นฐาน Normal 50%, Rare 30%, Epic 15%, Legendary 5%
-            float leg = Mathf.Clamp(ItemRegistry.LegendaryChance * legendaryMult, 0.02f, 0.20f);
-            float epic = Mathf.Clamp(ItemRegistry.EpicChance * epicMult, 0.06f, 0.32f);
-            float rare = Mathf.Clamp(ItemRegistry.RareChance * Mathf.Lerp(0.85f, 1.15f, clampedShare), 0.20f, 0.40f);
-            float normal = Mathf.Max(0.10f, 1f - (leg + epic + rare));
+            // มอนสเตอร์ทั่วไป (เมื่อผ่านการสุ่มโอกาสดรอป ~30% แล้ว): พื้นฐาน Normal 74%, Rare 20%, Epic 5%, Legendary 1%
+            float leg = Mathf.Clamp(ItemRegistry.EnemyLegendaryChance * legendaryMult, 0.004f, 0.02f);
+            float epic = Mathf.Clamp(ItemRegistry.EnemyEpicChance * epicMult, 0.025f, 0.08f);
+            float rare = Mathf.Clamp(ItemRegistry.EnemyRareChance * Mathf.Lerp(0.88f, 1.10f, clampedShare), 0.14f, 0.25f);
+            float normal = Mathf.Max(0.58f, 1f - (leg + epic + rare));
 
             // ปรับผลรวมให้เท่ากับ 1.0 พอดี
             float sum = normal + rare + epic + leg;
@@ -99,16 +139,17 @@ public static class LootDropSystem
         bool isTopDps,
         out ItemTier rolledTier,
         out WeightedTierOdds appliedOdds,
-        float? fixedRoll01 = null)
+        float? fixedRoll01 = null,
+        bool isChest = false)
     {
-        appliedOdds = CalculatePlayerTierOdds(isBoss, damageShare, isTopDps);
+        appliedOdds = CalculatePlayerTierOdds(isBoss, damageShare, isTopDps, isChest);
         float roll = fixedRoll01.HasValue ? Mathf.Clamp01(fixedRoll01.Value) : Random.value;
 
-        // เรียงตรวจสอบจากระดับ Legendary -> Epic -> Rare -> Normal เพื่อให้ค่า fixedRoll01 ที่สูงออกระดับสูงตามมาตรฐานเดิม
+        // เรียงตรวจสอบจาก Normal -> Rare -> Epic -> Legendary เพื่อให้ค่า roll ที่สูงออกระดับสูงตามมาตรฐาน
         float normalAndRare = appliedOdds.normalChance + appliedOdds.rareChance;
         float normalRareEpic = normalAndRare + appliedOdds.epicChance;
 
-        if (roll < appliedOdds.normalChance && !isBoss)
+        if (roll < appliedOdds.normalChance)
             rolledTier = ItemTier.Normal;
         else if (roll < normalAndRare)
             rolledTier = ItemTier.Rare;
