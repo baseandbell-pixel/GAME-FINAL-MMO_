@@ -1,0 +1,49 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 42567a72988b04a43a2b8d9b1ced5a57, type: 3}
+  m_Name: Config_Orc
+  m_EditorClassIdentifier: Assembly-CSharp::MonsterAnimationConfig
+  monsterName: Orc
+  isBoss: 0
+  healthMultiplier: 1.67
+  damageMultiplier: 1.5
+  defenseBonus: 1
+  attackRange: 2.5
+  attackImpactDelay: 0.4
+  counterImpactDelay: 0.36
+  lootRollMode: 0
+  maxDropsPerKill: 0
+  lootDrops: []
+  goldDropChancePercent: 0
+  minGold: 5
+  maxGold: 15
+  canFlinch: 1
+  hitReactCooldown: 0.25
+  attackVariantCount: 2
+  skillVariantCount: 1
+  speedDampTime: 0.14
+  walkSpeedThreshold: 1.6
+  runSpeedThreshold: 4.2
+  moveStopEpsilon: 0.05
+  lockHipsXZInPlace: 1
+  enableHitFlash: 1
+  hitFlashDuration: 0.11
+  hitFlashEmissionColor: {r: 0.85, g: 0.25, b: 0.2, a: 1}
+  blockFlashEmissionColor: {r: 1, g: 0.72, b: 0.18, a: 1}
+  targetWorldHeight: 2.15
+  audioVolume: 0.85
+  attackSwingClips: []
+  hitReactClips: []
+  guardRaiseClip: {fileID: 0}
+  guardBlockClip: {fileID: 0}
+  guardBreakClip: {fileID: 0}
+  deathClip: {fileID: 0}
