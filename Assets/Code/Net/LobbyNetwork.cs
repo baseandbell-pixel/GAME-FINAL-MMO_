@@ -6,7 +6,6 @@ using Fusion.Sockets;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-[RequireComponent(typeof(NetworkRunner))]
 public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 {
     public enum State { Idle, Connecting, ConnectedToPhoton, Joining, InLobby, Starting, InGame, Failed }
@@ -22,24 +21,18 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     [Tooltip("Name of the map scene to load when the first player presses PLAY. It must be in Build Settings.")]
     public string gameSceneName = "SimpleScene";
 
-    /// <summary>Raised whenever the connection state changes (state, human readable message).</summary>
     public event Action<State, string> OnStateChanged;
-
-    /// <summary>
-    /// Raised when the room gets a new "first player". In Shared mode Photon hands the
-    /// master client role to somebody else as soon as the current one leaves, so this is
-    /// how the remaining clients learn who owns the PLAY button now.
-    /// (new master, true when that is the local player)
-    /// </summary>
     public event Action<PlayerRef, bool> OnMasterClientChanged;
+    public event Action<IReadOnlyList<SessionInfo>> OnSessionListChanged;
 
     public State CurrentState { get; private set; } = State.Idle;
     public NetworkRunner Runner { get; private set; }
-
-    /// <summary>The player that currently owns the room, or PlayerRef.None when not in a room.</summary>
     public PlayerRef MasterClient { get; private set; } = PlayerRef.None;
 
+    public IReadOnlyList<SessionInfo> CachedSessions => _cachedSessions;
+
     PlayerRef _lastMaster = PlayerRef.None;
+    List<SessionInfo> _cachedSessions = new List<SessionInfo>();
 
     void Awake()
     {
@@ -49,10 +42,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
             return;
         }
         Instance = this;
-
-        Runner = GetComponent<NetworkRunner>();
-        Runner.ProvideInput = false;
-        Runner.AddCallbacks(this);
     }
 
     void OnDestroy()
@@ -62,7 +51,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
     void Update()
     {
-        // Shared mode has no "master client changed" callback, so we watch it ourselves.
         PollMasterClient();
     }
 
@@ -78,8 +66,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         _lastMaster = master;
         MasterClient = master;
 
-        // The very first assignment (we just created/joined the room) is not a hand-over,
-        // so only a real change is announced.
         if (!master.IsRealPlayer || !hadPreviousMaster) return;
 
         bool localIsMaster = Runner != null && master == Runner.LocalPlayer;
@@ -92,48 +78,130 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         OnStateChanged?.Invoke(state, message);
     }
 
+    /// <summary>สร้าง NetworkRunner เป็น Child GameObject ใหม่เมื่อยังไม่มี</summary>
+    void EnsureRunnerExists()
+    {
+        if (Runner != null) return;
+
+        var runnerGo = new GameObject("FusionNetworkRunner");
+        runnerGo.transform.SetParent(transform);
+
+        Runner = runnerGo.AddComponent<NetworkRunner>();
+        Runner.ProvideInput = false;
+        Runner.AddCallbacks(this);
+    }
+
+    void CleanupRunner(NetworkRunner targetRunner = null)
+    {
+        var r = targetRunner != null ? targetRunner : Runner;
+        if (r != null)
+        {
+            r.RemoveCallbacks(this);
+            if (r.gameObject != null)
+                Destroy(r.gameObject);
+        }
+        if (Runner == r)
+            Runner = null;
+    }
+
     public async Task<bool> ConnectToPhotonAsync()
     {
         if (CurrentState == State.Connecting || CurrentState == State.Joining) return false;
         if (CurrentState == State.ConnectedToPhoton || CurrentState == State.InLobby) return true;
 
         SetState(State.Connecting, "Connecting to Photon...");
+        EnsureRunnerExists();
 
         var result = await Runner.JoinSessionLobby(SessionLobby.Shared);
         if (!result.Ok)
         {
+            CleanupRunner();
             SetState(State.Failed, $"Photon connect failed: {result.ShutdownReason}");
             return false;
         }
 
-        SetState(State.ConnectedToPhoton, "Connected. Ready to Quick Join.");
+        SetState(State.ConnectedToPhoton, "Connected to Lobby.");
         return true;
     }
 
-    public async Task<bool> QuickJoinAsync()
+    /// <summary>สร้างห้องใหม่ (Player 1 กด Create)</summary>
+    public async Task<bool> CreateRoomAsync(string customRoomName = null)
     {
-        if (CurrentState == State.Idle || CurrentState == State.Failed)
+        if (CurrentState == State.Idle || CurrentState == State.Failed || Runner == null)
         {
             if (!await ConnectToPhotonAsync()) return false;
         }
         if (CurrentState == State.Joining || CurrentState == State.InLobby) return false;
 
-        SetState(State.Joining, "Looking for a room...");
+        SetState(State.Joining, "Creating room...");
+
+        string hostName = GoogleAPI.instance != null && !string.IsNullOrEmpty(GoogleAPI.instance.username)
+            ? GoogleAPI.instance.username
+            : "Player";
+
+        string displayRoomName = string.IsNullOrWhiteSpace(customRoomName)
+            ? $"{hostName}'s Room"
+            : customRoomName.Trim();
+
+        string uniqueSessionId = $"Room_{Guid.NewGuid().ToString("N").Substring(0, 6)}";
+
+        var sessionProps = new Dictionary<string, SessionProperty>
+        {
+            { "roomName", displayRoomName },
+            { "hostName", hostName }
+        };
 
         var result = await Runner.StartGame(new StartGameArgs
         {
             GameMode = GameMode.Shared,
-            SessionName = null,                       // null => random matchmaking
+            SessionName = uniqueSessionId,
+            SessionProperties = sessionProps,
             PlayerCount = MaxPlayers,
-            MatchmakingMode = Photon.Realtime.MatchmakingMode.FillRoom,
-            EnableClientSessionCreation = true,       // create a room if none is free
-            SceneManager = GetComponent<INetworkSceneManager>() ?? gameObject.AddComponent<NetworkSceneManagerDefault>(),
-            ObjectProvider = GetComponent<INetworkObjectProvider>() ?? gameObject.AddComponent<NetworkObjectProviderDefault>(),
+            IsVisible = true,
+            IsOpen = true,
+            EnableClientSessionCreation = true,
+            SceneManager = Runner.GetComponent<INetworkSceneManager>() ?? Runner.gameObject.AddComponent<NetworkSceneManagerDefault>(),
+            ObjectProvider = Runner.GetComponent<INetworkObjectProvider>() ?? Runner.gameObject.AddComponent<NetworkObjectProviderDefault>(),
         });
 
         if (!result.Ok)
         {
-            SetState(State.Failed, $"Quick Join failed: {result.ShutdownReason}");
+            CleanupRunner();
+            SetState(State.Failed, $"Create room failed: {result.ShutdownReason}");
+            return false;
+        }
+
+        SpawnLocalPlayer();
+        SetState(State.InLobby, $"Created room: {displayRoomName}");
+        return true;
+    }
+
+    /// <summary>เข้าร่วมห้องที่มีอยู่แล้วจากรายการ (Player 2+ กด Join)</summary>
+    public async Task<bool> JoinRoomAsync(string sessionName)
+    {
+        if (string.IsNullOrEmpty(sessionName)) return false;
+
+        if (CurrentState == State.Idle || CurrentState == State.Failed || Runner == null)
+        {
+            if (!await ConnectToPhotonAsync()) return false;
+        }
+        if (CurrentState == State.Joining || CurrentState == State.InLobby) return false;
+
+        SetState(State.Joining, "Joining room...");
+
+        var result = await Runner.StartGame(new StartGameArgs
+        {
+            GameMode = GameMode.Shared,
+            SessionName = sessionName,
+            EnableClientSessionCreation = false,
+            SceneManager = Runner.GetComponent<INetworkSceneManager>() ?? Runner.gameObject.AddComponent<NetworkSceneManagerDefault>(),
+            ObjectProvider = Runner.GetComponent<INetworkObjectProvider>() ?? Runner.gameObject.AddComponent<NetworkObjectProviderDefault>(),
+        });
+
+        if (!result.Ok)
+        {
+            CleanupRunner();
+            SetState(State.Failed, $"Join room failed: {result.ShutdownReason}");
             return false;
         }
 
@@ -142,10 +210,8 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         return true;
     }
 
-    /// <summary>True for the player that owns the room - in Shared mode that is the first player in.</summary>
     public bool IsFirstPlayer => Runner != null && Runner.IsRunning && Runner.IsSharedModeMasterClient;
 
-    /// <summary>Loads the map for everybody in the room. Only the first player may call it.</summary>
     public void StartGame()
     {
         if (!IsFirstPlayer)
@@ -160,12 +226,13 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         }
 
         string targetScene = gameSceneName.Trim();
-        // Support common spelling variations between Dev_Kulpat and Dev_Kulphat
         if (targetScene.Equals("Dev_Kulphat", StringComparison.OrdinalIgnoreCase))
         {
-            Debug.Log($"[LobbyNetwork] Resolving scene alias '{targetScene}' -> 'Dev_Kulpat'");
             targetScene = "Dev_Kulpat";
         }
+
+        if (Runner != null && Runner.SessionInfo.IsValid)
+            Runner.SessionInfo.IsOpen = false;
 
         SetState(State.Starting, "Loading the map...");
         Runner.LoadScene(targetScene, LoadSceneMode.Single);
@@ -185,33 +252,39 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
     public async void LeaveLobby()
     {
-        if (Runner == null || !Runner.IsRunning) return;
+        if (Runner == null) return;
         await Runner.Shutdown();
-        SetState(State.Idle, "Left the room.");
     }
-
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { }
-    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
-    {
-        // The role may have just moved to somebody else - tell the UI right away
-        // instead of waiting for the next Update.
-        PollMasterClient();
-    }
+    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player) => PollMasterClient();
+
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
     {
+        if (Runner != null && Runner != runner) return;
+
+        CleanupRunner(runner);
         LobbyPlayer.All.Clear();
+        _cachedSessions.Clear();
         MasterClient = PlayerRef.None;
         _lastMaster = PlayerRef.None;
         SetState(State.Idle, $"Disconnected ({shutdownReason}).");
     }
+
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
     {
         SetState(State.Failed, $"Disconnected: {reason}");
     }
+
     public void OnConnectFailed(NetworkRunner runner, NetAddress remoteAddress, NetConnectFailedReason reason)
     {
         SetState(State.Failed, $"Connect failed: {reason}");
+    }
+
+    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList)
+    {
+        _cachedSessions = sessionList != null ? new List<SessionInfo>(sessionList) : new List<SessionInfo>();
+        OnSessionListChanged?.Invoke(_cachedSessions);
     }
 
     public void OnInput(NetworkRunner runner, NetworkInput input) { }
@@ -219,7 +292,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
     public void OnConnectedToServer(NetworkRunner runner) { }
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
     public void OnUserSimulationMessage(NetworkRunner runner) { }
-    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList) { }
     public void OnCustomAuthenticationResponse(NetworkRunner runner, Dictionary<string, object> data) { }
     public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) { }
     public void OnSceneLoadDone(NetworkRunner runner)
