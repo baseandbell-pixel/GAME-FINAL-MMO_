@@ -33,6 +33,7 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
     PlayerRef _lastMaster = PlayerRef.None;
     List<SessionInfo> _cachedSessions = new List<SessionInfo>();
+    bool _isLeaving;
 
     void Awake()
     {
@@ -42,6 +43,8 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
             return;
         }
         Instance = this;
+
+        Application.runInBackground = true;
     }
 
     void OnDestroy()
@@ -49,9 +52,29 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         if (Instance == this) Instance = null;
     }
 
+    void OnApplicationQuit()
+    {
+        if (Runner != null && !Runner.IsShutdown)
+        {
+            Runner.Shutdown();
+        }
+    }
+
     void Update()
     {
         PollMasterClient();
+        EnsureRoomStaysOpenInLobby();
+    }
+
+    void EnsureRoomStaysOpenInLobby()
+    {
+        if (CurrentState != State.InLobby || !IsFirstPlayer) return;
+        if (Runner == null || !Runner.SessionInfo.IsValid) return;
+
+        if (!Runner.SessionInfo.IsOpen)
+            Runner.SessionInfo.IsOpen = true;
+        if (!Runner.SessionInfo.IsVisible)
+            Runner.SessionInfo.IsVisible = true;
     }
 
     void PollMasterClient()
@@ -78,7 +101,6 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         OnStateChanged?.Invoke(state, message);
     }
 
-    /// <summary>สร้าง NetworkRunner เป็น Child GameObject ใหม่เมื่อยังไม่มี</summary>
     void EnsureRunnerExists()
     {
         if (Runner != null) return;
@@ -91,21 +113,23 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         Runner.AddCallbacks(this);
     }
 
-    void CleanupRunner(NetworkRunner targetRunner = null)
+    async Task DestroyRunnerSafelyAsync(NetworkRunner targetRunner)
     {
-        var r = targetRunner != null ? targetRunner : Runner;
-        if (r != null)
-        {
-            r.RemoveCallbacks(this);
-            if (r.gameObject != null)
-                Destroy(r.gameObject);
-        }
-        if (Runner == r)
+        if (targetRunner == null) return;
+
+        targetRunner.RemoveCallbacks(this);
+        if (Runner == targetRunner)
             Runner = null;
+
+        if (targetRunner.gameObject != null)
+            Destroy(targetRunner.gameObject);
+
+        await Task.Yield();
     }
 
     public async Task<bool> ConnectToPhotonAsync()
     {
+        if (_isLeaving) return false;
         if (CurrentState == State.Connecting || CurrentState == State.Joining) return false;
         if (CurrentState == State.ConnectedToPhoton || CurrentState == State.InLobby) return true;
 
@@ -115,7 +139,7 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         var result = await Runner.JoinSessionLobby(SessionLobby.Shared);
         if (!result.Ok)
         {
-            CleanupRunner();
+            await DestroyRunnerSafelyAsync(Runner);
             SetState(State.Failed, $"Photon connect failed: {result.ShutdownReason}");
             return false;
         }
@@ -124,9 +148,11 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         return true;
     }
 
-    /// <summary>สร้างห้องใหม่ (Player 1 กด Create)</summary>
-    public async Task<bool> CreateRoomAsync(string customRoomName = null)
+    /// <summary>สร้างห้องใหม่ รองรับทั้ง Public และ Private (พร้อมรหัสผ่าน)</summary>
+    public async Task<bool> CreateRoomAsync(string customRoomName = null, bool isPrivate = false, string password = null)
     {
+        if (_isLeaving) return false;
+
         if (CurrentState == State.Idle || CurrentState == State.Failed || Runner == null)
         {
             if (!await ConnectToPhotonAsync()) return false;
@@ -143,12 +169,15 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
             ? $"{hostName}'s Room"
             : customRoomName.Trim();
 
+        string cleanPassword = isPrivate && !string.IsNullOrEmpty(password) ? password.Trim() : "";
         string uniqueSessionId = $"Room_{Guid.NewGuid().ToString("N").Substring(0, 6)}";
 
         var sessionProps = new Dictionary<string, SessionProperty>
         {
             { "roomName", displayRoomName },
-            { "hostName", hostName }
+            { "hostName", hostName },
+            { "isPrivate", isPrivate ? 1 : 0 },
+            { "password", cleanPassword }
         };
 
         var result = await Runner.StartGame(new StartGameArgs
@@ -166,7 +195,7 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
         if (!result.Ok)
         {
-            CleanupRunner();
+            await DestroyRunnerSafelyAsync(Runner);
             SetState(State.Failed, $"Create room failed: {result.ShutdownReason}");
             return false;
         }
@@ -176,10 +205,10 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
         return true;
     }
 
-    /// <summary>เข้าร่วมห้องที่มีอยู่แล้วจากรายการ (Player 2+ กด Join)</summary>
+    /// <summary>เข้าร่วมห้องที่มีอยู่แล้วจากรายการ</summary>
     public async Task<bool> JoinRoomAsync(string sessionName)
     {
-        if (string.IsNullOrEmpty(sessionName)) return false;
+        if (_isLeaving || string.IsNullOrEmpty(sessionName)) return false;
 
         if (CurrentState == State.Idle || CurrentState == State.Failed || Runner == null)
         {
@@ -200,7 +229,7 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
         if (!result.Ok)
         {
-            CleanupRunner();
+            await DestroyRunnerSafelyAsync(Runner);
             SetState(State.Failed, $"Join room failed: {result.ShutdownReason}");
             return false;
         }
@@ -252,23 +281,74 @@ public class LobbyNetwork : MonoBehaviour, INetworkRunnerCallbacks
 
     public async void LeaveLobby()
     {
-        if (Runner == null) return;
-        await Runner.Shutdown();
+        if (_isLeaving) return;
+        _isLeaving = true;
+
+        var oldRunner = Runner;
+        if (oldRunner != null)
+        {
+            oldRunner.RemoveCallbacks(this);
+            Runner = null;
+            await oldRunner.Shutdown();
+            await DestroyRunnerSafelyAsync(oldRunner);
+        }
+
+        ResetLocalLobbyCache();
+        _isLeaving = false;
+
+        SetState(State.Idle, "Left the room.");
+        await ConnectToPhotonAsync();
     }
 
-    public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { }
-    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player) => PollMasterClient();
-
-    public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
+    void ResetLocalLobbyCache()
     {
-        if (Runner != null && Runner != runner) return;
-
-        CleanupRunner(runner);
         LobbyPlayer.All.Clear();
         _cachedSessions.Clear();
         MasterClient = PlayerRef.None;
         _lastMaster = PlayerRef.None;
+    }
+
+    public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { }
+
+    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
+    {
+        for (int i = LobbyPlayer.All.Count - 1; i >= 0; i--)
+        {
+            var lp = LobbyPlayer.All[i];
+            if (lp == null || lp.Object == null)
+            {
+                LobbyPlayer.All.RemoveAt(i);
+                continue;
+            }
+
+            if (lp.Object.InputAuthority == player)
+            {
+                if (lp.Object.HasStateAuthority && runner != null && runner.IsRunning)
+                {
+                    runner.Despawn(lp.Object);
+                }
+                LobbyPlayer.All.RemoveAt(i);
+            }
+        }
+
+        PollMasterClient();
+        EnsureRoomStaysOpenInLobby();
+    }
+
+    public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
+    {
+        if (_isLeaving) return;
+        if (Runner != null && Runner != runner) return;
+
+        _ = HandleExternalShutdownAsync(runner, shutdownReason);
+    }
+
+    async Task HandleExternalShutdownAsync(NetworkRunner runner, ShutdownReason shutdownReason)
+    {
+        await DestroyRunnerSafelyAsync(runner);
+        ResetLocalLobbyCache();
         SetState(State.Idle, $"Disconnected ({shutdownReason}).");
+        await ConnectToPhotonAsync();
     }
 
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)

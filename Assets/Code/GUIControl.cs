@@ -140,15 +140,7 @@ public class GUIControl : MonoBehaviour
     {
         if (menuPanel) menuPanel.SetActive(false);
         if (createRoomPanel) createRoomPanel.SetActive(false);
-
-        if (lobbyPanel != null)
-        {
-            lobbyPanel.SetActive(true);
-        }
-        else
-        {
-            Debug.LogError("[GUIControl] ยังไม่ได้ลาก LobbyPanel มาใส่ในช่อง Lobby Panel ของ GUIControl!");
-        }
+        if (lobbyPanel) lobbyPanel.SetActive(true);
     }
 
     public void BackToMenuPanel()
@@ -158,11 +150,10 @@ public class GUIControl : MonoBehaviour
         if (menuPanel) menuPanel.SetActive(true);
     }
 
-    async void OnNetworkStateChanged(LobbyNetwork.State state, string message)
+    void OnNetworkStateChanged(LobbyNetwork.State state, string message)
     {
         SetStatus(message);
 
-        // เมื่อสร้างห้องหรือเข้าห้องสำเร็จ ให้สลับเปิดหน้า LobbyPanel อัตโนมัติทันที
         if (state == LobbyNetwork.State.InLobby)
         {
             OpenLobbyPanel();
@@ -173,7 +164,6 @@ public class GUIControl : MonoBehaviour
             {
                 lobbyPanel.SetActive(false);
                 if (createRoomPanel) createRoomPanel.SetActive(true);
-                if (lobbyNetwork != null) await lobbyNetwork.ConnectToPhotonAsync();
             }
         }
     }

@@ -46,7 +46,11 @@ public class LobbyPanelUI : MonoBehaviour
     {
         if (readyButton) readyButton.onClick.AddListener(OnClickReady);
         if (playButton) playButton.onClick.AddListener(OnClickPlay);
-        if (leaveButton) leaveButton.onClick.AddListener(OnClickLeave);
+        if (leaveButton)
+        {
+            leaveButton.interactable = true;
+            leaveButton.onClick.AddListener(OnClickLeave);
+        }
         if (editPlayerButton) editPlayerButton.onClick.AddListener(OnClickEditPlayer);
         if (LobbyNetwork.Instance != null) LobbyNetwork.Instance.OnMasterClientChanged += OnMasterClientChanged;
         Refresh();
@@ -61,10 +65,6 @@ public class LobbyPanelUI : MonoBehaviour
         if (LobbyNetwork.Instance != null) LobbyNetwork.Instance.OnMasterClientChanged -= OnMasterClientChanged;
     }
 
-    /// <summary>
-    /// The first player left, so Photon handed the room to somebody else. Everybody gets
-    /// told who it is; the new host also gets the PLAY button on the next Refresh.
-    /// </summary>
     void OnMasterClientChanged(PlayerRef master, bool localIsMaster)
     {
         _notice = localIsMaster
@@ -105,7 +105,6 @@ public class LobbyPanelUI : MonoBehaviour
         editPlayerPanel.Open();
     }
 
-    /// <summary>Only the first player in the room can send everybody to the map.</summary>
     public void OnClickPlay()
     {
         var net = LobbyNetwork.Instance;
@@ -116,16 +115,26 @@ public class LobbyPanelUI : MonoBehaviour
 
     public void OnClickLeave()
     {
-        if (LobbyNetwork.Instance != null) LobbyNetwork.Instance.LeaveLobby();
+        if (leaveButton) leaveButton.interactable = false;
+        if (readyButton) readyButton.interactable = false;
+        if (playButton) playButton.interactable = false;
+
+        if (LobbyNetwork.Instance != null)
+            LobbyNetwork.Instance.LeaveLobby();
     }
 
     void Refresh()
     {
-        // Stable seat order so every client shows the same player in the same slot.
         _sorted.Clear();
-        foreach (var p in LobbyPlayer.All)
+        for (int i = LobbyPlayer.All.Count - 1; i >= 0; i--)
         {
-            if (p != null && p.Object != null) _sorted.Add(p);
+            var p = LobbyPlayer.All[i];
+            if (p == null || p.Object == null || !p.Object.IsValid)
+            {
+                LobbyPlayer.All.RemoveAt(i);
+                continue;
+            }
+            _sorted.Add(p);
         }
         _sorted.Sort((a, b) => a.Object.InputAuthority.PlayerId.CompareTo(b.Object.InputAuthority.PlayerId));
 
@@ -146,7 +155,7 @@ public class LobbyPanelUI : MonoBehaviour
             }
             else
             {
-                card.ShowBlank();   // still waiting for this seat to be taken
+                card.ShowBlank();
             }
         }
 

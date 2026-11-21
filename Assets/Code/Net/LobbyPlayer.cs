@@ -14,7 +14,8 @@ public class LobbyPlayer : NetworkBehaviour
 
     public override void Spawned()
     {
-        All.Add(this);
+        if (!All.Contains(this))
+            All.Add(this);
 
         if (Object.HasStateAuthority)
         {
@@ -32,7 +33,6 @@ public class LobbyPlayer : NetworkBehaviour
         All.Remove(this);
         if (Local == this) Local = null;
     }
-
 
     public void ApplyProfile(string nick, int avatarIndex)
     {
