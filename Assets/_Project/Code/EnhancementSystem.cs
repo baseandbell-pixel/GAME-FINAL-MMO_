@@ -2,12 +2,13 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// ระบบตีบวกอุปกรณ์ (+0 ถึง +10) ของช่างตีเหล็ก (Blacksmith Enhancement System):
-///   - ปลดล็อกข้อจำกัดวัตถุดิบ: สามารถใช้อุปกรณ์สำรองระดับใดก็ได้ (Normal, Rare, Epic, Legendary) เป็นวัตถุดิบตีบวกได้ทุกระดับ
-///   - คำนวณอัตราสำเร็จ (%) แบบไดนามิกตามส่วนต่างระดับความหายาก (Tier Gap) ระหว่างอุปกรณ์เป้าหมายกับวัตถุดิบที่ใช้:
-///       * ใช้วัตถุดิบระดับต่ำกว่าเป้าหมาย -> โอกาสสำเร็จลดลงตามสัดส่วน
-///       * ใช้วัตถุดิบระดับเท่ากับเป้าหมาย -> ได้โอกาสสำเร็จตามค่ามาตรฐาน
-///       * ใช้วัตถุดิบระดับสูงกว่าเป้าหมาย -> ได้รับโบนัสเพิ่มโอกาสสำเร็จสูงขึ้น
+/// ระบบตีบวกอุปกรณ์ (+0 ถึง +10) ของช่างตีเหล็ก (Blacksmith Enhancement System - Flat Integer Rebalance):
+///   - ยกเลิกระบบคูณเปอร์เซ็นต์ (%) และเปลี่ยนเป็นโบนัสจำนวนเต็มคงที่ (+1 ถึง +2 ต่อระดับตีบวก) เพื่อไม่ให้พลังพุ่งเกินเส้นโค้ง Lv.1–30
+///   - บังคับแยกบทบาทอุปกรณ์อย่างเคร่งครัด (Role Separation):
+///       * อาวุธ (Sword): ได้โบนัส ATK แบบจำนวนเต็ม (+1/ขั้น สำหรับ Normal/Rare และ +2/ขั้น สำหรับ Epic/Legendary)
+///       * อุปกรณ์ป้องกัน (Shield, Armor, Pants): ไม่เพิ่ม ATK จากการตีบวก (คงเพดาน Role Cap: Normal/Rare = 0, Epic <= 1, Legendary <= 2)
+///         แต่เพิ่มค่าป้องกัน DEF (+1 ทุก 2 ขั้น), MaxHP (+2/ขั้น), MaxSTA (+1 ทุก 2 ขั้น) และ MoveSpeed (+0.02/ขั้น)
+///   - ปลดล็อกข้อจำกัดวัตถุดิบ: ใช้อุปกรณ์สำรองระดับใดก็ได้ (Normal..Legendary) พร้อมคำนวณโอกาสสำเร็จแบบไดนามิกตาม Tier Gap
 /// </summary>
 public static class EnhancementSystem
 {
@@ -15,35 +16,20 @@ public static class EnhancementSystem
     public const int MaxEnhancementLevel = 10;
 
     /// <summary>
-    /// ข้อมูลเงื่อนไขการตีบวกในขั้นถัดไป
+    /// ข้อมูลเงื่อนไขการตีบวกในขั้นถัดไป (ใช้ค่าเพิ่มแบบ Flat Integer ไม่มีตัวคูณ %)
     /// </summary>
     public struct EnhancementSpec
     {
         public int targetLevel;         // ระดับ + ถัดไปที่จะตีบวก (1..10)
         public int goldCost;            // จำนวน Gold ที่ต้องใช้
         public int requiredFodderCount; // จำนวนอุปกรณ์วัตถุดิบที่ต้องใช้ (1..3 ชิ้น)
-        public ItemTier minFodderTier;  // ระดับวัตถุดิบขั้นต่ำ (ปลดล็อกเป็น Normal เสมอตามข้อกำหนดใหม่)
+        public ItemTier minFodderTier;  // ระดับวัตถุดิบขั้นต่ำ (ปลดล็อกเป็น Normal เสมอ)
         public float successRate;       // อัตราสำเร็จพื้นฐาน (0..1)
-        public float statBonusPercent;  // เปอร์เซ็นต์โบนัสสเตตัสที่เพิ่มขึ้นเมื่อสำเร็จ
+        public float statBonusPercent;  // ฟิลด์เดิมสำหรับความเข้ากันได้ (คงค่า 0 เพื่อเลิกใช้ระบบ %)
+        public int flatPrimaryGain;     // โบนัสสเตตัสหลักแบบจำนวนเต็มที่เพิ่มขึ้นต่อ 1 ขั้น (+1 ถึง +2)
     }
 
-    // ตารางโบนัสสเตตัสที่เพิ่มขึ้นตามระดับ +0 ถึง +10
-    private static readonly float[] StatBonusTable =
-    {
-        0.00f, // +0
-        0.12f, // +1
-        0.24f, // +2
-        0.38f, // +3
-        0.54f, // +4
-        0.72f, // +5
-        0.92f, // +6
-        1.15f, // +7
-        1.42f, // +8
-        1.72f, // +9
-        2.10f  // +10
-    };
-
-    // ตารางค่าใช้จ่าย Gold พื้นฐานในแต่ละระดับ
+    // ตารางค่าใช้จ่าย Gold พื้นฐานในแต่ละระดับ (+1 ถึง +10)
     private static readonly int[] GoldCostTable =
     {
         50,    // +0 -> +1
@@ -74,6 +60,28 @@ public static class EnhancementSystem
     };
 
     /// <summary>
+    /// คืนค่าเพดาน ATK สูงสุดที่อนุญาตสำหรับอุปกรณ์ป้องกันตามระดับความหายาก (Role Separation Cap):
+    /// Normal/Rare = 0, Epic = 1, Legendary = 2
+    /// </summary>
+    public static int GetDefensiveGearMaxAtkCap(ItemTier tier)
+    {
+        return tier switch
+        {
+            ItemTier.Epic => 1,
+            ItemTier.Legendary => 2,
+            _ => 0
+        };
+    }
+
+    /// <summary>
+    /// คืนค่าจำนวน ATK ที่เพิ่มต่อ 1 ขั้นตีบวกสำหรับอาวุธ (Normal/Rare = +1/ขั้น, Epic/Legendary = +2/ขั้น)
+    /// </summary>
+    public static int GetWeaponAtkPerLevel(ItemTier tier)
+    {
+        return tier >= ItemTier.Epic ? 2 : 1;
+    }
+
+    /// <summary>
     /// ดึงข้อมูลเงื่อนไขการตีบวกขั้นถัดไป (ปลดล็อกให้ใช้วัตถุดิบได้ตั้งแต่ระดับ Normal ทุกขั้น)
     /// </summary>
     public static EnhancementSpec GetNextSpec(ItemData targetItem, int currentEnhancementLevel)
@@ -87,6 +95,15 @@ public static class EnhancementSystem
         // จำนวนวัตถุดิบ: +1..+3 ใช้ 1 ชิ้น, +4..+7 ใช้ 2 ชิ้น, +8..+10 ใช้ 3 ชิ้น
         int fodderCount = nextLvl <= 3 ? 1 : (nextLvl <= 7 ? 2 : 3);
 
+        // คำนวณโบนัสจำนวนเต็มหลักที่เพิ่มขึ้นในขั้นนี้ (+1 ถึง +2)
+        int flatGain = 1;
+        if (targetItem != null)
+        {
+            flatGain = targetItem.GetEquipmentSlot() == EquipmentSlotType.Sword
+                ? GetWeaponAtkPerLevel(targetItem.tier)
+                : 2; // อุปกรณ์ป้องกันเพิ่ม MaxHP +2 ต่อขั้น และ DEF/STA +1 ทุก 2 ขั้น
+        }
+
         return new EnhancementSpec
         {
             targetLevel = nextLvl,
@@ -94,7 +111,8 @@ public static class EnhancementSystem
             requiredFodderCount = fodderCount,
             minFodderTier = ItemTier.Normal, // อนุญาตให้ใช้อุปกรณ์ทุกระดับ (Normal ขึ้นไป) เป็นวัตถุดิบได้เสมอ
             successRate = SuccessRateTable[idx],
-            statBonusPercent = StatBonusTable[nextLvl]
+            statBonusPercent = 0f,           // ยกเลิกโบนัสแบบเปอร์เซ็นต์ทั้งหมด
+            flatPrimaryGain = flatGain
         };
     }
 
@@ -150,31 +168,88 @@ public static class EnhancementSystem
     }
 
     /// <summary>
-    /// คืนค่าตัวคูณสเตตัสตามระดับการตีบวก (+0 ถึง +10)
+    /// คืนค่าตัวคูณ 1.0 คงที่ (ยกเลิกระบบคูณเปอร์เซ็นต์แล้ว เปลี่ยนไปใช้โบนัสจำนวนเต็ม Flat Scaling แทน)
     /// </summary>
     public static float GetStatMultiplier(int enhancementLevel)
     {
-        int clamped = Mathf.Clamp(enhancementLevel, 0, MaxEnhancementLevel);
-        return 1f + StatBonusTable[clamped];
+        return 1f;
     }
 
     /// <summary>
-    /// คำนวณค่าสเตตัสจำนวนเต็มที่เพิ่มขึ้นจากการตีบวก
+    /// คำนวณ ATK หลังตีบวกแบบจำนวนเต็มคงที่ (Flat Integer):
+    ///   - อาวุธ (Sword): +1 ATK/ขั้น (Normal/Rare) หรือ +2 ATK/ขั้น (Epic/Legendary)
+    ///   - อุปกรณ์ป้องกัน (Shield/Armor/Pants): ไม่เพิ่ม ATK และบังคับเพดานสูงสุดตาม Role Cap (Normal/Rare=0, Epic<=1, Legendary<=2)
+    /// </summary>
+    public static int ScaleAttackStat(int baseValue, int enhancementLevel, EquipmentSlotType slot, ItemTier tier)
+    {
+        int clamped = Mathf.Clamp(enhancementLevel, 0, MaxEnhancementLevel);
+        if (slot != EquipmentSlotType.Sword)
+        {
+            // อุปกรณ์ป้องกันห้ามเพิ่ม ATK จากการตีบวก และถูกจำกัดเพดานตาม Tier เสมอ
+            int cap = GetDefensiveGearMaxAtkCap(tier);
+            return Mathf.Clamp(baseValue, 0, cap);
+        }
+
+        if (baseValue <= 0 || clamped <= 0) return Mathf.Max(0, baseValue);
+        return baseValue + clamped * GetWeaponAtkPerLevel(tier);
+    }
+
+    /// <summary>
+    /// คำนวณ MaxHP หลังตีบวกแบบจำนวนเต็มคงที่: เพิ่ม +2 MaxHP ต่อ 1 ขั้นตีบวก (เฉพาะไอเทมที่มีค่า HP ตั้งต้น > 0)
+    /// </summary>
+    public static int ScaleHealthStat(int baseValue, int enhancementLevel)
+    {
+        int clamped = Mathf.Clamp(enhancementLevel, 0, MaxEnhancementLevel);
+        if (baseValue <= 0 || clamped <= 0) return Mathf.Max(0, baseValue);
+        return baseValue + clamped * 2;
+    }
+
+    /// <summary>
+    /// คำนวณ MaxStamina หลังตีบวกแบบจำนวนเต็มคงที่: เพิ่ม +1 MaxSTA ทุก 2 ขั้นตีบวก (+1 ที่ +2, +4, +6, +8, +10)
+    /// </summary>
+    public static int ScaleStaminaStat(int baseValue, int enhancementLevel)
+    {
+        int clamped = Mathf.Clamp(enhancementLevel, 0, MaxEnhancementLevel);
+        if (baseValue <= 0 || clamped <= 0) return Mathf.Max(0, baseValue);
+        return baseValue + (clamped / 2);
+    }
+
+    /// <summary>
+    /// คำนวณ Defense หลังตีบวกแบบจำนวนเต็มคงที่: เพิ่ม +1 DEF ทุก 2 ขั้นตีบวก (เริ่มได้ +1 ตั้งแต่ +1 -> +5 ที่ +9/+10)
+    /// </summary>
+    public static int ScaleDefenseStat(int baseValue, int enhancementLevel)
+    {
+        int clamped = Mathf.Clamp(enhancementLevel, 0, MaxEnhancementLevel);
+        if (baseValue <= 0 || clamped <= 0) return Mathf.Max(0, baseValue);
+        return baseValue + ((clamped + 1) / 2);
+    }
+
+    /// <summary>
+    /// คำนวณ MoveSpeed หลังตีบวกแบบคงที่ (+0.02 m/s ต่อ 1 ขั้นตีบวก เฉพาะอุปกรณ์ที่เพิ่มความเร็วอยู่แล้ว)
+    /// </summary>
+    public static float ScaleMoveSpeedStat(float baseValue, int enhancementLevel)
+    {
+        int clamped = Mathf.Clamp(enhancementLevel, 0, MaxEnhancementLevel);
+        if (baseValue <= 0f || clamped <= 0) return Mathf.Max(0f, baseValue);
+        return Mathf.Round((baseValue + clamped * 0.02f) * 100f) * 0.01f;
+    }
+
+    /// <summary>
+    /// เมธอดจำนวนเต็มมาตรฐานสำหรับโค้ดทั่วไป (เพิ่ม +1 คงที่ต่อขั้นตีบวก ไม่มีตัวคูณ %)
     /// </summary>
     public static int ScaleIntStat(int baseValue, int enhancementLevel)
     {
-        if (baseValue <= 0 || enhancementLevel <= 0) return baseValue;
-        float mult = GetStatMultiplier(enhancementLevel);
-        return Mathf.Max(baseValue + enhancementLevel, Mathf.RoundToInt(baseValue * mult));
+        int clamped = Mathf.Clamp(enhancementLevel, 0, MaxEnhancementLevel);
+        if (baseValue <= 0 || clamped <= 0) return Mathf.Max(0, baseValue);
+        return baseValue + clamped;
     }
 
     /// <summary>
-    /// คำนวณค่าสเตตัสทศนิยมที่เพิ่มขึ้นจากการตีบวก
+    /// เมธอดทศนิยมมาตรฐาน (เรียกใช้ระบบเพิ่มคงที่ +0.02 ต่อขั้น แทนการคูณ %)
     /// </summary>
     public static float ScaleFloatStat(float baseValue, int enhancementLevel)
     {
-        if (baseValue <= 0f || enhancementLevel <= 0) return baseValue;
-        return baseValue * GetStatMultiplier(enhancementLevel);
+        return ScaleMoveSpeedStat(baseValue, enhancementLevel);
     }
 
     /// <summary>

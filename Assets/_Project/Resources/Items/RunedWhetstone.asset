@@ -14,9 +14,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: runed_whetstone
   displayName: Runed GreatSword
-  description: Arcane-etched greatsword. +24 Attack Damage, +10% Crit.
+  description: Arcane-etched greatsword humming with flat force. +12 Attack Damage,
+    +4 Max Stamina.
+  obtainAndUseGuide: Epic drop from Frontier Camps & Boss. Equip in [WEAPON] slot
+    (+2 ATK/level when enhanced).
   type: 1
   tier: 2
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.78, g: 0.28, b: 0.96, a: 1}
   stackable: 0
@@ -25,10 +30,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 24
+  damageBonus: 12
   maxHealthBonus: 0
-  maxStaminaBonus: 0
+  maxStaminaBonus: 4
   defenseBonus: 0
   moveSpeedBonus: 0
-  critChanceBonus: 0.1
+  critChanceBonus: 0
   droppable: 1

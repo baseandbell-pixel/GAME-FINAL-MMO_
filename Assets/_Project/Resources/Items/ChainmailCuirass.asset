@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: chainmail_cuirass
   displayName: Reinforced Chainmail Armor
-  description: Heavy chainmail chestplate. +55 Max HP, +10 Max Stamina, +4 Defense.
+  description: Heavy chainmail chestplate. +13 Max HP, +3 Max Stamina, +2 Defense.
+  obtainAndUseGuide: Drops from Camps & Boss. Equip in [ARMOR] slot for sturdy Max
+    HP and physical mitigation (+0 ATK).
   type: 6
   tier: 1
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.24, g: 0.7, b: 1, a: 1}
   stackable: 0
@@ -26,9 +30,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
-  maxHealthBonus: 55
-  maxStaminaBonus: 10
-  defenseBonus: 4
+  maxHealthBonus: 13
+  maxStaminaBonus: 3
+  defenseBonus: 2
   moveSpeedBonus: 0
   critChanceBonus: 0
   droppable: 1

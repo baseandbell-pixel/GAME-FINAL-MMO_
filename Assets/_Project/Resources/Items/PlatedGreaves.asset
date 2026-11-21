@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: plated_greaves
   displayName: Plated Greaves
-  description: Steel-plated greaves. +35 Max HP, +20 Max Stamina, +0.35 Move Speed.
+  description: Steel-plated greaves. +8 Max HP, +5 Max Stamina, +0.18 Move Speed.
+  obtainAndUseGuide: Drops from Camps & Boss. Equip in [PANTS] slot for faster footwork
+    and dodge endurance (+0 ATK).
   type: 7
   tier: 1
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.22, g: 0.66, b: 0.96, a: 1}
   stackable: 0
@@ -26,9 +30,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
-  maxHealthBonus: 35
-  maxStaminaBonus: 20
+  maxHealthBonus: 8
+  maxStaminaBonus: 5
   defenseBonus: 0
-  moveSpeedBonus: 0.35
+  moveSpeedBonus: 0.18
   critChanceBonus: 0
   droppable: 1

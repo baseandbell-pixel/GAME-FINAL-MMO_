@@ -462,9 +462,9 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
         if (_personalZoneRing == null)
         {
-            Color ringColor = ScaledLevel <= 2
-                ? new Color(0.98f, 0.56f, 0.18f, 0.58f)   // สีส้มอำพันสำหรับโซน Starter (Lv.1–2)
-                : new Color(0.95f, 0.24f, 0.22f, 0.65f);  // สีแดงส้มสำหรับโซน Mid-Field (Lv.3–5)
+            Color ringColor = ScaledLevel <= 10
+                ? new Color(0.98f, 0.56f, 0.18f, 0.58f)   // สีส้มอำพันสำหรับโซน Starter (Tier 1: Lv.1–10)
+                : new Color(0.95f, 0.24f, 0.22f, 0.65f);  // สีแดงส้มสำหรับโซน Mid-Field Frontier (Tier 2: Lv.11–22)
 
             Transform ringParent = SandboxWorldSpawner.Instance != null ? SandboxWorldSpawner.Instance.transform : null;
             _personalZoneRing = UrpMaterialHelper.CreateGroundCircleRing(
@@ -542,12 +542,12 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     /// <summary>
-    /// คืนค่าเลเวลพื้นฐานประจำโซนกรณีไม่ได้เกิดผ่าน SandboxWorldSpawner (มอนทั่วไป Lv.1, บอส Lv.5)
+    /// คืนค่าเลเวลพื้นฐานประจำโซนกรณีไม่ได้เกิดผ่าน SandboxWorldSpawner (มอนทั่วไป Lv.2, บอส Endgame Lv.25)
     /// ยกเลิกระบบสเกลตามผู้เล่นเลเวลสูงสุดในห้องเพื่อรองรับโครงสร้าง Central Server MMORPG
     /// </summary>
     private int ResolveFallbackZoneLevel()
     {
-        return IsBoss ? 5 : 1;
+        return IsBoss ? 25 : 2;
     }
 
     private void OnBossFlagChanged()
@@ -560,12 +560,54 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     /// <summary>
-    /// กำหนดค่าพลังของมอนสเตอร์และบอสตามเลเวลคงที่ประจำพื้นที่ (Zone-Based Level)
+    /// คำนวณค่าพลังฐาน (Base Stats 1.0x) ของบอสตามเลเวลโซน Endgame (Lv.20–30)
+    /// สูตรที่ Lv.25: MaxHP = 2,200, ATK = 50, DEF = 15, EXP = 1,200 (และสเกล +1.0x ต่อผู้โจมตีที่ตีโดนจริงเพิ่มแต่ละคน)
+    /// </summary>
+    public static void ComputeBossBaseStats(int zoneLevel, out int baseHp, out int baseAtk, out int baseDef, out int expReward)
+    {
+        int lvl = Mathf.Clamp(zoneLevel, 20, PlayerCombat.MaxLevel);
+        int over15 = Mathf.Max(0, lvl - 15);
+        baseHp = 1400 + over15 * 80;
+        baseAtk = 40 + over15 * 1;
+        baseDef = 10 + (over15 / 2);
+        expReward = 700 + over15 * 50;
+    }
+
+    /// <summary>
+    /// คำนวณค่าพลังของมอนสเตอร์ทั่วไปแบบ 3-Tier Progression (Lv.1–30):
+    ///   - Tier 1 Starter Zone (Lv.1–10, Camps 1–2): HP 80..170, ATK 10..19, DEF 0..3 -> ผู้เล่นใหม่ Lv.1 ฟันตายใน ~4–5 ฮิต
+    ///   - Tier 2 Mid-Field Frontier (Lv.11–22, Camps 3–4): HP 320..540 (~2.5x–3.0x ของ Starter), ATK 24..46, DEF 6..11 -> ป้องกัน One-Shot และบังคับใช้ Combo Finisher / Parry
+    /// </summary>
+    public static void ComputeNormalEnemyBaseStats(int zoneLevel, out int baseHp, out int baseAtk, out int baseDef, out int expReward)
+    {
+        int lvl = Mathf.Clamp(zoneLevel, 1, PlayerCombat.MaxLevel);
+        if (lvl <= 10)
+        {
+            // Tier 1: Starter Zone (Camps 1 & 2 สำหรับ Lv.1–10)
+            int step = lvl - 1;
+            baseHp = 80 + step * 10;
+            baseAtk = 10 + step * 1;
+            baseDef = step / 3;
+            expReward = 55 + step * 14;
+        }
+        else
+        {
+            // Tier 2: Mid-Field Frontier (Camps 3 & 4 สำหรับ Lv.11–22 — HP สูงกว่าโซนเริ่มต้น ~2.5x–3.0x)
+            int step = lvl - 11;
+            baseHp = 320 + step * 20;
+            baseAtk = 24 + step * 2;
+            baseDef = 6 + (step / 2);
+            expReward = 175 + step * 22;
+        }
+    }
+
+    /// <summary>
+    /// กำหนดค่าพลังของมอนสเตอร์และบอสตามเลเวลคงที่ประจำพื้นที่ (3-Tier Zone-Based Level สำหรับ Lv.1–30)
     /// พารามิเตอร์ preserveCurrentHealth ใช้เมื่อโอนย้าย StateAuthority เพื่อไม่ให้เลือดเดิมถูกรีเซ็ตกลับเต็ม 100%
     /// </summary>
     public void ApplyZoneLevel(int zoneLevel, bool preserveCurrentHealth = false)
     {
-        zoneLevel = Mathf.Max(1, zoneLevel);
+        zoneLevel = Mathf.Clamp(zoneLevel, 1, PlayerCombat.MaxLevel);
         if (_scalingApplied && ScaledLevel == zoneLevel && !preserveCurrentHealth) return;
         _scalingApplied = true;
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
@@ -574,18 +616,12 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         if (IsBoss)
         {
             ApplyBossVisualAndCore();
-            _baseMaxHealth = 750 + (zoneLevel - 1) * 220;
-            _baseAttackDamage = 24 + (zoneLevel - 1) * 5;
-            _baseDefense = 2 + (zoneLevel - 1) * 3;
-            experienceReward = 300 + (zoneLevel - 1) * 80;
+            ComputeBossBaseStats(zoneLevel, out _baseMaxHealth, out _baseAttackDamage, out _baseDefense, out experienceReward);
             maxDamagePerHit = 1500;
         }
         else
         {
-            _baseMaxHealth = 120 + (zoneLevel - 1) * 45;
-            _baseAttackDamage = 8 + (zoneLevel - 1) * 2;
-            _baseDefense = (zoneLevel - 1) * 2;
-            experienceReward = 50 + (zoneLevel - 1) * 18;
+            ComputeNormalEnemyBaseStats(zoneLevel, out _baseMaxHealth, out _baseAttackDamage, out _baseDefense, out experienceReward);
             maxDamagePerHit = 900;
         }
 
@@ -615,10 +651,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         if (!IsBoss) return;
         if (_baseMaxHealth <= 0)
         {
-            int lvl = Mathf.Max(5, ScaledLevel);
-            _baseMaxHealth = 750 + (lvl - 1) * 220;
-            _baseAttackDamage = 24 + (lvl - 1) * 5;
-            _baseDefense = 2 + (lvl - 1) * 3;
+            int lvl = Mathf.Clamp(ScaledLevel > 0 ? ScaledLevel : 25, 20, PlayerCombat.MaxLevel);
+            ComputeBossBaseStats(lvl, out _baseMaxHealth, out _baseAttackDamage, out _baseDefense, out experienceReward);
         }
 
         int mult = Mathf.Max(1, CoopPeakPlayerCount);
@@ -935,10 +969,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
         if (_baseMaxHealth <= 0)
         {
-            int lvl = Mathf.Max(5, ScaledLevel);
-            _baseMaxHealth = 750 + (lvl - 1) * 220;
-            _baseAttackDamage = 24 + (lvl - 1) * 5;
-            _baseDefense = 2 + (lvl - 1) * 3;
+            int lvl = Mathf.Clamp(ScaledLevel > 0 ? ScaledLevel : 25, 20, PlayerCombat.MaxLevel);
+            ComputeBossBaseStats(lvl, out _baseMaxHealth, out _baseAttackDamage, out _baseDefense, out experienceReward);
         }
 
         float prevMax = Mathf.Max(1, MaxHealth);
@@ -962,10 +994,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         if (!IsBoss || !Object.HasStateAuthority) return;
         if (_baseMaxHealth <= 0)
         {
-            int lvl = Mathf.Max(5, ScaledLevel);
-            _baseMaxHealth = 750 + (lvl - 1) * 220;
-            _baseAttackDamage = 24 + (lvl - 1) * 5;
-            _baseDefense = 2 + (lvl - 1) * 3;
+            int lvl = Mathf.Clamp(ScaledLevel > 0 ? ScaledLevel : 25, 20, PlayerCombat.MaxLevel);
+            ComputeBossBaseStats(lvl, out _baseMaxHealth, out _baseAttackDamage, out _baseDefense, out experienceReward);
         }
 
         CoopPeakPlayerCount = 1;
@@ -1085,7 +1115,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     public void ApplyBossConfiguration()
     {
         ApplyBossVisualAndCore();
-        ApplyZoneLevel(Mathf.Max(5, ScaledLevel));
+        int bossLvl = Mathf.Clamp(ScaledLevel >= 20 ? ScaledLevel : 25, 20, PlayerCombat.MaxLevel);
+        ApplyZoneLevel(bossLvl);
     }
 
     private void ApplyBossVisualAndCore()
@@ -2775,10 +2806,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
                     wordWrap = false
                 };
                 GUI.color = new Color(0.14f, 0.08f, 0.0f, 0.85f);
-                Rect stagBox = new Rect(sp.x - 108f, sy - 16f, 216f, 22f);
+                Rect stagBox = new Rect(sp.x - 122f, sy - 16f, 244f, 22f);
                 GUI.DrawTexture(stagBox, Texture2D.whiteTexture);
                 GUI.color = new Color(1f, 0.88f, 0.20f, 1f);
-                GUI.Label(stagBox, "STAGGERED (COUNTER 1.25x)", stagStyle);
+                GUI.Label(stagBox, "STAGGERED (COUNTER CRIT 1.75x)", stagStyle);
                 GUI.color = prevCol;
             }
             return;
@@ -2800,20 +2831,20 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             if (State == NpcState.Staggered)
             {
                 GUI.color = new Color(0.14f, 0.08f, 0.0f, 0.85f);
-                Rect stagRect = new Rect(sp.x - 95f, sy - 42f, 190f, 20f);
+                Rect stagRect = new Rect(sp.x - 110f, sy - 42f, 220f, 20f);
                 GUI.DrawTexture(stagRect, Texture2D.whiteTexture);
                 GUI.color = new Color(1f, 0.88f, 0.20f, 1f);
-                GUI.Label(stagRect, "★ STAGGERED (COUNTER 1.25x)", promptStyle);
+                GUI.Label(stagRect, "★ STAGGERED (COUNTER CRIT 1.75x)", promptStyle);
             }
 
             var localPlayer = PlayerCombat.Local;
             if (localPlayer != null && localPlayer.IsSpawned && !localPlayer.IsDead && CanBeAssassinatedBy(localPlayer.transform))
             {
                 GUI.color = new Color(0.08f, 0.02f, 0.04f, 0.88f);
-                Rect backstabRect = new Rect(sp.x - 118f, sy - 64f, 236f, 22f);
+                Rect backstabRect = new Rect(sp.x - 124f, sy - 64f, 248f, 22f);
                 GUI.DrawTexture(backstabRect, Texture2D.whiteTexture);
                 GUI.color = new Color(1f, 0.30f, 0.22f, 1f);
-                GUI.Label(backstabRect, "[LMB] STEALTH ASSASSINATE (3.0x)", promptStyle);
+                GUI.Label(backstabRect, "[LMB] STEALTH BACKSTAB (2.5x CRIT)", promptStyle);
             }
 
             GUI.color = prevCol;
@@ -2857,10 +2888,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         if (State == NpcState.Staggered)
         {
             GUI.color = new Color(0.14f, 0.08f, 0.0f, 0.85f);
-            Rect stagRect = new Rect(sp.x - 88f, y - 39f, 176f, 20f);
+            Rect stagRect = new Rect(sp.x - 110f, y - 39f, 220f, 20f);
             GUI.DrawTexture(stagRect, Texture2D.whiteTexture);
             GUI.color = new Color(1f, 0.88f, 0.20f, 1f);
-            GUI.Label(stagRect, "★ STAGGERED (COUNTER 1.25x)", labelStyle);
+            GUI.Label(stagRect, "★ STAGGERED (COUNTER CRIT 1.75x)", labelStyle);
         }
 
         // แสดงป้ายแจ้งเตือนเมื่อผู้เล่นย่องเข้าด้านหลังในระยะลอบสังหาร (Stealth Assassination Prompt)
@@ -2868,10 +2899,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         if (local != null && local.IsSpawned && !local.IsDead && CanBeAssassinatedBy(local.transform))
         {
             GUI.color = new Color(0.08f, 0.02f, 0.04f, 0.88f);
-            Rect backstabRect = new Rect(sp.x - 115f, y - 42f, 230f, 22f);
+            Rect backstabRect = new Rect(sp.x - 124f, y - 42f, 248f, 22f);
             GUI.DrawTexture(backstabRect, Texture2D.whiteTexture);
             GUI.color = new Color(1f, 0.30f, 0.22f, 1f);
-            GUI.Label(backstabRect, "[LMB] STEALTH ASSASSINATE (3.0x)", labelStyle);
+            GUI.Label(backstabRect, "[LMB] STEALTH BACKSTAB (2.5x CRIT)", labelStyle);
         }
 
         GUI.color = prev;

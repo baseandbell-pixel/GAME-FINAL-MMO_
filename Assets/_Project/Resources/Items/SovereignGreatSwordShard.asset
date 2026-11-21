@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: sovereign_greatsword_shard
   displayName: Sovereign GreatSword
-  description: Mythic blade of the Sovereign King. +38 Attack Damage, +20% Crit.
+  description: Mythic blade of the Sovereign King. +19 Attack Damage, +6 Max Stamina.
+  obtainAndUseGuide: Legendary drop from Boss Sovereign Golem. Equip in [WEAPON]
+    slot (+2 ATK/level when enhanced).
   type: 1
   tier: 3
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 1, g: 0.65, b: 0.1, a: 1}
   stackable: 0
@@ -25,10 +29,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 38
+  damageBonus: 19
   maxHealthBonus: 0
-  maxStaminaBonus: 0
+  maxStaminaBonus: 6
   defenseBonus: 0
   moveSpeedBonus: 0
-  critChanceBonus: 0.2
+  critChanceBonus: 0
   droppable: 1

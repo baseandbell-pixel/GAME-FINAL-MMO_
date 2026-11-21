@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: guardian_kite_shield
   displayName: Guardian Kite Shield
-  description: Tempered steel kite shield. +45 Max HP, +20 Max Stamina, +4 Defense.
+  description: Tempered steel kite shield. +10 Max HP, +5 Max Stamina, +2 Defense.
+  obtainAndUseGuide: Drops from Camps & Boss. Equip in [SHIELD] slot for reliable
+    guard endurance and mitigation (+0 ATK).
   type: 5
   tier: 1
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.2, g: 0.65, b: 0.98, a: 1}
   stackable: 0
@@ -26,9 +30,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
-  maxHealthBonus: 45
-  maxStaminaBonus: 20
-  defenseBonus: 4
+  maxHealthBonus: 10
+  maxStaminaBonus: 5
+  defenseBonus: 2
   moveSpeedBonus: 0
   critChanceBonus: 0
   droppable: 1

@@ -454,9 +454,9 @@ public class MinimapUI : MonoBehaviour
             for (int i = 0; i < camps.Count; i++)
             {
                 var c = camps[i];
-                Color col = c.MaxLevel <= 2
-                    ? new Color(0.98f, 0.64f, 0.18f, 0.14f)  // โซน Starter Lv.1–2
-                    : new Color(0.95f, 0.30f, 0.22f, 0.15f); // โซน Mid-Field Lv.3–5
+                Color col = c.MaxLevel <= 10
+                    ? new Color(0.98f, 0.64f, 0.18f, 0.14f)  // โซน Tier 1 Starter (Lv.1–10)
+                    : new Color(0.95f, 0.30f, 0.22f, 0.15f); // โซน Tier 2 Mid-Field Frontier (Lv.11–22)
                 PlaceZoneOverlay(idx++, c.Center, Mathf.Max(14f, c.CampAreaRadius), focus, scale, col);
             }
 

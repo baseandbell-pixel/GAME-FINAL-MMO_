@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: hunter_vest
   displayName: Hunter Chestplate
-  description: Light reinforced chest armor. +25 Max HP, +2 Defense.
+  description: Light reinforced chest armor for martial mobility. +6 Max HP, +1 Defense.
+  obtainAndUseGuide: Obtained from Starter Camps. Equip into the [ARMOR] slot to
+    reduce incoming physical damage (+0 ATK).
   type: 6
   tier: 0
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.8, g: 0.83, b: 0.86, a: 1}
   stackable: 0
@@ -26,9 +30,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
-  maxHealthBonus: 25
+  maxHealthBonus: 6
   maxStaminaBonus: 0
-  defenseBonus: 2
+  defenseBonus: 1
   moveSpeedBonus: 0
   critChanceBonus: 0
   droppable: 1

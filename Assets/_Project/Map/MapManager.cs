@@ -378,7 +378,8 @@ public class MapManager : MonoBehaviour
             {
                 var c = camps[i];
                 string levelTag = c.MinLevel == c.MaxLevel ? $"Lv.{c.MinLevel}" : $"Lv.{c.MinLevel}-{c.MaxLevel}";
-                string tierShort = c.MaxLevel <= 2 ? "Starter" : "Frontier";
+                // แยกป้ายชื่อโซนตามระดับความยาก 3-Tier (Starter <= Lv.10, Frontier >= Lv.11)
+                string tierShort = c.MaxLevel <= 10 ? "Starter" : "Frontier";
                 string shortName = $"Camp {c.CampId} {tierShort} ({levelTag})";
                 into.Add(new MapMarker
                 {

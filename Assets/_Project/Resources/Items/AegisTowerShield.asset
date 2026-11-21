@@ -14,10 +14,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: aegis_tower_shield
   displayName: Runed Aegis Shield
-  description: Enchanted tower shield. +80 Max HP, +35 Max Stamina, +4 Attack, +6
-    Defense.
+  description: Enchanted tower shield. +18 Max HP, +8 Max Stamina, +3 Defense, +1
+    Attack.
+  obtainAndUseGuide: 'Epic drop from Frontier Camps & Boss. Equip in [SHIELD] slot
+    for elite defense (Role Cap: +1 ATK max).'
   type: 5
   tier: 2
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.72, g: 0.26, b: 0.94, a: 1}
   stackable: 0
@@ -26,10 +30,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 4
-  maxHealthBonus: 80
-  maxStaminaBonus: 35
-  defenseBonus: 6
+  damageBonus: 1
+  maxHealthBonus: 18
+  maxStaminaBonus: 8
+  defenseBonus: 3
   moveSpeedBonus: 0
   critChanceBonus: 0
   droppable: 1

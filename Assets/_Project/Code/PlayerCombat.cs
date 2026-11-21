@@ -11,17 +11,19 @@ using UnityEngine.Rendering;
 
 public enum PlayerStatType
 {
-    STR = 0, // +4 Attack Damage per point
-    VIT = 1, // +15 Max HP per point
-    END = 2, // +12 Max Stamina per point
-    AGI = 3  // +3% Crit Chance & +0.18 Move Speed per point
+    STR = 0, // +1 Attack Damage ต่อแต้ม (Flat Integer)
+    VIT = 1, // +6 Max HP ต่อแต้ม (Flat Integer)
+    END = 2, // +2 Max Stamina ต่อแต้ม (จำกัดเพดานรวมไม่เกิน 150 STA)
+    AGI = 3  // +0.08 Move Speed ต่อแต้ม (ยกเลิก % CRIT สุ่ม — ใช้ Skill-Based Crit แทน)
 }
 
 /// <summary>
-/// ระบบต่อสู้ระยะประชิดและจัดการค่าพลังผู้เล่นผ่าน Photon Fusion Shared Mode (MMORPG Combat Core):
+/// ระบบต่อสู้ระยะประชิดและจัดการค่าพลังผู้เล่นผ่าน Photon Fusion Shared Mode (MMORPG Combat Core - Lv.1–30 Rebalance):
+///   - เพดานเลเวลสูงสุด MaxLevel = 30 พร้อมการเติบโตแบบ Flat Integer คงที่และเพดาน MaxStamina = 150
+///   - ระบบ Critical Hit แบบเน้นฝีมือ (Skill-Based): ไม่สุ่ม % และไม่คริอัตโนมัติในฮิต 1–2
+///     ติดคริติคอล (1.55x–1.75x) เฉพาะ Combo Finisher (ฮิตสุดท้าย), Parry Counter-Slash และ Stealth Backstab (2.5x)
 ///   - รองรับ IClassCombatHandler เพื่อขยายคลาส Magic ในอนาคตโดยไม่ต้องรื้อโค้ดหลัก
 ///   - ขับเคลื่อนท่าโจมตีครบทุกชุดของ GreatSword (Light Combo 1..3, Heavy Slash 1..3, Run Attack, Jump Attack, Stealth Assassination)
-///   - ระบบ Stamina, การตั้งการ์ดป้องกัน (ลดดาเมจ 75% + Block Impact + Guard Break), การกลิ้งหลบ, Buff และ Hitbox ใบดาบ
 /// </summary>
 [DisallowMultipleComponent]
 [RequireComponent(typeof(Rigidbody))]
@@ -29,6 +31,12 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 {
     private const int DefaultMaxHealth = 100;
     private const float DefaultMaxStamina = 100f;
+    // เพดานเลเวลสูงสุดของแพตช์ปัจจุบัน (Lv.30 Cap)
+    public const int MaxLevel = 30;
+    // เพดานค่า Stamina สูงสุดที่เข้มงวด (ป้องกันการสแปมคอมโบและกลิ้งหลบไม่จำกัดในเลเวลสูง)
+    public const float HardMaxStaminaCap = 150f;
+    // เพดานโบนัสความเร็วเคลื่อนที่จากค่า AGI
+    private const float MaxAgiMoveSpeedBonus = 1.60f;
     public const int StatPointsPerLevel = 3;
 
     // ------------------------------------------------------------------ inspector
@@ -44,19 +52,28 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     [Tooltip("Deprecated debug renderer. Always kept hidden during Play Mode so the swing hitbox is invisible.")]
     [SerializeField] private Renderer hitboxDebugVisual;
 
-    [Header("Attack & Combo Criticals")]
+    [Header("Attack & Skill-Based Criticals (ระบบคริติคอลเน้นฝีมือ)")]
     [Min(0.05f)] [SerializeField] private float attackCooldown = 0.6f;
     [Tooltip("A click made this early during the cooldown is remembered and fired when it ends.")]
     [Min(0f)] [SerializeField] private float inputBufferSeconds = 0.2f;
     [Tooltip("The authority accepts requests this much earlier than the cooldown (jitter tolerance).")]
     [Min(0f)] [SerializeField] private float cooldownTolerance = 0.1f;
-    [Min(1)] [SerializeField] private int attackDamage = 20;
+    // ค่าพลังโจมตีพื้นฐานที่ Lv.1 (ปรับเป็น 14 เพื่อรวมกับ Iron GreatSword +5 = 19 ATK โจมตีมอนโซนเริ่มต้นตายใน 4–5 ฮิต)
+    [Min(1)] [SerializeField] private int attackDamage = 14;
     [Tooltip("Time window after a swing to chain into the next combo step (1 -> 2 -> 3).")]
     [Min(0.2f)] [SerializeField] private float comboResetSeconds = 1.45f;
-    [Tooltip("Damage multiplier applied on chained combo step 2 (Critical Hit).")]
-    [Min(1f)] [SerializeField] private float comboStep2CritMultiplier = 1.5f;
-    [Tooltip("Damage multiplier applied on chained combo finisher step 3 (Critical Hit).")]
-    [Min(1f)] [SerializeField] private float comboStep3CritMultiplier = 2.0f;
+    // ตัวคูณดาเมจปกติสำหรับ Combo ฮิต 2 (ไม่ติด Critical Hit เพื่อตัดอาการสแปมคริ)
+    [Min(1f)] [SerializeField] private float comboStep2NormalMultiplier = 1.05f;
+    // ตัวคูณ Critical Hit สำหรับ Combo Finisher ฮิตสุดท้าย (Light Combo ฮิต 3 = 1.55x)
+    [Range(1.50f, 1.75f)] [SerializeField] private float lightFinisherCritMultiplier = 1.55f;
+    // ตัวคูณ Critical Hit สำหรับ Heavy Slash Combo Finisher ฮิตสุดท้าย (1.75x)
+    [Range(1.50f, 1.75f)] [SerializeField] private float heavyFinisherCritMultiplier = 1.75f;
+    // ตัวคูณ Critical Hit สำหรับการฟันสวนกลับทันทีหลัง Perfect Parry (1.75x)
+    [Range(1.50f, 1.75f)] [SerializeField] private float parryCounterCritMultiplier = 1.75f;
+    // ระยะเวลาที่บัฟ Parry Counter-Slash CRIT พร้อมใช้งานหลังจากทำ Perfect Parry สำเร็จ (วินาที)
+    [Min(0.5f)] [SerializeField] private float parryCounterWindowSeconds = 3.5f;
+    // ตัวคูณ Critical Hit สำหรับท่าลอบสังหารจากด้านหลัง (Stealth Assassination Backstab)
+    [Min(1.5f)] [SerializeField] private float stealthBackstabCritMultiplier = 2.50f;
 
     [Header("Block & Dodge (ตั้งการ์ดป้องกันและกลิ้งหลบ)")]
     [Range(0.1f, 1f)] [SerializeField] private float blockMoveSpeedMultiplier = 0.45f;
@@ -197,34 +214,55 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public int BaseMaxHealth => maxHealth;
     public float BaseMaxStamina => maxStamina;
     public int BaseAttackDamage => attackDamage;
+    // เลเวลที่ถูกจำกัดให้อยู่ในช่วง 1..MaxLevel (30) เสมอ
+    public int ClampedLevel => _isSpawned ? Mathf.Clamp(NetworkLevel, 1, MaxLevel) : 1;
+    // ตรวจสอบว่าผู้เล่นถึงเพดานเลเวลสูงสุด (Lv.30) แล้วหรือไม่
+    public bool IsMaxLevel => _isSpawned && NetworkLevel >= MaxLevel;
+    // ตรวจสอบว่าผู้เล่นเพิ่งทำ Perfect Parry สำเร็จและพร้อมฟันสวนกลับแบบการันตี Critical Hit หรือไม่
+    public bool IsParryCounterReady => Time.time <= _parryCounterReadyUntil;
 
-    /// <summary>Total Max HP = Base + Level Bonus (+10/lv) + VIT (+15/pt) + Equipped Gear.</summary>
+    /// <summary>
+    /// ค่า Max HP รวม = Base (100) + โบนัสเลเวล (+10 HP/เลเวล รวม +290 ที่ Lv.30) + VIT (+6 HP/แต้ม) + อุปกรณ์สวมใส่
+    /// </summary>
     public int MaxHealth => _isSpawned
-        ? maxHealth + Mathf.Max(0, NetworkLevel - 1) * 10 + StatPointsVIT * 15 + NetworkGearMaxHealthBonus
+        ? maxHealth + (ClampedLevel - 1) * 10 + StatPointsVIT * 6 + NetworkGearMaxHealthBonus
         : maxHealth;
 
-    /// <summary>Total Max Stamina = Base + Level Bonus (+5/lv) + END (+12/pt) + Equipped Gear.</summary>
+    /// <summary>
+    /// ค่า Max Stamina รวม = Base (100) + โบนัสเลเวล (+2 STA/เลเวล) + END (+2 STA/แต้ม) + อุปกรณ์สวมใส่
+    /// จำกัดเพดานสูงสุดอย่างเคร่งครัดไม่เกิน HardMaxStaminaCap (150 STA) เพื่อป้องกันการสแปมคอมโบ/กลิ้งหลบ
+    /// </summary>
     public float MaxStamina => _isSpawned
-        ? maxStamina + Mathf.Max(0, NetworkLevel - 1) * 5f + StatPointsEND * 12f + NetworkGearMaxStaminaBonus
-        : maxStamina;
+        ? Mathf.Min(HardMaxStaminaCap, maxStamina + (ClampedLevel - 1) * 2f + StatPointsEND * 2f + NetworkGearMaxStaminaBonus)
+        : Mathf.Min(HardMaxStaminaCap, maxStamina);
 
-    /// <summary>Total Attack Damage = Base + Level Bonus (+2/lv) + STR (+4/pt) + Equipped Gear + Active Buff.</summary>
+    /// <summary>
+    /// ค่า ATK รวม = Base (14) + โบนัสเลเวล (+1 ATK ทุก 2 เลเวล รวม +14 ที่ Lv.30) + STR (+1 ATK/แต้ม) + อาวุธ/อุปกรณ์ + บัฟ
+    /// </summary>
     public int TotalAttackDamage => _isSpawned
-        ? attackDamage + Mathf.Max(0, NetworkLevel - 1) * 2 + StatPointsSTR * 4 + NetworkGearDamageBonus + ActiveBuffDamageBonus
+        ? attackDamage + ((ClampedLevel - 1) / 2) + StatPointsSTR * 1 + NetworkGearDamageBonus + ActiveBuffDamageBonus
         : attackDamage;
 
-    /// <summary>Total Defense (flat damage reduction from Armor/Shield/Gear).</summary>
-    public int TotalDefense => _isSpawned ? NetworkGearDefenseBonus : 0;
+    /// <summary>
+    /// ค่า DEF รวม = โบนัสเลเวล (+1 DEF ทุก 3 เลเวล รวม +9 ที่ Lv.30) + โล่/ชุดเกราะ (Flat Integer)
+    /// </summary>
+    public int TotalDefense => _isSpawned
+        ? ((ClampedLevel - 1) / 3) + NetworkGearDefenseBonus
+        : 0;
 
-    /// <summary>Total bonus movement speed from AGI (+0.18/pt) and Equipped Pants/Gear.</summary>
-    public float TotalMoveSpeedBonus => _isSpawned ? (StatPointsAGI * 0.18f + NetworkGearMoveSpeedBonus) : 0f;
+    /// <summary>
+    /// โบนัสความเร็วเคลื่อนที่จากค่า AGI (+0.08/แต้ม สูงสุด +1.60) รวมกับกางเกง/รองเท้าที่สวมใส่
+    /// </summary>
+    public float TotalMoveSpeedBonus => _isSpawned
+        ? (Mathf.Min(MaxAgiMoveSpeedBonus, StatPointsAGI * 0.08f) + NetworkGearMoveSpeedBonus)
+        : 0f;
 
-    /// <summary>Total critical hit chance (Base 5% + AGI 3%/pt + Equipped Gear).</summary>
-    public float TotalCritChance => _isSpawned
-        ? Mathf.Clamp01(0.05f + StatPointsAGI * 0.03f + NetworkGearCritBonus)
-        : 0.05f;
+    /// <summary>
+    /// ยกเลิกโอกาสสุ่ม Critical % ทั้งหมด (คืนค่า 0%) — คริติคอลเกิดจากฝีมือเท่านั้น (Combo Finisher / Parry Counter / Stealth Backstab)
+    /// </summary>
+    public float TotalCritChance => 0f;
 
-    public int ExpToNextLevel => GetExpRequiredForNextLevel(_isSpawned ? NetworkLevel : 1);
+    public int ExpToNextLevel => IsMaxLevel ? 0 : GetExpRequiredForNextLevel(ClampedLevel);
     public bool IsInCombat => _isSpawned && (Time.time - _lastCombatActivityTime < 6f);
 
     public float CurrentStamina => _isSpawned ? NetworkStamina : maxStamina;
@@ -358,6 +396,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     private float _nextWeaponToggleTime;
     private float _lastSheathedPromptTime = -10f;
     private float _lastSafeZonePromptTime = -10f;
+    // เวลาสิ้นสุดของหน้าต่างฟันสวนกลับการันตี Critical Hit หลังจากทำ Perfect Parry สำเร็จ
+    private float _parryCounterReadyUntil = -100f;
 
     // Authority side
     private float _nextAuthorityAttackTime;
@@ -567,7 +607,9 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
         if (Object.HasStateAuthority)
         {
-            if (NetworkLevel < 1) NetworkLevel = 1;
+            // บังคับเลเวลเริ่มต้นให้อยู่ในช่วง 1..MaxLevel (30) และจำกัด HP/Stamina ไม่เกินเพดานใหม่
+            NetworkLevel = Mathf.Clamp(NetworkLevel, 1, MaxLevel);
+            if (NetworkLevel >= MaxLevel) NetworkExperience = 0;
             NetworkHealth = MaxHealth;
             NetworkStamina = MaxStamina;
             bool startInSafeZone = SafeZone.IsPointInAnySafeZone(transform.position);
@@ -700,17 +742,37 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         ApplyExperienceAuthority(amount);
     }
 
+    /// <summary>
+    /// คำนวณ EXP และการอัปเลเวลฝั่ง State Authority โดยล็อกเพดานสูงสุดที่ MaxLevel = 30
+    /// เมื่อถึง Lv.30 จะหยุดสะสม EXP ทันที (NetworkExperience = 0) เพื่อแสดงสถานะ MAX
+    /// </summary>
     private void ApplyExperienceAuthority(int amount)
     {
-        int exp = NetworkExperience + amount;
-        int lvl = Mathf.Max(1, NetworkLevel);
+        int currentLvl = Mathf.Clamp(NetworkLevel, 1, MaxLevel);
+        if (currentLvl >= MaxLevel)
+        {
+            // ถึงเพดาน Lv.30 แล้ว: คงเลเวลไว้ที่ 30 และล้าง EXP ส่วนเกินให้เป็น 0
+            NetworkLevel = MaxLevel;
+            NetworkExperience = 0;
+            ProgressionChanged?.Invoke();
+            return;
+        }
+
+        int exp = Mathf.Max(0, NetworkExperience) + amount;
+        int lvl = currentLvl;
         int pointsGained = 0;
 
-        while (exp >= GetExpRequiredForNextLevel(lvl))
+        while (lvl < MaxLevel && exp >= GetExpRequiredForNextLevel(lvl))
         {
             exp -= GetExpRequiredForNextLevel(lvl);
             lvl++;
             pointsGained += StatPointsPerLevel;
+        }
+
+        if (lvl >= MaxLevel)
+        {
+            lvl = MaxLevel;
+            exp = 0;
         }
 
         bool leveledUp = lvl > NetworkLevel;
@@ -721,7 +783,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             NetworkUnspentStatPoints += pointsGained;
             NetworkHealth = MaxHealth;
             NetworkStamina = MaxStamina;
-            Debug.Log($"[PlayerCombat] LEVEL UP! {name} reached Level {NetworkLevel} (+{pointsGained} Stat Points, total unspent={NetworkUnspentStatPoints}).");
+            Debug.Log($"[PlayerCombat] LEVEL UP! {name} reached Level {NetworkLevel}{(NetworkLevel >= MaxLevel ? " (MAX)" : "")} (+{pointsGained} Stat Points, total unspent={NetworkUnspentStatPoints}).");
         }
         ProgressionChanged?.Invoke();
         PlayerSaveManager.RequestAutoSave(leveledUp ? "LevelUp" : "AddExperience");
@@ -793,37 +855,53 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         return true;
     }
 
+    /// <summary>
+    /// ส่งออกข้อมูลตัวละครลงไฟล์เซฟ โดยควบคุมเลเวลไม่เกิน MaxLevel (30) และ Stamina ไม่เกินเพดาน 150
+    /// </summary>
     public void ExportSaveData(PlayerSaveData data)
     {
         if (data == null || !_isSpawned) return;
-        data.level = Mathf.Max(1, NetworkLevel);
-        data.experience = Mathf.Max(0, NetworkExperience);
+        int clampedLvl = Mathf.Clamp(NetworkLevel, 1, MaxLevel);
+        data.level = clampedLvl;
+        data.experience = clampedLvl >= MaxLevel ? 0 : Mathf.Max(0, NetworkExperience);
         data.unspentStatPoints = Mathf.Max(0, NetworkUnspentStatPoints);
         data.statSTR = StatPointsSTR;
         data.statVIT = StatPointsVIT;
         data.statEND = StatPointsEND;
         data.statAGI = StatPointsAGI;
         data.gold = Mathf.Max(0, NetworkGold);
-        data.currentHealth = NetworkHealth;
-        data.currentStamina = NetworkStamina;
+        data.currentHealth = Mathf.Clamp(NetworkHealth, 0, MaxHealth);
+        data.currentStamina = Mathf.Clamp(NetworkStamina, 0f, MaxStamina);
     }
 
+    /// <summary>
+    /// นำข้อมูลจากไฟล์เซฟกลับมาใช้ โดยบังคับ Clamp เลเวลไม่ให้เกิน MaxLevel = 30 และเคลียร์ EXP เมื่อถึงเพดาน
+    /// </summary>
     public void ApplySaveData(PlayerSaveData data)
     {
         if (data == null || !_isSpawned) return;
         if (!Object.HasStateAuthority) return;
 
-        NetworkLevel = Mathf.Max(1, data.level);
-        NetworkExperience = Mathf.Max(0, data.experience);
+        int clampedLvl = Mathf.Clamp(data.level, 1, MaxLevel);
+        NetworkLevel = clampedLvl;
+        NetworkExperience = clampedLvl >= MaxLevel
+            ? 0
+            : Mathf.Clamp(data.experience, 0, Mathf.Max(0, GetExpRequiredForNextLevel(clampedLvl) - 1));
         NetworkUnspentStatPoints = Mathf.Max(0, data.unspentStatPoints);
         StatPointsSTR = Mathf.Max(0, data.statSTR);
         StatPointsVIT = Mathf.Max(0, data.statVIT);
         StatPointsEND = Mathf.Max(0, data.statEND);
         StatPointsAGI = Mathf.Max(0, data.statAGI);
         NetworkGold = Mathf.Max(0, data.gold);
+        // บีบค่า HP/Stamina เบื้องต้นให้ไม่เกินเพดานหลังคำนวณใหม่
+        NetworkHealth = Mathf.Clamp(NetworkHealth, 1, MaxHealth);
+        NetworkStamina = Mathf.Clamp(NetworkStamina, 1f, MaxStamina);
         ProgressionChanged?.Invoke();
     }
 
+    /// <summary>
+    /// กำหนดค่า HP และ Stamina จากไฟล์เซฟหลังสวมใส่อุปกรณ์ครบแล้ว โดย Clamp ตาม MaxHealth และ MaxStamina (<= 150) ใหม่เสมอ
+    /// </summary>
     public void ApplySaveHealthAndStamina(int savedHp, float savedStamina)
     {
         if (!_isSpawned || !Object.HasStateAuthority) return;
@@ -1896,6 +1974,69 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     private readonly Dictionary<NetworkId, float> _lastNpcAttackTime = new Dictionary<NetworkId, float>();
     private const float NpcDamageRangeSlack = 3.5f;
 
+    /// <summary>
+    /// คำนวณดาเมจและเงื่อนไข Critical Hit แบบเน้นฝีมือ (Skill-Based Critical Rework):
+    ///   - ฮิต 1 และ ฮิต 2 (Light / Heavy): ไม่ติดคริติคอลอัตโนมัติ (ตัด ComboStep == 2 Auto-Crit และตัดสุ่ม % ออกทั้งหมด)
+    ///   - ติด Critical Hit เฉพาะ 3 เงื่อนไขฝีมือเท่านั้น:
+    ///       1) Combo Finisher (ฮิตสุดท้าย ComboStep >= 3): Light 1.55x / Heavy 1.75x
+    ///       2) Timed Parry Counter-Slash (ตีศัตรูที่ติด Stagger หรือฟันสวนภายในหน้าต่างหลัง Perfect Parry): 1.75x
+    ///       3) Stealth Assassination Backstab (ลอบสังหารมอนสเตอร์ทั่วไปจากด้านหลัง): 2.50x
+    /// </summary>
+    public int EvaluateSkillBasedStrike(
+        int baseAtk,
+        PlayerAttackKind attackKind,
+        int comboStep,
+        bool targetIsBoss,
+        bool targetIsStaggered,
+        bool parryCounterWindowActive,
+        out bool isCrit,
+        out bool isParryCounter,
+        out float appliedMultiplier)
+    {
+        bool isStealthStrike = attackKind == PlayerAttackKind.StealthAssassination && !targetIsBoss;
+        bool isHeavyStrike = attackKind == PlayerAttackKind.HeavyCombo ||
+                             attackKind == PlayerAttackKind.RunHeavyAttack ||
+                             attackKind == PlayerAttackKind.JumpHeavyAttack ||
+                             attackKind == PlayerAttackKind.RunJumpHeavyAttack;
+
+        // 1) เฉพาะฮิตสุดท้ายของคอมโบ (ComboStep >= 3) เท่านั้นที่เป็น Combo Finisher CRIT
+        bool isComboFinisher = comboStep >= 3 &&
+                               (attackKind == PlayerAttackKind.LightCombo || attackKind == PlayerAttackKind.HeavyCombo);
+
+        // 2) ฟันสวนกลับใส่ศัตรูที่ติด Stagger หรือภายในหน้าต่างหลังปัดป้องสมบูรณ์ (Timed Parry Counter-Slash)
+        isParryCounter = !isStealthStrike && (targetIsStaggered || parryCounterWindowActive);
+
+        // 3) รวมเงื่อนไข Critical Hit (ไม่มีการสุ่ม % และไม่มีการคริใน Combo ฮิต 1–2)
+        isCrit = isStealthStrike || isComboFinisher || isParryCounter;
+
+        if (isStealthStrike)
+        {
+            appliedMultiplier = stealthBackstabCritMultiplier; // 2.50x Backstab CRIT
+        }
+        else if (isParryCounter)
+        {
+            // สวนกลับหลัง Perfect Parry การันตี CRIT 1.75x (ไม่ทะลุเพดานแม้กดทับกับ Finisher)
+            appliedMultiplier = parryCounterCritMultiplier;
+        }
+        else if (isComboFinisher)
+        {
+            // ฮิตปิดคอมโบ (ฮิต 3): Light Finisher = 1.55x CRIT, Heavy Finisher = 1.75x CRIT
+            appliedMultiplier = isHeavyStrike ? heavyFinisherCritMultiplier : lightFinisherCritMultiplier;
+        }
+        else if (isHeavyStrike)
+        {
+            // ท่าฟันหนักฮิต 1–2 / วิ่งฟันหนัก / กระโดดฟันหนัก: ดาเมจหนักกว่าปกติแต่ไม่ติด CRIT
+            appliedMultiplier = comboStep == 2 ? 1.25f : 1.20f;
+        }
+        else
+        {
+            // ท่าฟันเบาฮิต 1–2 / วิ่งฟัน / กระโดดฟัน: ดาเมจปกติ ไม่ติด CRIT
+            appliedMultiplier = comboStep == 2 ? comboStep2NormalMultiplier : 1.00f;
+        }
+
+        return Mathf.Max(1, Mathf.RoundToInt(baseAtk * appliedMultiplier));
+    }
+
     private void TryHitNpc(EnemyNPC npc, Collider other)
     {
         if (!IsHitWindowOpen || weaponHitbox == null) return;
@@ -1927,47 +2068,27 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
                              CurrentAttackKind == PlayerAttackKind.JumpHeavyAttack ||
                              CurrentAttackKind == PlayerAttackKind.RunJumpHeavyAttack;
 
-        bool isComboCrit = ComboStep >= 2;
-        bool isStatCrit = !isComboCrit && UnityEngine.Random.value < TotalCritChance;
-        bool isCrit = isStealthStrike || isHeavyStrike || isComboCrit || isStatCrit;
+        bool parryWindowReady = Time.time <= _parryCounterReadyUntil;
+        int finalDamage = EvaluateSkillBasedStrike(
+            totalAtk,
+            CurrentAttackKind,
+            ComboStep,
+            npc.IsBoss,
+            npc.IsStaggered,
+            parryWindowReady,
+            out bool isCrit,
+            out bool isParryCounter,
+            out float appliedMult);
 
-        float mult;
-        if (isStealthStrike)
+        // เมื่อใช้โบนัสฟันสวนกลับหลัง Perfect Parry แล้ว ให้ล้างหน้าต่างทันที (1 Perfect Parry = 1 Counter CRIT)
+        if (isParryCounter && parryWindowReady)
         {
-            // ท่าลอบสังหารจากด้านหลังทำความเสียหายวิกฤต 3.0 เท่า
-            mult = 3.0f;
-        }
-        else if (isHeavyStrike)
-        {
-            mult = ComboStep switch
-            {
-                2 => comboStep2CritMultiplier * 1.25f,
-                3 => comboStep3CritMultiplier * 1.25f,
-                _ => 1.4f
-            };
-        }
-        else
-        {
-            mult = ComboStep switch
-            {
-                2 => comboStep2CritMultiplier,
-                3 => comboStep3CritMultiplier,
-                _ => isStatCrit ? 1.5f : 1f
-            };
+            _parryCounterReadyUntil = -100f;
         }
 
-        bool isStaggerCounter = npc.IsStaggered;
-        if (isStaggerCounter)
-        {
-            // โจมตีสวนกลับใส่ศัตรูที่ติดสถานะ Stagger จาก Perfect Parry -> โบนัสความเสียหาย 1.25x และติดคริติคอลเสมอ
-            mult *= 1.25f;
-            isCrit = true;
-        }
-
-        int finalDamage = Mathf.Max(1, Mathf.RoundToInt(totalAtk * mult));
         _lastCombatActivityTime = Time.time;
 
-        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} ({CurrentAttackKind}, Combo {ComboStep}{(isCrit ? " CRIT!" : "")}{(isStaggerCounter ? " COUNTER!" : "")}) hit NPC {npc.name} (id={id}) for {finalDamage} (TotalATK={totalAtk}).");
+        Debug.Log($"[PlayerCombat] Swing #{CurrentSequence} ({CurrentAttackKind}, Combo {ComboStep}, x{appliedMult:0.00}{(isCrit ? " CRIT!" : "")}{(isParryCounter ? " PARRY-COUNTER!" : "")}) hit NPC {npc.name} (id={id}) for {finalDamage} (TotalATK={totalAtk}).");
         npc.RPC_TakeDamageWithCrit(finalDamage, isCrit, ComboStep);
         HitLanded?.Invoke(npc, finalDamage, isCrit);
 
@@ -1977,13 +2098,13 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             if (enableCombatHitStop)
             {
                 float hitStopDur = isStealthStrike ? 0.08f
-                    : (isHeavyStrike || isStaggerCounter || ComboStep >= 3 ? 0.055f : 0.03f);
+                    : (isCrit || isHeavyStrike ? 0.055f : 0.028f);
                 _animationDriver?.TriggerHitStop(hitStopDur, 0.06f);
             }
             if (enableCameraShake)
             {
                 float shakeAmp = isStealthStrike ? 0.28f
-                    : (isHeavyStrike || isStaggerCounter || ComboStep >= 3 ? 0.17f : (isCrit ? 0.11f : 0.065f));
+                    : (isCrit ? 0.17f : (isHeavyStrike ? 0.11f : 0.06f));
                 PlayerFollowCamera.ShakeActive(shakeAmp, isStealthStrike ? 0.18f : 0.12f);
             }
         }
@@ -2071,8 +2192,9 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
                 NetworkStamina = Mathf.Min(MaxStamina, NetworkStamina + parryStaminaReward);
                 _sprintExhaustedCooldown = false;
             }
-            // รีเซ็ตคูลดาวน์ Parry สั้นลงเมื่อปัดป้องสำเร็จ เพื่อเปิดโอกาสปัดป้องท่าต่อเนื่องได้
+            // รีเซ็ตคูลดาวน์ Parry สั้นลงเมื่อปัดป้องสำเร็จ และเปิดหน้าต่าง Counter-Slash CRIT (3.5 วินาที)
             _nextParryReadyTime = Time.time + 0.15f;
+            _parryCounterReadyUntil = Time.time + parryCounterWindowSeconds;
 
             NetworkId attackerNetId = (attackerNpc != null && attackerNpc.Object != null && attackerNpc.Object.IsValid)
                 ? attackerNpc.Object.Id
@@ -2203,6 +2325,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
                 if (IsBlocking) IsBlocking = false;
                 if (IsWeaponDrawn) IsWeaponDrawn = false;
             }
+            _parryCounterReadyUntil = -100f;
             UpdateBlockVfxVisual(false);
             if (_hitWindowRoutine != null) { StopCoroutine(_hitWindowRoutine); _hitWindowRoutine = null; }
             CloseHitWindow();
@@ -2224,8 +2347,11 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
         float cd = Mathf.Max(0f, _nextLocalAttackTime - Time.time);
         GUI.Box(new Rect(10f, 10f, 310f, 96f), GUIContent.none);
+        string lvDisplay = IsMaxLevel
+            ? $"Lv.{MaxLevel} (MAX)"
+            : $"Lv.{NetworkLevel} (EXP {NetworkExperience}/{ExpToNextLevel})";
         GUI.Label(new Rect(18f, 14f, 296f, 88f),
-            $"Lv.{NetworkLevel} (EXP {NetworkExperience}/{ExpToNextLevel})  StatPts: {NetworkUnspentStatPoints}\n" +
+            $"{lvDisplay}  StatPts: {NetworkUnspentStatPoints}\n" +
             $"HP {NetworkHealth}/{MaxHealth}   STA {NetworkStamina:0}/{MaxStamina:0}   ATK {TotalAttackDamage}   DEF {TotalDefense}\n" +
             $"STR {StatPointsSTR}  VIT {StatPointsVIT}  END {StatPointsEND}  AGI {StatPointsAGI}  |  {(IsInCombat ? "IN COMBAT" : "COMBAT READY")}\n" +
             $"Cooldown {cd:0.00}s   Combo {ComboStep}   Block {(IsBlocking ? "ON" : "off")}");

@@ -291,10 +291,11 @@ public class InventoryUI : MonoBehaviour
         _statPointsText = MakeLabel(allocBox.transform, "UnspentPts", "Pts: 0", 14, FontStyle.Bold, TextAnchor.MiddleRight,
             UITheme.BrushedGoldBright, 276f, 10f, 242f, 24f);
 
-        BuildStatRow(allocBox.transform, 0, PlayerStatType.STR, "STR", "+4 ATK", 48f);
-        BuildStatRow(allocBox.transform, 1, PlayerStatType.VIT, "VIT", "+15 HP", 102f);
-        BuildStatRow(allocBox.transform, 2, PlayerStatType.END, "END", "+12 STA", 156f);
-        BuildStatRow(allocBox.transform, 3, PlayerStatType.AGI, "AGI", "+3% CRIT", 210f);
+        // ปุ่มอัปเกรดค่าสถานะแบบ Flat Integer สมดุล Lv.1–30 (ตัด % CRIT สุ่มออก ใช้ Skill-Based Crit แทน)
+        BuildStatRow(allocBox.transform, 0, PlayerStatType.STR, "STR", "+1 ATK", 48f);
+        BuildStatRow(allocBox.transform, 1, PlayerStatType.VIT, "VIT", "+6 HP", 102f);
+        BuildStatRow(allocBox.transform, 2, PlayerStatType.END, "END", "+2 STA", 156f);
+        BuildStatRow(allocBox.transform, 3, PlayerStatType.AGI, "AGI", "+0.08 SPD", 210f);
 
         // ============================================================
         // คอลัมน์ซ้าย B: BLACKSMITH GEAR ENHANCEMENT (+1 TO +10)
@@ -1344,8 +1345,17 @@ public class InventoryUI : MonoBehaviour
 
         if (_headerStatsText != null)
         {
-            int nextExp = combat != null ? combat.ExpToNextLevel : 100;
-            _headerStatsText.text = $"Lv.{_inv.Level}  |  EXP {_inv.Experience}/{nextExp}  |  {gold:N0} G";
+            // แสดง MAX เมื่อผู้เล่นถึงเพดานเลเวลสูงสุด (Lv.30)
+            bool isMaxLevel = combat != null && combat.IsMaxLevel;
+            if (isMaxLevel)
+            {
+                _headerStatsText.text = $"Lv.{PlayerCombat.MaxLevel} (MAX)  |  EXP MAX  |  {gold:N0} G";
+            }
+            else
+            {
+                int nextExp = combat != null ? combat.ExpToNextLevel : 100;
+                _headerStatsText.text = $"Lv.{_inv.Level}  |  EXP {_inv.Experience}/{nextExp}  |  {gold:N0} G";
+            }
         }
 
         if (_activeTab == HubTab.Character)
@@ -1401,9 +1411,10 @@ public class InventoryUI : MonoBehaviour
         if (combat != null)
         {
             float spd = capsule != null ? capsule.TotalMoveSpeed : 6f;
+            // แสดงค่าสเตตัสรวมแบบจำนวนเต็ม (ไม่มี % CRIT สุ่ม — แสดงเงื่อนไข Skill Crit แทน และแจ้งเพดาน Max STA 150)
             _totalStatsText.text =
-                $"ATK: {combat.TotalAttackDamage}     |     DEF: {combat.TotalDefense}     |     CRIT: {combat.TotalCritChance * 100f:0}%\n" +
-                $"Max HP: {combat.MaxHealth}     |     Max STA: {combat.MaxStamina:0}     |     SPD: {spd:0.00}";
+                $"ATK: {combat.TotalAttackDamage}     |     DEF: {combat.TotalDefense}     |     CRIT: Skill (Finisher / Parry / Backstab)\n" +
+                $"Max HP: {combat.MaxHealth}     |     Max STA: {combat.MaxStamina:0}/{PlayerCombat.HardMaxStaminaCap:0}     |     SPD: {spd:0.00}";
 
             int pts = combat.NetworkUnspentStatPoints;
             _statPointsText.text = $"Pts: {pts}  |  {gold:N0} G";
@@ -1901,31 +1912,38 @@ public class InventoryUI : MonoBehaviour
             EquipmentSlotType.Sword => desc +
                 "• Equip in the WEAPON slot (removed from bag grid while equipped).\n" +
                 "• Press [1] outside Comfort Zone to Draw/Sheathe your GreatSword.\n" +
-                "• Controls: [LMB] Light 3-Hit Combo / Run Attack / Jump Attack ([Space] + [LMB]), [R] Heavy Slash, [F] Block/Parry, [Middle Click] Target Lock, [Left Ctrl] Dodge.\n" +
-                "• Can be enhanced at the Blacksmith up to +10.",
+                "• Controls: [LMB] 3-Hit Combo (Hit 3 Finisher = CRIT!), [R] Heavy Slash, [F] Block/Parry (Perfect Parry Counter = CRIT!), [Middle Click] Lock, [Left Ctrl] Dodge.\n" +
+                "• Enhances with flat ATK (+1 to +2 per level) up to +10 at the Blacksmith.",
             EquipmentSlotType.Shield => desc +
-                "• Equip in the SHIELD slot to boost Defense & Health.\n" +
-                "• Hold [F] to Block incoming damage by 75% (tap [F] right before impact for Perfect Parry — staggers enemies!).\n" +
-                "• Can be enhanced at the Blacksmith up to +10.",
+                "• Equip in the SHIELD slot for flat Defense, Max HP, and Stamina.\n" +
+                "• Hold [F] to Block 75% damage; tap [F] right before impact for Perfect Parry -> Stagger & guaranteed Counter CRIT!\n" +
+                "• Can be enhanced (+2 HP/lv, +1 DEF every 2 levels) up to +10 at the Blacksmith.",
             EquipmentSlotType.Armor => desc +
-                "• Equip in the ARMOR slot for flat Defense and Max HP scaling.\n" +
-                "• Enhance at the Blacksmith using any gear tier (Normal..Legendary) as Fodder.",
+                "• Equip in the ARMOR slot for flat Defense and Max HP survivability.\n" +
+                "• Enhance (+2 HP/lv, +1 DEF every 2 levels) at the Blacksmith using any gear tier as Fodder.",
             EquipmentSlotType.Pants => desc +
-                "• Equip in the PANTS slot for Defense, Stamina, and Movement Speed bonuses.\n" +
-                "• Enhance at the Blacksmith up to +10.",
+                "• Equip in the PANTS slot for flat Max HP, Max Stamina (capped at 150 total), and Move Speed.\n" +
+                "• Can be enhanced (+2 HP/lv, +1 STA every 2 levels, +0.02 SPD/lv) up to +10 at the Blacksmith.",
             _ => desc + "• Standard item."
         };
     }
 
     private static string BuildCompendiumFullStats(ItemData item)
     {
+        // แสดงค่าพลังพื้นฐานและค่าพลังหลังตีบวก +10 แบบจำนวนเต็มคงที่ (Flat Integer - ไม่มี %)
         var sb = new System.Text.StringBuilder();
-        if (item.damageBonus != 0) sb.AppendLine($"• Attack Damage: +{item.damageBonus}  (At +10: +{item.GetEnhancedDamage(10)})");
+        int baseDmg = item.GetEnhancedDamage(0);
+        int maxDmg = item.GetEnhancedDamage(10);
+        if (baseDmg != 0)
+        {
+            sb.AppendLine(maxDmg > baseDmg
+                ? $"• Attack Damage: +{baseDmg}  (At +10: +{maxDmg})"
+                : $"• Attack Damage: +{baseDmg}  (Role Cap: Fixed +{maxDmg})");
+        }
         if (item.defenseBonus != 0) sb.AppendLine($"• Defense: +{item.defenseBonus}  (At +10: +{item.GetEnhancedDefense(10)})");
         if (item.maxHealthBonus != 0) sb.AppendLine($"• Max Health: +{item.maxHealthBonus}  (At +10: +{item.GetEnhancedMaxHealth(10)})");
         if (item.maxStaminaBonus != 0) sb.AppendLine($"• Max Stamina: +{item.maxStaminaBonus}  (At +10: +{item.GetEnhancedMaxStamina(10)})");
-        if (item.moveSpeedBonus > 0f) sb.AppendLine($"• Move Speed: +{item.moveSpeedBonus:0.0} m/s  (At +10: +{item.GetEnhancedMoveSpeed(10):0.0} m/s)");
-        if (item.critChanceBonus > 0f) sb.AppendLine($"• Critical Chance: +{item.critChanceBonus * 100f:0.#}%  (At +10: +{item.GetEnhancedCritChance(10) * 100f:0.#}%)");
+        if (item.moveSpeedBonus > 0f) sb.AppendLine($"• Move Speed: +{item.moveSpeedBonus:0.00} m/s  (At +10: +{item.GetEnhancedMoveSpeed(10):0.00} m/s)");
         if (item.healAmount > 0) sb.AppendLine($"• Instant Heal: +{item.healAmount} HP");
         if (item.staminaRestoreAmount > 0) sb.AppendLine($"• Stamina Restore: +{item.staminaRestoreAmount} STA");
         if (item.attackBuffBonus > 0) sb.AppendLine($"• Attack Buff: +{item.attackBuffBonus} ATK for {item.attackBuffDuration:0}s");
@@ -1953,14 +1971,12 @@ public class InventoryUI : MonoBehaviour
         int sta = item.GetEnhancedMaxStamina(enhancementLevel);
         int def = item.GetEnhancedDefense(enhancementLevel);
         float spd = item.GetEnhancedMoveSpeed(enhancementLevel);
-        float crit = item.GetEnhancedCritChance(enhancementLevel);
 
         if (dmg != 0) sb.Append($"+{dmg} ATK  ");
         if (hp != 0) sb.Append($"+{hp} Max HP  ");
         if (sta != 0) sb.Append($"+{sta} Max STA  ");
         if (def != 0) sb.Append($"+{def} DEF  ");
-        if (spd > 0f) sb.Append($"+{spd:0.0} SPD  ");
-        if (crit > 0f) sb.Append($"+{crit * 100f:0}% CRIT  ");
+        if (spd > 0f) sb.Append($"+{spd:0.00} SPD  ");
         if (item.healAmount > 0) sb.Append($"Heals +{item.healAmount} HP  ");
         if (item.staminaRestoreAmount > 0) sb.Append($"+{item.staminaRestoreAmount} STA  ");
         if (item.attackBuffBonus > 0) sb.Append($"+{item.attackBuffBonus} ATK ({item.attackBuffDuration:0}s)  ");
@@ -1975,21 +1991,22 @@ public class InventoryUI : MonoBehaviour
 
     private static string BuildEnhanceStatPreview(ItemData item, int curLvl, int nextLvl, float nextBonusPct)
     {
+        // แสดงผลเปรียบเทียบการตีบวกแบบจำนวนเต็มคงที่ (+1 ถึง +2 ต่อระดับ แทนระบบคูณ %)
         var sb = new System.Text.StringBuilder();
-        sb.Append($"Upgrade Multiplier: +{Mathf.RoundToInt(nextBonusPct * 100f)}% Total Stats\n");
+        sb.Append($"Flat Enhancement (+{curLvl} -> +{nextLvl}): Steady Flat Integer Growth\n");
 
-        if (item.damageBonus > 0)
-            sb.Append($"ATK: {item.GetEnhancedDamage(curLvl)} -> {item.GetEnhancedDamage(nextLvl)}   ");
+        int curDmg = item.GetEnhancedDamage(curLvl);
+        int nxtDmg = item.GetEnhancedDamage(nextLvl);
+        if (curDmg > 0 || nxtDmg > 0)
+            sb.Append(nxtDmg > curDmg ? $"ATK: +{curDmg} -> +{nxtDmg}   " : $"ATK: +{curDmg} (Cap)   ");
         if (item.maxHealthBonus > 0)
-            sb.Append($"HP: {item.GetEnhancedMaxHealth(curLvl)} -> {item.GetEnhancedMaxHealth(nextLvl)}   ");
+            sb.Append($"HP: +{item.GetEnhancedMaxHealth(curLvl)} -> +{item.GetEnhancedMaxHealth(nextLvl)}   ");
         if (item.maxStaminaBonus > 0)
-            sb.Append($"STA: {item.GetEnhancedMaxStamina(curLvl)} -> {item.GetEnhancedMaxStamina(nextLvl)}   ");
+            sb.Append($"STA: +{item.GetEnhancedMaxStamina(curLvl)} -> +{item.GetEnhancedMaxStamina(nextLvl)}   ");
         if (item.defenseBonus > 0)
-            sb.Append($"DEF: {item.GetEnhancedDefense(curLvl)} -> {item.GetEnhancedDefense(nextLvl)}   ");
-        if (item.critChanceBonus > 0f)
-            sb.Append($"CRIT: {item.GetEnhancedCritChance(curLvl) * 100f:0.#}% -> {item.GetEnhancedCritChance(nextLvl) * 100f:0.#}%   ");
+            sb.Append($"DEF: +{item.GetEnhancedDefense(curLvl)} -> +{item.GetEnhancedDefense(nextLvl)}   ");
         if (item.moveSpeedBonus > 0f)
-            sb.Append($"SPD: {item.GetEnhancedMoveSpeed(curLvl):0.0} -> {item.GetEnhancedMoveSpeed(nextLvl):0.0}");
+            sb.Append($"SPD: +{item.GetEnhancedMoveSpeed(curLvl):0.00} -> +{item.GetEnhancedMoveSpeed(nextLvl):0.00}");
 
         return sb.ToString().Trim();
     }

@@ -211,7 +211,8 @@ public class EnemyWorldHealthBar : MonoBehaviour
         _hpFill.rectTransform.anchorMax = new Vector2(frac, 1f);
         if (_hpTrailFill != null) _hpTrailFill.rectTransform.anchorMax = new Vector2(_trailFrac, 1f);
 
-        string roleTitle = _enemy.ScaledLevel <= 2 ? "Camp Guard" : "Frontier Marauder";
+        // แยกชื่อบทบาทตาม 3-Tier Zone (Lv.1–10 = โซนเริ่มต้น Camp Guard, Lv.11–22 = โซนชายแดน Frontier Marauder)
+        string roleTitle = _enemy.ScaledLevel <= 10 ? "Camp Guard" : "Frontier Marauder";
         if (_nameLabel != null)
         {
             _nameLabel.text = $"Lv.{_enemy.ScaledLevel}  {roleTitle}";

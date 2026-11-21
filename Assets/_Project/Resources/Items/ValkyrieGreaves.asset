@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: valkyrie_greaves
   displayName: Valkyrie Vanguard Pants
-  description: Winged battle greaves. +60 Max HP, +35 Max Stamina, +0.55 Move Speed.
+  description: Winged battle greaves. +14 Max HP, +8 Max Stamina, +0.28 Move Speed.
+  obtainAndUseGuide: Epic drop from Frontier Camps & Boss. Equip in [PANTS] slot
+    for superior martial agility (+0 ATK).
   type: 7
   tier: 2
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.76, g: 0.3, b: 0.96, a: 1}
   stackable: 0
@@ -26,9 +30,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
-  maxHealthBonus: 60
-  maxStaminaBonus: 35
+  maxHealthBonus: 14
+  maxStaminaBonus: 8
   defenseBonus: 0
-  moveSpeedBonus: 0.55
+  moveSpeedBonus: 0.28
   critChanceBonus: 0
   droppable: 1

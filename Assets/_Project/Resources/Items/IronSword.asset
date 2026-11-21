@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: iron_sword
   displayName: Iron GreatSword
-  description: Standard-issue iron greatsword. +10 Attack Damage.
+  description: Standard-issue iron greatsword for vanguard warriors. +5 Attack Damage.
+  obtainAndUseGuide: Obtained from Starter Camps. Equip into the [WEAPON] slot or
+    enhance (+1 ATK/level) at the Blacksmith.
   type: 1
   tier: 0
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.82, g: 0.85, b: 0.88, a: 1}
   stackable: 0
@@ -25,7 +29,7 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 10
+  damageBonus: 5
   maxHealthBonus: 0
   maxStaminaBonus: 0
   defenseBonus: 0

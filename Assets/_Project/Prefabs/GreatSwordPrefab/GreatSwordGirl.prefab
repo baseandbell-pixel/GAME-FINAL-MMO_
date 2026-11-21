@@ -846,10 +846,14 @@ MonoBehaviour:
   attackCooldown: 0.6
   inputBufferSeconds: 0.2
   cooldownTolerance: 0.1
-  attackDamage: 20
+  attackDamage: 14
   comboResetSeconds: 1.45
-  comboStep2CritMultiplier: 1.5
-  comboStep3CritMultiplier: 2
+  comboStep2NormalMultiplier: 1.05
+  lightFinisherCritMultiplier: 1.55
+  heavyFinisherCritMultiplier: 1.75
+  parryCounterCritMultiplier: 1.75
+  parryCounterWindowSeconds: 3.5
+  stealthBackstabCritMultiplier: 2.5
   blockMoveSpeedMultiplier: 0.45
   blockDamageReduction: 0.75
   dodgeCooldown: 0.75

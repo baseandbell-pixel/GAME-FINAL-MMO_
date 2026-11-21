@@ -14,10 +14,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: sovereign_war_greaves
   displayName: Sovereign War Greaves
-  description: Legendary greaves of the Sovereign. +110 Max HP, +55 Max Stamina,
-    +6 Attack, +0.8 Move Speed.
+  description: Legendary greaves of the Sovereign. +24 Max HP, +12 Max Stamina, +0.40
+    Move Speed.
+  obtainAndUseGuide: Legendary drop from Boss Sovereign Golem. Equip in [PANTS] slot
+    for top speed and endurance (+0 ATK).
   type: 7
   tier: 3
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 1, g: 0.7, b: 0.12, a: 1}
   stackable: 0
@@ -26,10 +30,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 6
-  maxHealthBonus: 110
-  maxStaminaBonus: 55
+  damageBonus: 0
+  maxHealthBonus: 24
+  maxStaminaBonus: 12
   defenseBonus: 0
-  moveSpeedBonus: 0.8
+  moveSpeedBonus: 0.4
   critChanceBonus: 0
   droppable: 1

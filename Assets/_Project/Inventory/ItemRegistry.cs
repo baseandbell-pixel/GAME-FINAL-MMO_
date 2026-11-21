@@ -214,12 +214,13 @@ public static class ItemRegistry
     }
 
     /// <summary>
-    /// ลงทะเบียนและกำหนดค่าสเตตัส + คำแนะนำการใช้งาน (Item Compendium Guide) ให้ครบทุกชิ้น
+    /// ลงทะเบียนและกำหนดค่าสเตตัสแบบจำนวนเต็มคงที่ (Flat Integer Rebalance - ลดลง 50% ทุก Tier + แยกบทบาทอุปกรณ์ + ตัด % CRIT ออกทั้งหมด)
+    /// พร้อมคำแนะนำการใช้งานสำหรับหน้าคู่มือไอเทม (Item Compendium Guide) ให้ตรงกับค่าจริง 100%
     /// </summary>
     private static void EnsureTieredItemsRegistered()
     {
         // ============================================================
-        // 1. NORMAL TIER (สีเทาเงิน - ปรับสมดุลโบนัส HP/Stamina และยาฟื้นฟูให้เหมาะกับจังหวะการต่อสู้)
+        // 1. NORMAL TIER (สีเทาเงิน - ลดค่าพลังอุปกรณ์ลง 50%, อาวุธเน้น ATK, ชุดป้องกัน ATK = +0)
         // ============================================================
         RegisterOrUpdate("health_potion", "Healing Potion",
             "Restores 25 HP immediately when consumed.",
@@ -228,31 +229,31 @@ public static class ItemRegistry
             stackable: true, maxStack: 10, healAmount: 25);
 
         RegisterOrUpdate("iron_sword", "Iron GreatSword",
-            "Standard-issue iron greatsword for vanguard warriors. +10 Attack Damage.",
-            "Obtained from Normal Camps. Equip into the [SWORD] slot or use as Blacksmith upgrade fodder.",
+            "Standard-issue iron greatsword for vanguard warriors. +5 Attack Damage.",
+            "Obtained from Starter Camps. Equip into the [WEAPON] slot or enhance (+1 ATK/level) at the Blacksmith.",
             ItemType.Weapon, ItemTier.Normal, new Color(0.82f, 0.85f, 0.88f),
-            stackable: false, maxStack: 1, damageBonus: 10);
+            stackable: false, maxStack: 1, damageBonus: 5);
 
         RegisterOrUpdate("wooden_buckler", "Ironclad Buckler",
-            "Sturdy iron-rimmed buckler shield. +10 Max HP, +5 Max Stamina, +2 Defense.",
-            "Obtained from Normal Camps. Equip into the [SHIELD] slot to boost survivability and guard defense.",
+            "Sturdy iron-rimmed buckler shield. +5 Max HP, +3 Max Stamina, +1 Defense.",
+            "Obtained from Starter Camps. Equip into the [SHIELD] slot for pure defensive survivability (+0 ATK).",
             ItemType.Shield, ItemTier.Normal, new Color(0.78f, 0.82f, 0.86f),
-            stackable: false, maxStack: 1, maxHpBonus: 10, maxStaBonus: 5, defBonus: 2);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 5, maxStaBonus: 3, defBonus: 1);
 
         RegisterOrUpdate("hunter_vest", "Hunter Chestplate",
-            "Light reinforced chest armor for martial mobility. +12 Max HP, +2 Defense.",
-            "Obtained from Normal Camps. Equip into the [ARMOR] slot to reduce incoming physical damage.",
+            "Light reinforced chest armor for martial mobility. +6 Max HP, +1 Defense.",
+            "Obtained from Starter Camps. Equip into the [ARMOR] slot to reduce incoming physical damage (+0 ATK).",
             ItemType.Armor, ItemTier.Normal, new Color(0.80f, 0.83f, 0.86f),
-            stackable: false, maxStack: 1, maxHpBonus: 12, defBonus: 2);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 6, defBonus: 1);
 
         RegisterOrUpdate("leather_greaves", "Leather Greaves",
-            "Flexible combat leg guards. +8 Max HP, +5 Max Stamina, +0.20 Move Speed.",
-            "Obtained from Normal Camps. Equip into the [PANTS] slot to increase movement speed and stamina.",
+            "Flexible combat leg guards. +4 Max HP, +3 Max Stamina, +0.10 Move Speed.",
+            "Obtained from Starter Camps. Equip into the [PANTS] slot for mobility and stamina (+0 ATK).",
             ItemType.Pants, ItemTier.Normal, new Color(0.76f, 0.80f, 0.84f),
-            stackable: false, maxStack: 1, maxHpBonus: 8, maxStaBonus: 5, speedBonus: 0.2f);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 4, maxStaBonus: 3, speedBonus: 0.10f);
 
         // ============================================================
-        // 2. RARE TIER (สีฟ้า - ปรับสมดุลโบนัส HP/Stamina และ Stamina Elixir)
+        // 2. RARE TIER (สีฟ้า - ลดค่าพลังลง 50%, ตัด % CRIT ออก, ชุดป้องกัน ATK = +0)
         // ============================================================
         RegisterOrUpdate("stamina_elixir", "Stamina Elixir",
             "Instantly restores 40 Stamina for sustained combos, sprinting, and dodging.",
@@ -261,88 +262,88 @@ public static class ItemRegistry
             stackable: true, maxStack: 10, staminaRestore: 40);
 
         RegisterOrUpdate("reinforced_greatsword_oil", "Reinforced GreatSword Oil",
-            "Alchemical blade oil granting +15 Attack Damage for 45 seconds.",
-            "Drops from Rare Chests & Enemies. Click [Use] before Boss or Camp fights for a 45s +15 ATK buff.",
+            "Alchemical blade oil granting +8 Attack Damage for 45 seconds.",
+            "Drops from Rare Chests & Enemies. Use from Inventory or Hotbar [2-7] before Frontier or Boss fights for a 45s +8 ATK buff.",
             ItemType.Consumable, ItemTier.Rare, new Color(0.18f, 0.85f, 0.95f),
-            stackable: true, maxStack: 10, atkBuffBonus: 15, atkBuffDuration: 45f);
+            stackable: true, maxStack: 10, atkBuffBonus: 8, atkBuffDuration: 45f);
 
         RegisterOrUpdate("steel_claymore", "Knight's Steel Claymore",
-            "Fine tempered knight's claymore. +16 Attack Damage, +5% Critical Chance.",
-            "Drops from Camps & Boss. Equip in [SWORD] slot or enhance up to +10 at the Blacksmith.",
+            "Fine tempered knight's claymore. +8 Attack Damage, +2 Max Stamina.",
+            "Drops from Camps & Boss. Equip in [WEAPON] slot or enhance (+1 ATK/level) up to +10 at the Blacksmith.",
             ItemType.Weapon, ItemTier.Rare, new Color(0.22f, 0.68f, 1.00f),
-            stackable: false, maxStack: 1, damageBonus: 16, critBonus: 0.05f);
+            stackable: false, maxStack: 1, damageBonus: 8, maxStaBonus: 2, critBonus: 0f);
 
         RegisterOrUpdate("guardian_kite_shield", "Guardian Kite Shield",
-            "Tempered steel kite shield. +20 Max HP, +10 Max Stamina, +4 Defense.",
-            "Drops from Camps & Boss. Equip in [SHIELD] slot for solid guard endurance and defense.",
+            "Tempered steel kite shield. +10 Max HP, +5 Max Stamina, +2 Defense.",
+            "Drops from Camps & Boss. Equip in [SHIELD] slot for reliable guard endurance and mitigation (+0 ATK).",
             ItemType.Shield, ItemTier.Rare, new Color(0.20f, 0.65f, 0.98f),
-            stackable: false, maxStack: 1, maxHpBonus: 20, maxStaBonus: 10, defBonus: 4);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 10, maxStaBonus: 5, defBonus: 2);
 
         RegisterOrUpdate("chainmail_cuirass", "Reinforced Chainmail Armor",
-            "Heavy chainmail chestplate. +26 Max HP, +5 Max Stamina, +4 Defense.",
-            "Drops from Camps & Boss. Equip in [ARMOR] slot to bolster Max HP and physical mitigation.",
+            "Heavy chainmail chestplate. +13 Max HP, +3 Max Stamina, +2 Defense.",
+            "Drops from Camps & Boss. Equip in [ARMOR] slot for sturdy Max HP and physical mitigation (+0 ATK).",
             ItemType.Armor, ItemTier.Rare, new Color(0.24f, 0.70f, 1.00f),
-            stackable: false, maxStack: 1, maxHpBonus: 26, maxStaBonus: 5, defBonus: 4);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 13, maxStaBonus: 3, defBonus: 2);
 
         RegisterOrUpdate("plated_greaves", "Plated Greaves",
-            "Steel-plated greaves. +16 Max HP, +10 Max Stamina, +0.35 Move Speed.",
-            "Drops from Camps & Boss. Equip in [PANTS] slot for faster footwork and dodge recovery.",
+            "Steel-plated greaves. +8 Max HP, +5 Max Stamina, +0.18 Move Speed.",
+            "Drops from Camps & Boss. Equip in [PANTS] slot for faster footwork and dodge endurance (+0 ATK).",
             ItemType.Pants, ItemTier.Rare, new Color(0.22f, 0.66f, 0.96f),
-            stackable: false, maxStack: 1, maxHpBonus: 16, maxStaBonus: 10, speedBonus: 0.35f);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 8, maxStaBonus: 5, speedBonus: 0.18f);
 
         // ============================================================
-        // 3. EPIC TIER (สีม่วง - ปรับสมดุลโบนัส HP/Stamina ให้ลดลง ~54%)
+        // 3. EPIC TIER (สีม่วง - ลดค่าพลังลง 50%, ตัด % CRIT ออก, ชุดป้องกันเพดาน ATK <= +1)
         // ============================================================
         RegisterOrUpdate("runed_whetstone", "Runed GreatSword",
-            "Arcane-etched greatsword humming with power. +24 Attack Damage, +10% Crit.",
-            "High-tier drop weighted toward Top DPS contributors. Equip in [SWORD] slot for massive cleave damage.",
+            "Arcane-etched greatsword humming with flat force. +12 Attack Damage, +4 Max Stamina.",
+            "Epic drop from Frontier Camps & Boss. Equip in [WEAPON] slot (+2 ATK/level when enhanced).",
             ItemType.Weapon, ItemTier.Epic, new Color(0.78f, 0.28f, 0.96f),
-            stackable: false, maxStack: 1, damageBonus: 24, critBonus: 0.10f);
+            stackable: false, maxStack: 1, damageBonus: 12, maxStaBonus: 4, critBonus: 0f);
 
         RegisterOrUpdate("aegis_tower_shield", "Runed Aegis Shield",
-            "Enchanted tower shield. +36 Max HP, +16 Max Stamina, +4 Attack, +6 Defense.",
-            "Epic drop from Boss & Camps. Equip in [SHIELD] slot for elite defensive and offensive stats.",
+            "Enchanted tower shield. +18 Max HP, +8 Max Stamina, +3 Defense, +1 Attack.",
+            "Epic drop from Frontier Camps & Boss. Equip in [SHIELD] slot for elite defense (Role Cap: +1 ATK max).",
             ItemType.Shield, ItemTier.Epic, new Color(0.72f, 0.26f, 0.94f),
-            stackable: false, maxStack: 1, damageBonus: 4, maxHpBonus: 36, maxStaBonus: 16, defBonus: 6);
+            stackable: false, maxStack: 1, damageBonus: 1, maxHpBonus: 18, maxStaBonus: 8, defBonus: 3);
 
         RegisterOrUpdate("knights_crest", "Royal Knight's Armor",
-            "Epic plate armor of the Royal Guard. +44 Max HP, +12 Max Stamina, +10 Attack, +6 Defense.",
-            "Epic drop from Boss & Camps. Equip in [ARMOR] slot to gain both heavy protection and +10 ATK.",
+            "Epic plate armor of the Royal Guard. +22 Max HP, +6 Max Stamina, +3 Defense, +1 Attack.",
+            "Epic drop from Frontier Camps & Boss. Equip in [ARMOR] slot for heavy defense (Role Cap: +1 ATK max).",
             ItemType.Armor, ItemTier.Epic, new Color(0.75f, 0.32f, 0.98f),
-            stackable: false, maxStack: 1, damageBonus: 10, maxHpBonus: 44, maxStaBonus: 12, defBonus: 6);
+            stackable: false, maxStack: 1, damageBonus: 1, maxHpBonus: 22, maxStaBonus: 6, defBonus: 3);
 
         RegisterOrUpdate("valkyrie_greaves", "Valkyrie Vanguard Pants",
-            "Winged battle greaves. +28 Max HP, +16 Max Stamina, +0.55 Move Speed.",
-            "Epic drop from Boss & Camps. Equip in [PANTS] slot for superior martial agility.",
+            "Winged battle greaves. +14 Max HP, +8 Max Stamina, +0.28 Move Speed.",
+            "Epic drop from Frontier Camps & Boss. Equip in [PANTS] slot for superior martial agility (+0 ATK).",
             ItemType.Pants, ItemTier.Epic, new Color(0.76f, 0.30f, 0.96f),
-            stackable: false, maxStack: 1, maxHpBonus: 28, maxStaBonus: 16, speedBonus: 0.55f);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 14, maxStaBonus: 8, speedBonus: 0.28f);
 
         // ============================================================
-        // 4. LEGENDARY TIER (สีทอง - ปรับสมดุลโบนัส HP/Stamina ให้ลดลง ~55%)
+        // 4. LEGENDARY TIER (สีทอง - ลดค่าพลังลง 50%, ตัด % CRIT ออก, ชุดป้องกันเพดาน ATK <= +2)
         // ============================================================
         RegisterOrUpdate("sovereign_greatsword_shard", "Sovereign GreatSword",
-            "Mythic blade of the Sovereign King. +38 Attack Damage, +20% Critical Chance.",
-            "Legendary drop from Boss Sovereign Golem (boosted by high DPS contribution). Equip in [SWORD] slot.",
+            "Mythic blade of the Sovereign King. +19 Attack Damage, +6 Max Stamina.",
+            "Legendary drop from Boss Sovereign Golem. Equip in [WEAPON] slot (+2 ATK/level when enhanced).",
             ItemType.Weapon, ItemTier.Legendary, new Color(1.00f, 0.65f, 0.10f),
-            stackable: false, maxStack: 1, damageBonus: 38, critBonus: 0.20f);
+            stackable: false, maxStack: 1, damageBonus: 19, maxStaBonus: 6, critBonus: 0f);
 
         RegisterOrUpdate("dragonscale_bulwark", "Dragonscale Bulwark Shield",
-            "Forged from ancient dragon scales. +58 Max HP, +22 Max Stamina, +10 Attack, +10 Defense.",
-            "Legendary drop from Boss Sovereign Golem. Equip in [SHIELD] slot for unmatched fortification.",
+            "Forged from ancient dragon scales. +29 Max HP, +11 Max Stamina, +5 Defense, +2 Attack.",
+            "Legendary drop from Boss Sovereign Golem. Equip in [SHIELD] slot for top fortification (Role Cap: +2 ATK max).",
             ItemType.Shield, ItemTier.Legendary, new Color(1.00f, 0.74f, 0.14f),
-            stackable: false, maxStack: 1, damageBonus: 10, maxHpBonus: 58, maxStaBonus: 22, defBonus: 10);
+            stackable: false, maxStack: 1, damageBonus: 2, maxHpBonus: 29, maxStaBonus: 11, defBonus: 5);
 
         RegisterOrUpdate("dragon_slayer_relic", "Dragon-Slayer Chestplate",
-            "Legendary dragonfire plate armor. +72 Max HP, +18 Max Stamina, +20 Attack, +10 Defense.",
-            "Legendary drop from Boss Sovereign Golem. Equip in [ARMOR] slot for ultimate combat power.",
+            "Legendary dragonfire plate armor. +36 Max HP, +9 Max Stamina, +5 Defense, +2 Attack.",
+            "Legendary drop from Boss Sovereign Golem. Equip in [ARMOR] slot for peak survivability (Role Cap: +2 ATK max).",
             ItemType.Armor, ItemTier.Legendary, new Color(1.00f, 0.78f, 0.12f),
-            stackable: false, maxStack: 1, damageBonus: 20, maxHpBonus: 72, maxStaBonus: 18, defBonus: 10);
+            stackable: false, maxStack: 1, damageBonus: 2, maxHpBonus: 36, maxStaBonus: 9, defBonus: 5);
 
         RegisterOrUpdate("sovereign_war_greaves", "Sovereign War Greaves",
-            "Legendary greaves of the Sovereign. +48 Max HP, +24 Max Stamina, +6 Attack, +0.80 Move Speed.",
-            "Legendary drop from Boss Sovereign Golem. Equip in [PANTS] slot for maximum speed and endurance.",
+            "Legendary greaves of the Sovereign. +24 Max HP, +12 Max Stamina, +0.40 Move Speed.",
+            "Legendary drop from Boss Sovereign Golem. Equip in [PANTS] slot for top speed and endurance (+0 ATK).",
             ItemType.Pants, ItemTier.Legendary, new Color(1.00f, 0.70f, 0.12f),
-            stackable: false, maxStack: 1, damageBonus: 6, maxHpBonus: 48, maxStaBonus: 24, speedBonus: 0.8f);
+            stackable: false, maxStack: 1, damageBonus: 0, maxHpBonus: 24, maxStaBonus: 12, speedBonus: 0.40f);
     }
 
     private static void RegisterOrUpdate(

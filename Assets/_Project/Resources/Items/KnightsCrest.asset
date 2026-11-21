@@ -14,10 +14,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: knights_crest
   displayName: Royal Knight's Armor
-  description: Epic plate armor of the Royal Guard. +95 Max HP, +25 Max Stamina,
-    +10 Attack, +6 Defense.
+  description: Epic plate armor of the Royal Guard. +22 Max HP, +6 Max Stamina, +3
+    Defense, +1 Attack.
+  obtainAndUseGuide: 'Epic drop from Frontier Camps & Boss. Equip in [ARMOR] slot
+    for heavy defense (Role Cap: +1 ATK max).'
   type: 6
   tier: 2
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.75, g: 0.32, b: 0.98, a: 1}
   stackable: 0
@@ -26,10 +30,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 10
-  maxHealthBonus: 95
-  maxStaminaBonus: 25
-  defenseBonus: 6
+  damageBonus: 1
+  maxHealthBonus: 22
+  maxStaminaBonus: 6
+  defenseBonus: 3
   moveSpeedBonus: 0
   critChanceBonus: 0
   droppable: 1

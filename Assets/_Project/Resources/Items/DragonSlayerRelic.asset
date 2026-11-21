@@ -14,10 +14,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: dragon_slayer_relic
   displayName: Dragon-Slayer Chestplate
-  description: Legendary dragonfire plate armor. +160 Max HP, +40 Max Stamina, +20
-    Attack, +10 Defense.
+  description: Legendary dragonfire plate armor. +36 Max HP, +9 Max Stamina, +5 Defense,
+    +2 Attack.
+  obtainAndUseGuide: 'Legendary drop from Boss Sovereign Golem. Equip in [ARMOR]
+    slot for peak survivability (Role Cap: +2 ATK max).'
   type: 6
   tier: 3
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 1, g: 0.78, b: 0.12, a: 1}
   stackable: 0
@@ -26,10 +30,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 20
-  maxHealthBonus: 160
-  maxStaminaBonus: 40
-  defenseBonus: 10
+  damageBonus: 2
+  maxHealthBonus: 36
+  maxStaminaBonus: 9
+  defenseBonus: 5
   moveSpeedBonus: 0
   critChanceBonus: 0
   droppable: 1

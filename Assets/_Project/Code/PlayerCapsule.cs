@@ -670,13 +670,16 @@ public class PlayerCapsule : NetworkBehaviour
         }
 
         string nick = Nick.Value;
-        int lvl = Level;
+        int lvl = Mathf.Clamp(Level, 1, PlayerCombat.MaxLevel);
         if (nameLabel != null && (force || _appliedNick != nick || _appliedLevel != lvl))
         {
             _appliedNick = nick;
             _appliedLevel = lvl;
             nameLabel.fontSize = overheadNameFontSize;
-            nameLabel.text = $"Lv.{lvl} {nick}";
+            // แสดงป้าย [MAX] บนชื่อเหนือหัวเมื่อตัวละครถึงเพดาน Lv.30
+            nameLabel.text = lvl >= PlayerCombat.MaxLevel
+                ? $"Lv.{PlayerCombat.MaxLevel} [MAX] {nick}"
+                : $"Lv.{lvl} {nick}";
         }
     }
 }

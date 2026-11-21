@@ -220,12 +220,17 @@ public class PlayerSaveManager : MonoBehaviour
                     capsule.SetAvatarIndex(loaded.avatarId);
                 }
 
+                // ตรวจสอบและ Clamp ข้อมูลเซฟเก่าให้เข้ากับเพดาน Lv.30 Cap และเพดาน Stamina 150 เสมอ
+                loaded.level = Mathf.Clamp(loaded.level, 1, PlayerCombat.MaxLevel);
+                if (loaded.level >= PlayerCombat.MaxLevel) loaded.experience = 0;
+
                 combat.ApplySaveData(loaded);
                 inv.RestoreSaveData(loaded);
+                // คำนวณและ Clamp ค่า HP / Stamina ปัจจุบันหลังสวมใส่อุปกรณ์แล้วให้ไม่เกิน MaxHealth / MaxStamina (<= 150) ใหม่
                 combat.ApplySaveHealthAndStamina(loaded.currentHealth, loaded.currentStamina);
 
-                // ส่งผู้เล่นที่กลับเข้ามาเกิดในเขตปลอดภัย (Comfort Safe Zone) เสมอ
-                SafeZone safe = SafeZone.Instance ?? SafeZone.EnsureAt(new Vector3(-14f, 0f, 8f), 7.5f);
+                // ส่งผู้เล่นที่กลับเข้ามาเกิดในเขตปลอดภัย (Comfort Safe Zone โซนใต้แผนที่ขยาย 220x220m) เสมอ
+                SafeZone safe = SafeZone.Instance ?? SafeZone.EnsureAt(new Vector3(0f, 0f, -60f), 12.0f);
                 Vector3 safePos = safe.ReconnectSpawnPosition;
                 combat.TeleportTo(safePos);
             }

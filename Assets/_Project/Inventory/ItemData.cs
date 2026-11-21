@@ -133,16 +133,22 @@ public class ItemData : ScriptableObject
         };
     }
 
-    // คำนวณค่าสเตตัสที่เพิ่มขึ้นตามระดับการตีบวก (+0 ถึง +10)
-    public int GetEnhancedDamage(int enhancementLevel) => EnhancementSystem.ScaleIntStat(damageBonus, enhancementLevel);
-    public int GetEnhancedMaxHealth(int enhancementLevel) => EnhancementSystem.ScaleIntStat(maxHealthBonus, enhancementLevel);
-    public int GetEnhancedMaxStamina(int enhancementLevel) => EnhancementSystem.ScaleIntStat(maxStaminaBonus, enhancementLevel);
-    public int GetEnhancedDefense(int enhancementLevel) => EnhancementSystem.ScaleIntStat(defenseBonus, enhancementLevel);
-    public float GetEnhancedMoveSpeed(int enhancementLevel) => EnhancementSystem.ScaleFloatStat(moveSpeedBonus, enhancementLevel);
-    public float GetEnhancedCritChance(int enhancementLevel) => Mathf.Clamp01(EnhancementSystem.ScaleFloatStat(critChanceBonus, enhancementLevel));
+    // คำนวณค่าสเตตัสหลังตีบวกแบบจำนวนเต็มคงที่ (+1 ถึง +2 ต่อระดับ ไม่มีตัวคูณ % และบังคับ Role Cap บนอุปกรณ์ป้องกัน)
+    public int GetEnhancedDamage(int enhancementLevel) =>
+        EnhancementSystem.ScaleAttackStat(damageBonus, enhancementLevel, GetEquipmentSlot(), tier);
+    public int GetEnhancedMaxHealth(int enhancementLevel) =>
+        EnhancementSystem.ScaleHealthStat(maxHealthBonus, enhancementLevel);
+    public int GetEnhancedMaxStamina(int enhancementLevel) =>
+        EnhancementSystem.ScaleStaminaStat(maxStaminaBonus, enhancementLevel);
+    public int GetEnhancedDefense(int enhancementLevel) =>
+        EnhancementSystem.ScaleDefenseStat(defenseBonus, enhancementLevel);
+    public float GetEnhancedMoveSpeed(int enhancementLevel) =>
+        EnhancementSystem.ScaleMoveSpeedStat(moveSpeedBonus, enhancementLevel);
+    // ยกเลิกค่า % Critical Chance บนอุปกรณ์ทั้งหมด (ระบบคริติคอลเปลี่ยนเป็น Skill-Based 100%)
+    public float GetEnhancedCritChance(int enhancementLevel) => 0f;
 
     /// <summary>
-    /// สรุปค่าสเตตัสทั้งหมดของไอเทมเป็นข้อความบรรทัดเดียวสำหรับแสดงใน UI และหน้าคู่มือ
+    /// สรุปค่าสเตตัสทั้งหมดของไอเทมเป็นข้อความบรรทัดเดียวแบบจำนวนเต็มคงที่ (ไม่มี %) สำหรับแสดงใน UI และหน้าคู่มือ
     /// </summary>
     public string GetFormattedStatsSummary(int enhancementLevel = 0)
     {
@@ -160,14 +166,12 @@ public class ItemData : ScriptableObject
             int sta = GetEnhancedMaxStamina(enhancementLevel);
             int def = GetEnhancedDefense(enhancementLevel);
             float spd = GetEnhancedMoveSpeed(enhancementLevel);
-            float crit = GetEnhancedCritChance(enhancementLevel);
 
             if (dmg > 0) parts.Add($"+{dmg} ATK");
             if (hp > 0) parts.Add($"+{hp} Max HP");
             if (sta > 0) parts.Add($"+{sta} Max STA");
             if (def > 0) parts.Add($"+{def} DEF");
             if (spd > 0.001f) parts.Add($"+{spd:0.00} Move SPD");
-            if (crit > 0.001f) parts.Add($"+{crit * 100f:0}% CRIT");
         }
         return parts.Count > 0 ? string.Join("  |  ", parts) : "No stat bonuses";
     }

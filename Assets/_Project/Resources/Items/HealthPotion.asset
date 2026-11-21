@@ -14,14 +14,18 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: health_potion
   displayName: Healing Potion
-  description: Restores 45 HP when consumed.
+  description: Restores 25 HP immediately when consumed.
+  obtainAndUseGuide: Drop from Camp Enemies & Chests. Select in Inventory or Hotbar
+    [2-7] to restore 25 HP during combat.
   type: 0
   tier: 0
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.25, g: 0.92, b: 0.38, a: 1}
   stackable: 1
   maxStack: 10
-  healAmount: 45
+  healAmount: 25
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0

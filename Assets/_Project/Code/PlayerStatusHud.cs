@@ -127,10 +127,10 @@ public class PlayerStatusHud : MonoBehaviour
         _avatarSilhouette.preserveAspect = true;
         FillParentWithPadding(_avatarSilhouette.rectTransform, 2f);
 
-        // ป้ายเลเวล (Level Badge)
+        // ป้ายเลเวล (Level Badge - ขยายความกว้างเป็น 76px เพื่อรองรับข้อความ "Lv.30 MAX" ได้ชัดเจน)
         var lvlBg = MakeImage(_avatarFrameBorder.transform, "LevelBadge", new Color(0.12f, 0.10f, 0.04f, 0.96f));
-        PlaceTopLeft(lvlBg.rectTransform, 12f, 68f, 60f, 22f);
-        _levelBadgeText = MakeText(lvlBg.transform, "LevelText", "Lv.1", 13, FontStyle.Bold, TextAnchor.MiddleCenter,
+        PlaceTopLeft(lvlBg.rectTransform, 4f, 68f, 76f, 22f);
+        _levelBadgeText = MakeText(lvlBg.transform, "LevelText", "Lv.1", 12, FontStyle.Bold, TextAnchor.MiddleCenter,
             new Color(1f, 0.84f, 0.25f, 1f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
         // ชื่อผู้เล่นและสถานะความพร้อมรบ
@@ -262,9 +262,14 @@ public class PlayerStatusHud : MonoBehaviour
 
         if (_combat == null || !_combat.IsSpawned) return;
 
-        // 1. อัปเดตข้อมูลเลเวล ชื่อ และรูปโปรไฟล์ Lobby Avatar
-        int lvl = Mathf.Max(1, _combat.NetworkLevel);
-        if (_levelBadgeText != null) _levelBadgeText.text = $"Lv.{lvl}";
+        // 1. อัปเดตข้อมูลเลเวล (แสดง MAX เมื่อถึง Lv.30), ชื่อ และรูปโปรไฟล์ Lobby Avatar
+        int lvl = Mathf.Clamp(_combat.NetworkLevel, 1, PlayerCombat.MaxLevel);
+        bool isMaxLevel = _combat.IsMaxLevel;
+        if (_levelBadgeText != null)
+        {
+            _levelBadgeText.text = isMaxLevel ? $"Lv.{PlayerCombat.MaxLevel} MAX" : $"Lv.{lvl}";
+            _levelBadgeText.color = isMaxLevel ? new Color(1.0f, 0.88f, 0.28f, 1f) : UITheme.BrushedGoldBright;
+        }
         if (_goldText != null) _goldText.text = $"{_combat.NetworkGold:N0} G";
 
         if (_playerNameText != null && _capsule != null)
@@ -356,16 +361,44 @@ public class PlayerStatusHud : MonoBehaviour
         }
         if (_staText != null) _staText.text = $"STA  {_combat.CurrentStamina:0} / {maxSta:0}";
 
-        int nextExp = Mathf.Max(1, _combat.ExpToNextLevel);
-        float expFrac = Mathf.Clamp01(_combat.NetworkExperience / (float)nextExp);
-        if (_expFill != null)
-            _expFill.rectTransform.anchorMax = new Vector2(expFrac, 1f);
-        if (_expText != null)
-            _expText.text = $"EXP  {_combat.NetworkExperience} / {nextExp}  ({Mathf.RoundToInt(expFrac * 100f)}%)";
+        // แสดงแถบ EXP เต็มพร้อมข้อความ MAX เมื่อตัวละครถึงเพดานเลเวลสูงสุด (Lv.30) ด้วยสีทองเข้มตัดตัวอักษรขาวให้อ่านชัดเจน
+        if (isMaxLevel)
+        {
+            if (_expFill != null)
+            {
+                _expFill.rectTransform.anchorMax = new Vector2(1f, 1f);
+                _expFill.color = new Color(0.62f, 0.44f, 0.08f, 1f);
+            }
+            if (_expText != null)
+            {
+                _expText.color = Color.white;
+                _expText.text = $"EXP  MAX  (Lv.{PlayerCombat.MaxLevel})";
+            }
+        }
+        else
+        {
+            int nextExp = Mathf.Max(1, _combat.ExpToNextLevel);
+            float expFrac = Mathf.Clamp01(_combat.NetworkExperience / (float)nextExp);
+            if (_expFill != null)
+            {
+                _expFill.rectTransform.anchorMax = new Vector2(expFrac, 1f);
+                _expFill.color = UITheme.BrushedGoldBright;
+            }
+            if (_expText != null)
+            {
+                _expText.color = Color.white;
+                _expText.text = $"EXP  {_combat.NetworkExperience} / {nextExp}  ({Mathf.RoundToInt(expFrac * 100f)}%)";
+            }
+        }
 
         if (_pointsNoticeText != null)
         {
-            if (_combat.NetworkUnspentStatPoints > 0)
+            if (_combat.IsParryCounterReady)
+            {
+                _pointsNoticeText.text = "★ PARRY COUNTER READY!  Next Slash = Guaranteed CRIT!";
+                _pointsNoticeText.color = new Color(1f, 0.90f, 0.28f, 1f);
+            }
+            else if (_combat.NetworkUnspentStatPoints > 0)
             {
                 _pointsNoticeText.text = $"★ {_combat.NetworkUnspentStatPoints} Stat Point(s) Available!  Press [I] to Upgrade";
                 _pointsNoticeText.color = new Color(1f, 0.84f, 0.22f, 1f);

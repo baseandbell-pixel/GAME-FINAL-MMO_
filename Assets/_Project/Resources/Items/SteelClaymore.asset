@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: steel_claymore
   displayName: Knight's Steel Claymore
-  description: Fine tempered claymore. +16 Attack Damage, +5% Crit.
+  description: Fine tempered knight's claymore. +8 Attack Damage, +2 Max Stamina.
+  obtainAndUseGuide: Drops from Camps & Boss. Equip in [WEAPON] slot or enhance (+1
+    ATK/level) up to +10 at the Blacksmith.
   type: 1
   tier: 1
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.22, g: 0.68, b: 1, a: 1}
   stackable: 0
@@ -25,10 +29,10 @@ MonoBehaviour:
   staminaRestoreAmount: 0
   attackBuffBonus: 0
   attackBuffDuration: 0
-  damageBonus: 16
+  damageBonus: 8
   maxHealthBonus: 0
-  maxStaminaBonus: 0
+  maxStaminaBonus: 2
   defenseBonus: 0
   moveSpeedBonus: 0
-  critChanceBonus: 0.05
+  critChanceBonus: 0
   droppable: 1

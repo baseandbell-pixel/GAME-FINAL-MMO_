@@ -87,16 +87,16 @@ public class SandboxWorldSpawner : MonoBehaviour
     [Min(5f)] [SerializeField] private float bossArenaProximityRadius = 24f;
     [Min(5f)] [SerializeField] private float bossRespawnDelaySeconds = DefaultBossRespawnSeconds;
 
-    [Header("Zone-Based Enemy Levels (Central Server Ready)")]
-    // กำหนดช่วงเลเวลคงที่ตามโซนบนแผนที่ขยาย 220x220m:
-    //   - Near-Field Starter Zones (Camps 1 & 2) = Lv.1–2
-    //   - Mid-Field Frontier Zones (Camps 3 & 4) = Lv.3–5
-    //   - Far North Citadel Boss Arena = Lv.5+
-    [Min(1)] [SerializeField] private int starterCampMinLevel = 1;
-    [Min(1)] [SerializeField] private int starterCampMaxLevel = 2;
-    [Min(1)] [SerializeField] private int midFieldCampMinLevel = 3;
-    [Min(1)] [SerializeField] private int midFieldCampMaxLevel = 5;
-    [Min(5)] [SerializeField] private int bossArenaZoneLevel = 5;
+    [Header("Zone-Based Enemy Levels (3-Tier Progression: Lv.1–30 Cap)")]
+    // กำหนดช่วงเลเวลคงที่ตาม 3 ระดับความยาก (3-Tier Zone Scaling) บนแผนที่ขยาย 220x220m:
+    //   - Tier 1 Starter Zones (Camp 1: Lv.2–5, Camp 2: Lv.6–9) -> เหมาะสำหรับผู้เล่น Lv.1–10
+    //   - Tier 2 Mid-Field Frontier (Camp 3: Lv.12–16, Camp 4: Lv.17–21) -> เหมาะสำหรับผู้เล่น Lv.11–22 (HP ~2.5x–3.0x ของ Starter)
+    //   - Tier 3 Far North Citadel Boss Arena (Lv.25) -> ความท้าทาย Endgame สำหรับผู้เล่น Lv.20–30
+    [Min(1)] [SerializeField] private int starterCampMinLevel = 2;
+    [Min(1)] [SerializeField] private int starterCampMaxLevel = 9;
+    [Min(11)] [SerializeField] private int midFieldCampMinLevel = 12;
+    [Min(11)] [SerializeField] private int midFieldCampMaxLevel = 21;
+    [Range(20, 30)] [SerializeField] private int bossArenaZoneLevel = 25;
 
     [Header("Comfort Safe Zone (South-Central Hub - Non-Combat & Reconnect Anchor)")]
     [SerializeField] private Vector3 safeZoneCenter = new Vector3(0f, 0f, -60f);
@@ -120,7 +120,8 @@ public class SandboxWorldSpawner : MonoBehaviour
     public float CampRespawnDelaySeconds => campRespawnDelaySeconds;
     public float BossRespawnDelaySeconds => bossRespawnDelaySeconds;
     public float IndividualEnemyPatrolRadius => individualEnemyPatrolRadius;
-    public int BossArenaZoneLevel => Mathf.Max(5, bossArenaZoneLevel);
+    // เลเวลบอสประจำลาน Far North Citadel (บังคับอยู่ในช่วง Endgame Lv.20–30 เสมอ)
+    public int BossArenaZoneLevel => Mathf.Clamp(bossArenaZoneLevel, 20, PlayerCombat.MaxLevel);
 
     public EnemyNPC ActiveBoss => _activeBoss;
     public LootChest ActiveBossChest => _activeBossChest;
@@ -175,26 +176,31 @@ public class SandboxWorldSpawner : MonoBehaviour
     }
 
     /// <summary>
-    /// กำหนดผังโซนบนแผนที่ขยาย 220x220 เมตร (Progression จากทิศใต้ขึ้นทิศเหนืออย่างเป็นระบบ):
+    /// กำหนดผังโซน 3 ระดับความยากบนแผนที่ขยาย 220x220 เมตร (Progression สำหรับผู้เล่น Lv.1–30):
     ///   - South Hub: Comfort Zone (Safe Haven) ที่ (0, 0, -60) รัศมี 12m
-    ///   - Near-Field Outer Ring (Starter Zones, Lv.1–2): Camp 1 (-46, -22) &amp; Camp 2 (46, -22) — ห่างกัน 14m, รัศมีส่วนตัว 4.2m
-    ///   - Mid-Field Frontier (Intermediate Zones, Lv.3–5): Camp 3 (-58, 28) &amp; Camp 4 (58, 28) — ห่างกัน 16m, รัศมีส่วนตัว 4.8m
-    ///   - Far North Citadel (Boss Arena, Lv.5+): Sovereign Golem ที่ (0, 0, 74) รัศมี 24m
+    ///   - Tier 1 Starter Zones (Camps 1 &amp; 2, Lv.2–9): สำหรับผู้เล่น Lv.1–10 (Camp 1: Lv.2–5, Camp 2: Lv.6–9)
+    ///   - Tier 2 Mid-Field Frontier (Camps 3 &amp; 4, Lv.12–21): สำหรับผู้เล่น Lv.11–22 (Camp 3: Lv.12–16, Camp 4: Lv.17–21)
+    ///   - Tier 3 Far North Citadel Boss Arena (Lv.25): Sovereign Golem ที่ (0, 0, 74) รัศมี 24m สำหรับ Endgame Lv.20–30
     /// </summary>
     private void InitializeCampDefinitions()
     {
         _camps.Clear();
 
-        int sMin = Mathf.Max(1, starterCampMinLevel);
-        int sMax = Mathf.Max(sMin, starterCampMaxLevel);
-        int mMin = Mathf.Max(sMax, midFieldCampMinLevel);
-        int mMax = Mathf.Max(mMin, midFieldCampMaxLevel);
-        int mSplit = Mathf.Clamp(mMin + 1, mMin, mMax);
+        // ป้องกันกรณี Scene เดิมมีค่าเลเวลเก่า (1..5) ค้างอยู่ ให้ยกระดับเข้าสู่เส้นโค้ง 3-Tier Lv.1–30 อัตโนมัติ
+        int sMin = Mathf.Clamp(starterCampMinLevel < 2 ? 2 : starterCampMinLevel, 1, 10);
+        int sMax = Mathf.Clamp(starterCampMaxLevel < 5 ? 9 : starterCampMaxLevel, sMin, 10);
+        int sMid = Mathf.Clamp((sMin + sMax) / 2, sMin, sMax);
+        int sCamp2Min = Mathf.Min(sMax, sMid + 1);
+
+        int mMin = Mathf.Clamp(midFieldCampMinLevel < 11 ? 12 : midFieldCampMinLevel, 11, 22);
+        int mMax = Mathf.Clamp(midFieldCampMaxLevel < 16 ? 21 : midFieldCampMaxLevel, mMin, 22);
+        int mMid = Mathf.Clamp((mMin + mMax) / 2, mMin, mMax);
+        int mCamp4Min = Mathf.Min(mMax, mMid + 1);
 
         float starterZoneR = Mathf.Clamp(individualEnemyPatrolRadius, 2.0f, 6.0f);
         float midZoneR = Mathf.Clamp(midFieldEnemyPatrolRadius, 2.5f, 6.5f);
 
-        // Camp 1: West Starter Outskirts (Near-Field ซ้าย, center -46, 0, -22 — 4 โซนส่วนตัวห่างกัน 14m)
+        // Camp 1: West Starter Outskirts (Tier 1 ซ้าย: Lv.2–5, center -46, 0, -22 — 4 โซนส่วนตัวห่างกัน 14m)
         Vector3[] c1Points = new[]
         {
             new Vector3(-53f, 1.2f, -29f),
@@ -207,10 +213,10 @@ public class SandboxWorldSpawner : MonoBehaviour
             for (int i = 0; i < ExpectedCampSize; i++)
                 c1Points[i] = enemyPoints[i].position;
         }
-        _camps.Add(BuildCampState(1, "Camp 1 (West Starter)", "Starter Zone", sMin, sMax, starterZoneR, 16f, c1Points));
+        _camps.Add(BuildCampState(1, "Camp 1 (West Starter)", "Starter Zone", sMin, sMid, starterZoneR, 16f, c1Points));
 
-        // Camp 2: East Starter Outskirts (Near-Field ขวา, center 46, 0, -22 — 4 โซนส่วนตัวห่างกัน 14m)
-        _camps.Add(BuildCampState(2, "Camp 2 (East Starter)", "Starter Zone", sMin, sMax, starterZoneR, 16f, new[]
+        // Camp 2: East Starter Outskirts (Tier 1 ขวา: Lv.6–9, center 46, 0, -22 — 4 โซนส่วนตัวห่างกัน 14m)
+        _camps.Add(BuildCampState(2, "Camp 2 (East Starter)", "Starter Zone", sCamp2Min, sMax, starterZoneR, 16f, new[]
         {
             new Vector3(39f, 1.2f, -29f),
             new Vector3(53f, 1.2f, -29f),
@@ -218,8 +224,8 @@ public class SandboxWorldSpawner : MonoBehaviour
             new Vector3(53f, 1.2f, -15f)
         }));
 
-        // Camp 3: West Mid-Field Frontier (Intermediate ซ้าย, center -58, 0, 28 — 4 โซนส่วนตัวห่างกัน 16m)
-        _camps.Add(BuildCampState(3, "Camp 3 (West Frontier)", "Mid-Field", mMin, mSplit, midZoneR, 18.5f, new[]
+        // Camp 3: West Mid-Field Frontier (Tier 2 ซ้าย: Lv.12–16, center -58, 0, 28 — 4 โซนส่วนตัวห่างกัน 16m)
+        _camps.Add(BuildCampState(3, "Camp 3 (West Frontier)", "Mid-Field", mMin, mMid, midZoneR, 18.5f, new[]
         {
             new Vector3(-66f, 1.2f, 20f),
             new Vector3(-50f, 1.2f, 20f),
@@ -227,8 +233,8 @@ public class SandboxWorldSpawner : MonoBehaviour
             new Vector3(-50f, 1.2f, 36f)
         }));
 
-        // Camp 4: East Mid-Field Frontier (Intermediate ขวา, center 58, 0, 28 — 4 โซนส่วนตัวห่างกัน 16m)
-        _camps.Add(BuildCampState(4, "Camp 4 (East Frontier)", "Mid-Field", Mathf.Clamp(mMax - 1, mMin, mMax), mMax, midZoneR, 18.5f, new[]
+        // Camp 4: East Mid-Field Frontier (Tier 2 ขวา: Lv.17–21, center 58, 0, 28 — 4 โซนส่วนตัวห่างกัน 16m)
+        _camps.Add(BuildCampState(4, "Camp 4 (East Frontier)", "Mid-Field", mCamp4Min, mMax, midZoneR, 18.5f, new[]
         {
             new Vector3(50f, 1.2f, 20f),
             new Vector3(66f, 1.2f, 20f),

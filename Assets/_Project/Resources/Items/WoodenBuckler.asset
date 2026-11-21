@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: wooden_buckler
   displayName: Ironclad Buckler
-  description: Sturdy buckler shield. +20 Max HP, +10 Max Stamina, +2 Defense.
+  description: Sturdy iron-rimmed buckler shield. +5 Max HP, +3 Max Stamina, +1 Defense.
+  obtainAndUseGuide: Obtained from Starter Camps. Equip into the [SHIELD] slot for
+    pure defensive survivability (+0 ATK).
   type: 5
   tier: 0
+  requiredClass: 0
+  weaponArchetype: 0
   icon: {fileID: 0}
   worldColor: {r: 0.78, g: 0.82, b: 0.86, a: 1}
   stackable: 0
@@ -26,9 +30,9 @@ MonoBehaviour:
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0
-  maxHealthBonus: 20
-  maxStaminaBonus: 10
-  defenseBonus: 2
+  maxHealthBonus: 5
+  maxStaminaBonus: 3
+  defenseBonus: 1
   moveSpeedBonus: 0
   critChanceBonus: 0
   droppable: 1
