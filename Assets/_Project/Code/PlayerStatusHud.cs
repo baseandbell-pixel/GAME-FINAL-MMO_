@@ -377,7 +377,7 @@ public class PlayerStatusHud : MonoBehaviour
             }
             else if (_combat.IsBlocking)
             {
-                _pointsNoticeText.text = "GUARD ACTIVE (75% Damage Reduction)";
+                _pointsNoticeText.text = "GUARD ACTIVE [F] (75% Damage Reduction / Parry)";
                 _pointsNoticeText.color = new Color(0.32f, 0.88f, 1f, 1f);
             }
             else if (_combat.ActiveBuffDamageBonus > 0)
@@ -387,12 +387,12 @@ public class PlayerStatusHud : MonoBehaviour
             }
             else if (!_combat.IsWeaponDrawn)
             {
-                _pointsNoticeText.text = "Exploration Mode • Press [1] to Draw GreatSword  |  [2-7] Hotbar";
+                _pointsNoticeText.text = "Explore • [Space] Jump | [1] Draw Sword | [M] Map";
                 _pointsNoticeText.color = new Color(0.62f, 0.88f, 1f, 0.98f);
             }
             else
             {
-                _pointsNoticeText.text = "[1] Sheathe  |  [2-7] Hotbar  |  [I] Gear  |  [M] Map  |  [J] Guide";
+                _pointsNoticeText.text = "[Space] Jump | [F] Block | [MMB] Lock | [1] Sheathe";
                 _pointsNoticeText.color = new Color(0.76f, 0.80f, 0.88f, 0.95f);
             }
         }

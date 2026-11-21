@@ -51,7 +51,7 @@ public class LootEntry
 ///      - ผู้ทำดาเมจสูงสุด (Top DPS) ได้โบนัสโอกาสออกไอเทม Epic / Legendary สูงสุด ส่วนผู้ทำดาเมจรองลงมายังมีโอกาสได้ลุ้นจริงตามสัดส่วน
 /// </summary>
 [RequireComponent(typeof(Collider))]
-public class EnemyNPC : NetworkBehaviour, ILockTarget
+public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 {
     // รายการมอนสเตอร์และบอสทั้งหมดที่เกิดอยู่ในฉาก
     public static readonly List<EnemyNPC> All = new List<EnemyNPC>();
@@ -138,13 +138,25 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     [Networked]
     public int NetworkMaxHealth { get; set; } = 120;
 
-    // จำนวนผู้เล่นสูงสุดที่เคยเข้ามาในลานบอสในรอบการต่อสู้ปัจจุบัน (1 = 1x, 2 = 2x, 3 = 3x — ห้ามลดลงเมื่อมีคนเดินออก!)
+    // จำนวนผู้เล่นสูงสุดที่เคยทำดาเมจใส่บอสในรอบการต่อสู้ปัจจุบัน (1 = 1x, 2 = 2x, 3 = 3x, 4 = 4x — สเกลเมื่อตีโดนเท่านั้น และห้ามลดกลางคัน)
     [Networked, OnChangedRender(nameof(OnCoopScaleChanged))]
     public int CoopPeakPlayerCount { get; set; } = 1;
 
-    // จำนวนผู้เล่นที่ยังมีชีวิตและยืนอยู่ในลานบอส ณ ปัจจุบัน (ใช้แสดงข้อมูลและตรวจรีเซ็ตเมื่อลานว่าง 0 คน)
+    // จำนวนผู้เล่นที่ยังมีชีวิตและยืนอยู่ในลานบอส ณ ปัจจุบัน (ใช้แสดงผลเท่านั้น ไม่ใช้ทริกเกอร์สเกลพลังบอส)
     [Networked]
     public int ActivePlayersInBossZone { get; set; } = 0;
+
+    // จำนวนผู้เล่นไม่ซ้ำหน้า (Unique Attackers) ที่ตีโดนบอสจริงในรอบการต่อสู้ปัจจุบัน
+    [Networked]
+    public int UniqueBossAttackerCount { get; set; } = 0;
+
+    // เวลานับถอยหลัง 10 วินาทีหลังผู้เล่นทั้งหมดตาย/ออกจากการต่อสู้ ก่อนที่บอสจะเริ่มฟื้นฟูเลือดทีละ 25% (< 0 หมายถึงไม่ได้นับถอยหลัง)
+    [Networked]
+    public float BossResetCooldownRemaining { get; set; } = -1f;
+
+    // สถานะว่าบอสกำลังค่อยๆ ฟื้นฟูเลือดทีละ 25% ของ MaxHP ทุก 3 วินาทีอยู่หรือไม่
+    [Networked]
+    public NetworkBool IsBossRegenerating { get; set; } = false;
 
     [Networked, OnChangedRender(nameof(OnStateChanged))]
     public NpcState State { get; set; }
@@ -183,8 +195,16 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     public int ScaledMaxHealth => (IsSpawned && NetworkMaxHealth > 0) ? NetworkMaxHealth : MaxHealth;
     public int ScaledAttackDamage => AttackDamage;
     public int ScaledDefense => Defense;
-    // ค่าตัวคูณ Co-op ปัจจุบันของบอส (1.0x สำหรับ 1 คน, 2.0x สำหรับ 2 คน, +1.0x ต่อผู้เล่นที่เข้ามาเพิ่ม)
+    // ค่าตัวคูณ Co-op ปัจจุบันของบอส (1.0x สำหรับ 1 คนที่ตีโดน, +1.0x ต่อผู้เล่นคนใหม่ที่ตีโดนเพิ่ม)
     public float CoopStatMultiplier => IsBoss ? Mathf.Max(1f, CoopPeakPlayerCount) : 1f;
+    // จำนวนผู้เล่นไม่ซ้ำหน้าที่ตีโดนบอสจริงในรอบการต่อสู้ปัจจุบัน
+    public int UniqueAttackerCount => IsSpawned ? Mathf.Max(_uniqueDamageDealers.Count, UniqueBossAttackerCount) : _uniqueDamageDealers.Count;
+    // จำนวนผู้เล่นที่ร่วมตีบอสและยังมีชีวิตสู้ต่ออยู่ในลานบอส ณ ปัจจุบัน
+    public int ActiveBossParticipantCount => IsBoss ? CountActiveBossParticipants() : 0;
+    // ค่าคงที่เวลาคูลดาวน์และอัตราฟื้นฟูเลือดบอสหลังผู้เล่นทั้งหมดตายหรือออกจากการต่อสู้
+    public const float BossResetCooldownDuration = 10.0f;
+    public const float BossRegenIntervalSeconds = 3.0f;
+    public const float BossRegenFractionPerTick = 0.25f;
     // ค่าพลังพื้นฐานที่ 1.0x ของบอสก่อนคูณ Co-op (สำหรับตรวจสอบและรีเซ็ตหลังจบการต่อสู้)
     public int BaseMaxHealth => _baseMaxHealth > 0 ? _baseMaxHealth : MaxHealth;
     public int BaseAttackDamage => _baseAttackDamage > 0 ? _baseAttackDamage : AttackDamage;
@@ -278,11 +298,28 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private int _baseMaxHealth;
     private int _baseAttackDamage;
     private int _baseDefense;
-    // เวลาเริ่มที่ลานบอสว่างไม่มีผู้เล่นเลย (0 คน) เพื่อใช้รีเซ็ตสเกลกลับเป็น 1.0x หลังหมดช่วงต่อสู้
-    private float _bossEmptyZoneSince = -1f;
-    private const float BossOutOfCombatResetSeconds = 4.0f;
+    // ชุดเก็บรายชื่อผู้เล่นไม่ซ้ำหน้าที่ตีโดนบอสจริงในรอบนี้ (ใช้สเกลพลังบอสแบบ On-Hit และตรวจว่ายังมีผู้ร่วมสู้รอดชีวิตอยู่หรือไม่)
+    private readonly HashSet<PlayerRef> _uniqueDamageDealers = new HashSet<PlayerRef>();
+    // ชุดผู้เล่นจำลองที่ยังมีชีวิตอยู่ในลานบอสสำหรับใช้ทดสอบ Co-op ใน Play Mode
+    private readonly HashSet<PlayerRef> _simulatedAliveParticipants = new HashSet<PlayerRef>();
+    // สถานะนับถอยหลัง 10 วินาที และตัวจับเวลาฟื้นเลือดทีละ 25% ทุก 3 วินาที
+    private bool _bossResetPending;
+    private float _bossRegenTickTimer;
     // ตัวแปรเสริมสำหรับจำลองจำนวนผู้เล่นเพิ่มเติมในลานบอสระหว่างการทดสอบอัตโนมัติ (ค่าปกติ = 0)
     private int _simulatedExtraBossPlayers;
+    // ตัวหน่วงเวลาป้องกันการส่ง RequestStateAuthority ซ้ำถี่เกินไปเมื่อ Host เดิมหลุดออกจากห้อง
+    private float _nextAuthorityRecoveryAt;
+    // จำนวนครั้งที่มอนสเตอร์ตัวนี้โอนย้าย StateAuthority สำเร็จ (ใช้ตรวจสอบในการทดสอบ Host-Leave)
+    public int AuthorityTakeoverCount { get; private set; }
+    // เส้นขอบเขตวงกลมบนพื้นแสดงอาณาเขตโซนลาดตระเวนส่วนตัวของมอนสเตอร์ตัวนี้ (ใช้ URP Unlit LineRenderer)
+    private LineRenderer _personalZoneRing;
+    private Vector3 _lastRingAnchor;
+    private float _lastRingRadius = -1f;
+    // หลอดเลือดแบบ World-Space UI เหนือศีรษะสำหรับมอนสเตอร์ทั่วไป
+    private EnemyWorldHealthBar _worldHealthBar;
+    // คุณสมบัติตรวจสอบจากภายนอกว่าเส้นวงกลมโซนส่วนตัวและ World-Space HP Bar ถูกสร้างแล้ว
+    public LineRenderer PersonalZoneRing => _personalZoneRing;
+    public EnemyWorldHealthBar WorldHealthBar => _worldHealthBar;
     private int _bossPatternCycle;
     private int _avoidSign;
     private float _avoidSignUntil;
@@ -368,7 +405,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             if (ScaledLevel < 1) ScaledLevel = ResolveFallbackZoneLevel();
             CoopPeakPlayerCount = 1;
             ActivePlayersInBossZone = 0;
-            _bossEmptyZoneSince = -1f;
+            UniqueBossAttackerCount = 0;
+            BossResetCooldownRemaining = -1f;
+            IsBossRegenerating = false;
+            _bossResetPending = false;
+            _bossRegenTickTimer = 0f;
+            _uniqueDamageDealers.Clear();
+            _simulatedAliveParticipants.Clear();
             _simulatedExtraBossPlayers = 0;
             ApplyZoneLevel(ScaledLevel);
             NetworkMaxHealth = MaxHealth;
@@ -399,6 +442,64 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
 
         RefreshVisuals();
+
+        // สร้างหลอดเลือด World-Space UI และเส้นขอบเขตวงกลมบนพื้นสำหรับมอนสเตอร์ทั่วไป (บอสใช้ BossHudUI + BossArenaBoundaryRing)
+        if (!IsBoss)
+        {
+            _worldHealthBar = EnemyWorldHealthBar.AttachTo(this);
+            EnsurePersonalZoneGroundRing();
+        }
+    }
+
+    /// <summary>
+    /// สร้างหรืออัปเดตเส้นวงกลมขอบเขตบนพื้น (LineRenderer + URP Unlit Material) รอบจุดศูนย์กลางโซนลาดตระเวนส่วนตัวของมอนสเตอร์
+    /// </summary>
+    private void EnsurePersonalZoneGroundRing()
+    {
+        if (IsBoss || !IsSpawned) return;
+        Vector3 anchor = PersonalZoneAnchor;
+        float radius = Mathf.Max(1.0f, PatrolRadius);
+
+        if (_personalZoneRing == null)
+        {
+            Color ringColor = ScaledLevel <= 2
+                ? new Color(0.98f, 0.56f, 0.18f, 0.58f)   // สีส้มอำพันสำหรับโซน Starter (Lv.1–2)
+                : new Color(0.95f, 0.24f, 0.22f, 0.65f);  // สีแดงส้มสำหรับโซน Mid-Field (Lv.3–5)
+
+            Transform ringParent = SandboxWorldSpawner.Instance != null ? SandboxWorldSpawner.Instance.transform : null;
+            _personalZoneRing = UrpMaterialHelper.CreateGroundCircleRing(
+                ringParent,
+                $"EnemyZoneRing_C{CampId}_Z{PersonalZoneIndex}",
+                anchor,
+                radius,
+                lineWidth: 0.13f,
+                color: ringColor,
+                segments: 56,
+                yHeight: 0.06f);
+            _lastRingAnchor = anchor;
+            _lastRingRadius = radius;
+        }
+        else if ((anchor - _lastRingAnchor).sqrMagnitude > 0.04f || Mathf.Abs(radius - _lastRingRadius) > 0.05f)
+        {
+            UrpMaterialHelper.UpdateGroundCircleRing(_personalZoneRing, anchor, radius, segments: 56, yHeight: 0.06f);
+            _lastRingAnchor = anchor;
+            _lastRingRadius = radius;
+        }
+
+        if (_personalZoneRing != null)
+            _personalZoneRing.gameObject.SetActive(IsAlive);
+    }
+
+    /// <summary>
+    /// ลบเส้นขอบเขตวงกลมบนพื้นเมื่อมอนสเตอร์ตายหรือถูก Despawn
+    /// </summary>
+    private void DestroyPersonalZoneGroundRing()
+    {
+        if (_personalZoneRing != null)
+        {
+            Destroy(_personalZoneRing.gameObject);
+            _personalZoneRing = null;
+        }
     }
 
     /// <summary>
@@ -460,11 +561,12 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     /// <summary>
     /// กำหนดค่าพลังของมอนสเตอร์และบอสตามเลเวลคงที่ประจำพื้นที่ (Zone-Based Level)
+    /// พารามิเตอร์ preserveCurrentHealth ใช้เมื่อโอนย้าย StateAuthority เพื่อไม่ให้เลือดเดิมถูกรีเซ็ตกลับเต็ม 100%
     /// </summary>
-    public void ApplyZoneLevel(int zoneLevel)
+    public void ApplyZoneLevel(int zoneLevel, bool preserveCurrentHealth = false)
     {
         zoneLevel = Mathf.Max(1, zoneLevel);
-        if (_scalingApplied && ScaledLevel == zoneLevel) return;
+        if (_scalingApplied && ScaledLevel == zoneLevel && !preserveCurrentHealth) return;
         _scalingApplied = true;
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
             ScaledLevel = zoneLevel;
@@ -495,7 +597,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
             NetworkMaxHealth = MaxHealth;
 
-        if (IsSpawned && State != NpcState.Dead && CurrentHealth > 0)
+        if (!preserveCurrentHealth && IsSpawned && State != NpcState.Dead && CurrentHealth > 0)
             CurrentHealth = MaxHealth;
     }
 
@@ -526,63 +628,280 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     }
 
     /// <summary>
-    /// ตรวจสอบจำนวนผู้เล่นในลานบอสแบบเรียลไทม์ฝั่ง State Authority:
-    ///   - เพิ่มพลังชีวิต (MaxHP/CurrentHP ตามสัดส่วน %), ดาเมจ และพลังป้องกัน +1.0x (+100%) ต่อผู้เล่นที่เข้ามาเพิ่มแต่ละคน
-    ///   - กฎ Anti-Cheese: หากมีผู้เล่นเดินออกระหว่างสู้ จะไม่ลด MaxHP หรือ CurrentHP ลงเด็ดขาด (ล็อกไว้ที่ Peak สูงสุดของรอบนั้น)
-    ///   - รีเซ็ตกลับเป็น 1.0x เฉพาะเมื่อบอสตาย/เกิดใหม่ หรือเมื่อผู้เล่นทั้งหมด (0 คน) ออกจากลานและจบการรีเซ็ตนอกการต่อสู้แล้วเท่านั้น
+    /// ลงทะเบียนผู้เล่นที่โจมตีโดนบอสจริง (On-Hit Scaling):
+    ///   - สเกลพลังบอสเฉพาะเมื่อมีผู้เล่นคนใหม่ตีโดนบอสจริง (1 คน = 1x, 2 คน = 2x, 3 คน = 3x, 4 คน = 4x)
+    ///     ไม่สเกลจากการแค่เดินเข้ามาในลานบอส
+    ///   - ยกเลิกการนับถอยหลัง 10 วินาทีและการฟื้นฟูเลือดบอสทันทีเมื่อถูกตีซ้ำระหว่างพักฟื้น
     /// </summary>
-    private void TickBossCoopZoneScaling()
+    private void RegisterBossAttackerOnHit(PlayerRef attackerRef)
     {
-        if (!IsBoss || !IsAlive || !Object.HasStateAuthority) return;
+        if (!IsBoss || !Object.HasStateAuthority || attackerRef == PlayerRef.None) return;
 
-        int activeCount = CountLivingPlayersInBossZone();
-        ActivePlayersInBossZone = activeCount;
-
-        if (activeCount > 0)
+        // หากบอสกำลังนับถอยหลัง 10 วินาที หรือกำลังค่อยๆ ฟื้นเลือดทีละ 25% ให้หยุดทันทีและคงเลือดปัจจุบันไว้
+        if (_bossResetPending || BossResetCooldownRemaining >= 0f || IsBossRegenerating)
         {
-            _bossEmptyZoneSince = -1f;
-            int desiredPeak = Mathf.Max(1, activeCount);
-            if (desiredPeak > CoopPeakPlayerCount)
-            {
-                ScaleBossUpToMultiplier(desiredPeak, activeCount);
-            }
-            return;
+            CancelBossResetAndRegen($"interrupted by hit from {attackerRef}");
         }
 
-        // กรณีไม่มีผู้เล่นอยู่ในลานเลย (activeCount == 0):
-        // หากบอสยังอยู่นอกการต่อสู้ (Idle/Patrol) ครบระยะเวลา BossOutOfCombatResetSeconds และมีการสเกลค้างอยู่หรือเลือดลด -> รีเซ็ตกลับ 1.0x
-        if (State == NpcState.Idle || State == NpcState.Patrol)
+        bool isNewAttacker = _uniqueDamageDealers.Add(attackerRef);
+        UniqueBossAttackerCount = _uniqueDamageDealers.Count;
+
+        if (isNewAttacker)
         {
-            bool needsReset = CoopPeakPlayerCount > 1 || CurrentHealth < MaxHealth || _damageDealtMap.Count > 0;
-            if (needsReset)
+            int desiredMult = Mathf.Max(1, _uniqueDamageDealers.Count);
+            if (desiredMult > CoopPeakPlayerCount)
             {
-                if (_bossEmptyZoneSince < 0f)
-                {
-                    _bossEmptyZoneSince = Time.time;
-                }
-                else if (Time.time - _bossEmptyZoneSince >= BossOutOfCombatResetSeconds)
-                {
-                    ResetBossCoopScalingToBaseline("all players left Boss Arena (out-of-combat reset)");
-                }
-            }
-            else
-            {
-                _bossEmptyZoneSince = -1f;
-            }
-        }
-        else if (State == NpcState.Chasing || State == NpcState.Attacking)
-        {
-            // หากบอสกำลังไล่ล่าแต่ลานบอสว่างเปล่าและเป้าหมายหายไปแล้ว ให้กลับจุดเกิดเพื่อรีเซ็ต
-            PlayerCombat target = ResolveTarget();
-            if (target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target))
-            {
-                BeginReturn("all players left Boss Arena");
+                ScaleBossUpToMultiplier(desiredMult, _uniqueDamageDealers.Count);
             }
         }
     }
 
     /// <summary>
-    /// นับจำนวนผู้เล่นที่ยังมีชีวิตและยืนอยู่ภายในรัศมีลานบอส (รวมจำนวนผู้เล่นจำลองสำหรับการทดสอบอัตโนมัติถ้ามี)
+    /// ยกเลิกสถานะคูลดาวน์ 10 วินาทีและการฟื้นฟูเลือดแบบค่อยเป็นค่อยไปของบอสทันทีโดยไม่รีเซ็ตเลือดหรือตัวคูณ Co-op
+    /// </summary>
+    private void CancelBossResetAndRegen(string reason)
+    {
+        bool wasActive = _bossResetPending || BossResetCooldownRemaining >= 0f || IsBossRegenerating;
+        _bossResetPending = false;
+        _bossRegenTickTimer = 0f;
+        if (Object != null && Object.IsValid && Object.HasStateAuthority)
+        {
+            BossResetCooldownRemaining = -1f;
+            IsBossRegenerating = false;
+        }
+        if (wasActive)
+        {
+            Debug.Log($"[EnemyNPC] BOSS RESET/REGEN CANCELLED ({reason}) -> Combat resumed at HP={CurrentHealth}/{MaxHealth} ({CoopPeakPlayerCount}x).");
+        }
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นที่ระบุยังมีชีวิตและอยู่ในระยะการต่อสู้ของลานบอสหรือไม่
+    /// </summary>
+    private bool IsPlayerActiveBossCombatant(PlayerRef pRef, out PlayerCombat resolvedPlayer)
+    {
+        resolvedPlayer = null;
+        if (pRef == PlayerRef.None) return false;
+
+        // รองรับผู้เล่นจำลองที่ยังมีชีวิตสำหรับการทดสอบ Co-op ใน Play Mode
+        if (_simulatedAliveParticipants.Contains(pRef))
+            return true;
+
+        PlayerCombat p = FindPlayerBySource(pRef);
+        if (p == null || !p.IsSpawned || p.IsDead) return false;
+        if (SafeZone.IsPlayerInAnySafeZone(p)) return false;
+
+        Vector3 arenaCenter = SandboxWorldSpawner.Instance != null
+            ? SandboxWorldSpawner.Instance.BossArenaCenter
+            : HomePosition;
+        float arenaRadius = SandboxWorldSpawner.Instance != null
+            ? SandboxWorldSpawner.Instance.BossArenaProximityRadius
+            : 18f;
+        float combatLimit = Mathf.Max(leashRadius, arenaRadius + 4.0f);
+
+        if (PlanarDistance(p.transform.position, arenaCenter) > combatLimit)
+            return false;
+
+        resolvedPlayer = p;
+        return true;
+    }
+
+    /// <summary>
+    /// นับจำนวนผู้เล่นที่เคยทำดาเมจใส่บอสและยังคงมีชีวิตสู้ต่ออยู่ในลานบอส
+    /// </summary>
+    public int CountActiveBossParticipants()
+    {
+        if (!IsBoss) return 0;
+        int count = 0;
+        foreach (PlayerRef pRef in _uniqueDamageDealers)
+        {
+            if (IsPlayerActiveBossCombatant(pRef, out _))
+                count++;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// สลับเป้าหมายบอสไปยังผู้เล่นร่วมสู้คนถัดไปที่ยังมีชีวิตอยู่ในลานบอส (แก้บัค Player 1 ตายแล้วบอสรีเซ็ตเลือดทั้งที่ Player 2 ยังสู้ต่ออยู่)
+    /// คืนค่า true หากยังมีผู้ร่วมสู้เหลืออยู่ (ไม่ให้บอสหลุดจากโหมดต่อสู้หรือรีเซ็ตเลือด)
+    /// </summary>
+    private bool TrySwitchBossToNextLivingParticipant(out PlayerCombat nextTarget)
+    {
+        nextTarget = null;
+        if (!IsBoss) return false;
+
+        float bestScore = float.NegativeInfinity;
+        bool anySimulatedAlive = false;
+
+        foreach (PlayerRef pRef in _uniqueDamageDealers)
+        {
+            if (!IsPlayerActiveBossCombatant(pRef, out PlayerCombat candidate)) continue;
+            if (candidate == null)
+            {
+                anySimulatedAlive = true;
+                continue;
+            }
+
+            // ให้ความสำคัญกับผู้ร่วมสู้ที่ทำดาเมจสูงและอยู่ใกล้ตัวบอส
+            float dealt = _damageDealtMap.TryGetValue(pRef, out float d) ? d : 0f;
+            float dist = PlanarDistance(transform.position, candidate.transform.position);
+            float score = dealt - dist * 8f;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                nextTarget = candidate;
+            }
+        }
+
+        if (nextTarget != null)
+        {
+            SetTarget(nextTarget);
+            return true;
+        }
+
+        if (anySimulatedAlive)
+        {
+            // ยังมีผู้เล่นจำลองในชุดผู้ร่วมสู้ที่ยังมีชีวิตอยู่ -> คงสถานะต่อสู้ไว้ ห้ามรีเซ็ตเลือดบอส
+            TargetId = default;
+            return true;
+        }
+
+        // กรณียังไม่มีผู้ทำดาเมจเลย (บอสไล่ตามจากการมองเห็นก่อนโดนตี) ให้ตรวจผู้เล่นที่ยังมีชีวิตในลานบอส
+        if (_uniqueDamageDealers.Count == 0)
+        {
+            Vector3 arenaCenter = SandboxWorldSpawner.Instance != null
+                ? SandboxWorldSpawner.Instance.BossArenaCenter
+                : HomePosition;
+            float arenaRadius = SandboxWorldSpawner.Instance != null
+                ? SandboxWorldSpawner.Instance.BossArenaProximityRadius
+                : 18f;
+            float nearestDist = float.MaxValue;
+            for (int i = 0; i < PlayerCombat.All.Count; i++)
+            {
+                var p = PlayerCombat.All[i];
+                if (p == null || !p.IsSpawned || p.IsDead || SafeZone.IsPlayerInAnySafeZone(p)) continue;
+                if (PlanarDistance(p.transform.position, arenaCenter) > arenaRadius) continue;
+                float d = PlanarDistance(transform.position, p.transform.position);
+                if (d < nearestDist)
+                {
+                    nearestDist = d;
+                    nextTarget = p;
+                }
+            }
+            if (nextTarget != null)
+            {
+                SetTarget(nextTarget);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// ประมวลผลระบบ Co-op และการฟื้นฟูเลือดแบบหน่วงเวลาของบอสฝั่ง State Authority ทุก Tick:
+    ///   - ไม่สเกลพลังบอสจากการแค่เดินเข้าโซน (สเกลเฉพาะตอนโดนตีผ่าน RegisterBossAttackerOnHit เท่านั้น)
+    ///   - หากยังมีผู้ร่วมตีบอสรอดชีวิตอย่างน้อย 1 คน จะไม่รีเซ็ตและไม่ฟื้นฟูเลือดเด็ดขาด
+    ///   - หากผู้ร่วมสู้ทุกคนตายหรือออกจากลานครบ (0 คน):
+    ///       1. รอคูลดาวน์ 10.0 วินาที (คงเลือดปัจจุบันไว้ ไม่เด้งเต็มทันที)
+    ///       2. หลังครบ 10 วินาที ค่อยๆ ฟื้นฟูเลือดทีละ 1/4 (25% ของ MaxHP) ทุก 3.0 วินาที
+    ///       3. หากถูกตีระหว่างรอ 10 วิหรือระหว่างฟื้นเลือด จะยกเลิกการฟื้นทันทีและสู้ต่อจากเลือดปัจจุบัน
+    ///       4. เมื่อฟื้นจนครบ 100% โดยไม่ถูกรบกวน จึงรีเซ็ตสเกลกลับ 1.0x และล้างรายชื่อผู้โจมตี
+    /// </summary>
+    private void TickBossCombatAndRegen(float dt)
+    {
+        if (!IsBoss || !IsAlive || !Object.HasStateAuthority) return;
+
+        // อัปเดตจำนวนผู้เล่นในลานเพื่อแสดงผล (ไม่ใช้ทริกเกอร์สเกลพลังบอสแล้ว)
+        ActivePlayersInBossZone = CountLivingPlayersInBossZone();
+
+        int activeParticipants = CountActiveBossParticipants();
+        if (activeParticipants > 0)
+        {
+            if (_bossResetPending || BossResetCooldownRemaining >= 0f || IsBossRegenerating)
+            {
+                CancelBossResetAndRegen("active combat participant still alive");
+            }
+            return;
+        }
+
+        // ไม่มีผู้ร่วมตีบอสที่ยังมีชีวิตเหลืออยู่ (0 active participants)
+        bool needsRecovery = CurrentHealth < MaxHealth || CoopPeakPlayerCount > 1 || _uniqueDamageDealers.Count > 0 || _damageDealtMap.Count > 0;
+        if (!needsRecovery)
+        {
+            _bossResetPending = false;
+            _bossRegenTickTimer = 0f;
+            BossResetCooldownRemaining = -1f;
+            IsBossRegenerating = false;
+            return;
+        }
+
+        // หากบอสยังค้างอยู่ในสถานะไล่ล่าหรือโจมตีแต่ไม่มีผู้ร่วมสู้เหลือแล้ว ให้สั่งเดินกลับจุดเกิด (โดยไม่รีเซ็ตเลือดทันที!)
+        if (State == NpcState.Chasing || State == NpcState.Attacking)
+        {
+            PlayerCombat currentTarget = ResolveTarget();
+            bool hasNonParticipantInRange = _uniqueDamageDealers.Count == 0 &&
+                                            currentTarget != null && !currentTarget.IsDead &&
+                                            !SafeZone.IsPlayerInAnySafeZone(currentTarget);
+            if (!hasNonParticipantInRange)
+            {
+                BeginReturn("all boss participants dead or disengaged");
+            }
+        }
+
+        // เริ่มนับคูลดาวน์ 10 วินาทีหลังผู้เล่นทั้งหมดตาย/ออกจากการต่อสู้
+        if (!_bossResetPending)
+        {
+            _bossResetPending = true;
+            BossResetCooldownRemaining = BossResetCooldownDuration;
+            IsBossRegenerating = false;
+            _bossRegenTickTimer = 0f;
+            Debug.Log($"[EnemyNPC] BOSS WIPE/DISENGAGE -> Starting {BossResetCooldownDuration:0.0}s reset cooldown at HP={CurrentHealth}/{MaxHealth} ({CoopPeakPlayerCount}x).");
+            return;
+        }
+
+        // ระยะที่ 1: นับถอยหลัง 10 วินาที (คงเลือดและตัวคูณไว้คงที่)
+        if (BossResetCooldownRemaining > 0f)
+        {
+            BossResetCooldownRemaining = Mathf.Max(0f, BossResetCooldownRemaining - dt);
+            if (BossResetCooldownRemaining <= 0f)
+            {
+                if (CurrentHealth >= MaxHealth)
+                {
+                    ResetBossCoopScalingToBaseline("10s reset cooldown elapsed at full HP");
+                }
+                else
+                {
+                    IsBossRegenerating = true;
+                    _bossRegenTickTimer = BossRegenIntervalSeconds;
+                    Debug.Log($"[EnemyNPC] BOSS 10s cooldown finished -> Starting gradual regen (+25% MaxHP every {BossRegenIntervalSeconds:0.0}s) from {CurrentHealth}/{MaxHealth}.");
+                }
+            }
+            return;
+        }
+
+        // ระยะที่ 2: ฟื้นฟูเลือดทีละ 1/4 (25% ของ MaxHP) ทุก 3.0 วินาที จนกว่าจะเต็ม 100%
+        if (IsBossRegenerating)
+        {
+            _bossRegenTickTimer -= dt;
+            if (_bossRegenTickTimer <= 0f)
+            {
+                _bossRegenTickTimer += BossRegenIntervalSeconds;
+                int healAmount = Mathf.Max(1, Mathf.CeilToInt(MaxHealth * BossRegenFractionPerTick));
+                int before = CurrentHealth;
+                CurrentHealth = Mathf.Min(MaxHealth, CurrentHealth + healAmount);
+                Debug.Log($"[EnemyNPC] BOSS GRADUAL REGEN (+25% MaxHP = +{healAmount}): {before} -> {CurrentHealth}/{MaxHealth}.");
+
+                if (CurrentHealth >= MaxHealth)
+                {
+                    ResetBossCoopScalingToBaseline("gradual regeneration reached 100% HP undisturbed");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// นับจำนวนผู้เล่นที่ยังมีชีวิตและยืนอยู่ภายในรัศมีลานบอส (ใช้แสดงผลเท่านั้น ไม่ใช้ทริกเกอร์สเกลพลังบอส)
     /// </summary>
     public int CountLivingPlayersInBossZone()
     {
@@ -608,7 +927,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     /// <summary>
     /// ขยายค่าพลังบอสขึ้นเป็นตัวคูณใหม่ (newMultiplier เท่า) โดยคงสัดส่วน % พลังชีวิตปัจจุบันไว้เท่าเดิม
     /// </summary>
-    private void ScaleBossUpToMultiplier(int newMultiplier, int activeCount)
+    private void ScaleBossUpToMultiplier(int newMultiplier, int uniqueAttackerCount)
     {
         if (!IsBoss || !Object.HasStateAuthority) return;
         newMultiplier = Mathf.Max(1, newMultiplier);
@@ -632,11 +951,11 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         Defense = _baseDefense * newMultiplier;
         CurrentHealth = Mathf.Clamp(Mathf.RoundToInt(MaxHealth * hpFraction), 1, MaxHealth);
 
-        Debug.Log($"[EnemyNPC] BOSS CO-OP SCALING UP -> {newMultiplier}x (ActivePlayersInZone={activeCount}): HP={CurrentHealth}/{MaxHealth} ({hpFraction * 100f:0}%), ATK={AttackDamage}, DEF={Defense}.");
+        Debug.Log($"[EnemyNPC] BOSS ON-HIT CO-OP SCALING UP -> {newMultiplier}x (UniqueAttackers={uniqueAttackerCount}): HP={CurrentHealth}/{MaxHealth} ({hpFraction * 100f:0}%), ATK={AttackDamage}, DEF={Defense}.");
     }
 
     /// <summary>
-    /// รีเซ็ตค่าพลังและตัวคูณ Co-op ของบอสกลับสู่ระดับพื้นฐาน 1.0x (เรียกเฉพาะเมื่อลานว่าง 0 คนและจบการต่อสู้แล้ว)
+    /// รีเซ็ตค่าพลังและตัวคูณ Co-op ของบอสกลับสู่ระดับพื้นฐาน 1.0x (เรียกเฉพาะเมื่อฟื้นเลือดครบ 100% โดยไม่ถูกรบกวนหรือเกิดใหม่)
     /// </summary>
     public void ResetBossCoopScalingToBaseline(string reason)
     {
@@ -650,28 +969,88 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         }
 
         CoopPeakPlayerCount = 1;
+        UniqueBossAttackerCount = 0;
+        BossResetCooldownRemaining = -1f;
+        IsBossRegenerating = false;
+        _bossResetPending = false;
+        _bossRegenTickTimer = 0f;
         MaxHealth = _baseMaxHealth;
         NetworkMaxHealth = _baseMaxHealth;
         AttackDamage = _baseAttackDamage;
         Defense = _baseDefense;
         CurrentHealth = MaxHealth;
+        _uniqueDamageDealers.Clear();
+        _simulatedAliveParticipants.Clear();
         _damageDealtMap.Clear();
         _syncedBossDamageBoard.Clear();
         _simulatedNameOverrides.Clear();
-        _bossEmptyZoneSince = -1f;
         if (IsSpawned && Object != null && Object.IsValid && Object.HasStateAuthority)
             RPC_SyncBossDamageBoard(default);
         Debug.Log($"[EnemyNPC] BOSS CO-OP RESET -> 1x baseline ({reason}): HP={CurrentHealth}/{MaxHealth}, ATK={AttackDamage}, DEF={Defense}.");
     }
 
     /// <summary>
-    /// ตัวช่วยทดสอบสำหรับ Play Mode: จำลองจำนวนผู้เล่นเพิ่มเติมในลานบอส (+1, +2, 0) และประมวลผลสเกลทันที
+    /// ตัวช่วยทดสอบสำหรับ Play Mode: จำลองจำนวนผู้เล่นเพิ่มเติมที่เดินเข้ามาในลานบอสโดยยังไม่ตีบอส (เพื่อยืนยันว่าไม่สเกลเมื่อแค่เดินเข้าโซน)
     /// </summary>
     public void SetSimulatedExtraBossPlayersForTest(int extraPlayers)
     {
         if (!IsBoss || !Object.HasStateAuthority) return;
         _simulatedExtraBossPlayers = Mathf.Max(0, extraPlayers);
-        TickBossCoopZoneScaling();
+        ActivePlayersInBossZone = CountLivingPlayersInBossZone();
+    }
+
+    /// <summary>
+    /// ตัวช่วยทดสอบสำหรับ Play Mode: จำลองการโจมตีบอสจากผู้เล่นหลายคนที่ระบุ PlayerRef พร้อมกำหนดสถานะมีชีวิตอยู่ในลานบอส
+    /// ผ่านขั้นตอน RegisterBossAttackerOnHit + คำนวณดาเมจจริงทุกบรรทัดเหมือนการเล่น Co-op จริง
+    /// </summary>
+    public void SimulateBossHitForTest(PlayerRef simulatedAttacker, string displayName, int rawDamage, bool aliveInArena = true)
+    {
+        if (!IsBoss || !IsSpawned || !Object.HasStateAuthority || !IsAlive || simulatedAttacker == PlayerRef.None) return;
+        if (!string.IsNullOrEmpty(displayName))
+            _simulatedNameOverrides[simulatedAttacker.RawEncoded] = displayName;
+        if (aliveInArena)
+            _simulatedAliveParticipants.Add(simulatedAttacker);
+        else
+            _simulatedAliveParticipants.Remove(simulatedAttacker);
+
+        // 1. ลงทะเบียน On-Hit Scaling และยกเลิก Reset/Regen ทันทีหากกำลังฟื้นเลือดอยู่
+        RegisterBossAttackerOnHit(simulatedAttacker);
+
+        // 2. คำนวณและหักเลือดตาม Defense ปัจจุบันหลังสเกล
+        int raw = Mathf.Clamp(rawDamage, 1, maxDamagePerHit);
+        int applied = Defense > 0 ? Mathf.Max(1, raw - Defense) : raw;
+        RecordPlayerDamage(simulatedAttacker, applied);
+        CurrentHealth = Mathf.Max(1, CurrentHealth - applied);
+        if (State == NpcState.Returning || State == NpcState.Idle || State == NpcState.Patrol)
+            ChangeState(NpcState.Chasing, "simulated co-op boss hit");
+    }
+
+    /// <summary>
+    /// ตัวช่วยทดสอบสำหรับ Play Mode: อัปเดตสถานะว่าผู้เล่นจำลองยังมีชีวิตอยู่ในลานบอสหรือไม่ (ใช้จำลอง P1 ตาย / P2 ตาย)
+    /// </summary>
+    public void SetSimulatedBossParticipantAliveForTest(PlayerRef simulatedAttacker, bool aliveInArena)
+    {
+        if (!IsBoss || !Object.HasStateAuthority || simulatedAttacker == PlayerRef.None) return;
+        if (aliveInArena)
+            _simulatedAliveParticipants.Add(simulatedAttacker);
+        else
+            _simulatedAliveParticipants.Remove(simulatedAttacker);
+    }
+
+    /// <summary>
+    /// ตัวช่วยทดสอบสำหรับ Play Mode: เดินเวลาของระบบ Boss Reset Cooldown (10s) และ Gradual Regen (+25% ทุก 3s) แบบแม่นยำทีละขั้น
+    /// </summary>
+    public void AdvanceBossCombatRegenForTest(float totalSeconds, float step = 0.25f)
+    {
+        if (!IsBoss || !Object.HasStateAuthority) return;
+        float remaining = Mathf.Max(0f, totalSeconds);
+        float dt = Mathf.Clamp(step, 0.05f, 1.0f);
+        while (remaining > 0.0001f)
+        {
+            float slice = Mathf.Min(dt, remaining);
+            TickBossCombatAndRegen(slice);
+            remaining -= slice;
+        }
     }
 
     /// <summary>
@@ -766,11 +1145,136 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
         if (_navAgent != null) _navAgent.enabled = false;
         _bossAttackRoutine = null;
         _isTelegraphing = false;
+        DestroyPersonalZoneGroundRing();
+    }
+
+    private void OnDestroy()
+    {
+        DestroyPersonalZoneGroundRing();
+    }
+
+    // ------------------------------------------------------------------ ระบบกู้คืนสิทธิ์ StateAuthority เมื่อ Host หลุด (แก้บัค Camp 2 & 4 ค้าง)
+
+    /// <summary>
+    /// ทำงานอัตโนมัติเมื่อ Photon Fusion โอนย้าย StateAuthority ของมอนสเตอร์หรือบอสตัวนี้มายังเครื่องปัจจุบัน (หรือโอนออก)
+    /// รักษาค่า CurrentHealth, Co-op Scaling และเปิดระบบ AI / NavMesh ต่อได้ทันทีโดยไม่ค้างและไม่รีเซ็ตเลือด
+    /// </summary>
+    public void StateAuthorityChanged()
+    {
+        if (!IsSpawned || Object == null || !Object.IsValid) return;
+
+        if (Object.HasStateAuthority)
+        {
+            AuthorityTakeoverCount++;
+            // คงค่าเลือดปัจจุบันไว้ห้ามรีเซ็ตเต็ม 100% เมื่อรับช่วง StateAuthority ต่อจาก Host เดิม
+            ApplyZoneLevel(Mathf.Max(1, ScaledLevel), preserveCurrentHealth: true);
+            if (IsBoss) ApplyCoopStatsFromPeak();
+
+            TryInitNavMeshAgent();
+            _hasPatrolPoint = false;
+            _stateTimer = UnityEngine.Random.Range(0.15f, 0.55f);
+
+            // หากค้างอยู่กลางการร่ายท่าบอสจากเครื่องเดิม ให้ล้างธงค้างเพื่อเริ่มวงจร AI ต่อได้ทันที
+            _isTelegraphing = false;
+            if (_bossAttackRoutine != null)
+            {
+                StopCoroutine(_bossAttackRoutine);
+                _bossAttackRoutine = null;
+            }
+
+            Debug.Log($"[EnemyNPC] StateAuthority TAKEN OVER -> Camp {CampId} ({name}, Boss={IsBoss}) now owned by {Runner?.LocalPlayer}. HP={CurrentHealth}/{MaxHealth}, State={State}.");
+        }
+        else
+        {
+            // เครื่อง Remote Proxy ปิด NavMeshAgent เพื่อไม่ให้ชนกับ NetworkTransform
+            if (_navAgent != null) _navAgent.enabled = false;
+            if (_bossAttackRoutine != null)
+            {
+                StopCoroutine(_bossAttackRoutine);
+                _bossAttackRoutine = null;
+            }
+            _isTelegraphing = false;
+        }
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่า PlayerRef ที่ระบุยังคงเชื่อมต่อและอยู่ในห้อง Shared Mode ปัจจุบันจริงหรือไม่
+    /// </summary>
+    public static bool IsPlayerActiveInRunner(NetworkRunner runner, PlayerRef player)
+    {
+        if (runner == null || !runner.IsRunning || player == PlayerRef.None) return false;
+        if (!runner.IsPlayerValid(player)) return false;
+        foreach (PlayerRef active in runner.ActivePlayers)
+        {
+            if (active == player) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่าเครื่องปัจจุบันควรเป็นผู้รับช่วง StateAuthority แบบ Deterministic หรือไม่
+    /// (ให้สิทธิ์ SharedModeMasterClient เป็นอันดับแรก หรือผู้เล่นที่มี RawEncoded ต่ำสุดที่ยังออนไลน์อยู่เป็นตัวสำรอง)
+    /// </summary>
+    public static bool ShouldLocalClientTakeOverAuthority(NetworkRunner runner)
+    {
+        if (runner == null || !runner.IsRunning || runner.LocalPlayer == PlayerRef.None) return false;
+        if (runner.IsSharedModeMasterClient) return true;
+
+        int lowestRaw = int.MaxValue;
+        foreach (PlayerRef active in runner.ActivePlayers)
+        {
+            if (active != PlayerRef.None && active.RawEncoded < lowestRaw)
+                lowestRaw = active.RawEncoded;
+        }
+        return runner.LocalPlayer.RawEncoded == lowestRaw;
+    }
+
+    /// <summary>
+    /// ตรวจสอบว่ามอนสเตอร์ตัวนี้ขาดเจ้าของ StateAuthority (เช่น Host เดิมหลุดออกจากห้อง) หรือไม่
+    /// </summary>
+    public bool IsAuthorityOrphaned()
+    {
+        if (!IsSpawned || Object == null || !Object.IsValid || Runner == null || !Runner.IsRunning) return false;
+        PlayerRef auth = Object.StateAuthority;
+        return auth == PlayerRef.None || !IsPlayerActiveInRunner(Runner, auth);
+    }
+
+    /// <summary>
+    /// พยายามดึงสิทธิ์ StateAuthority กลับมาที่เครื่อง MasterClient / Lowest Active Player อัตโนมัติเมื่อตรวจพบว่ามอนสเตอร์ขาดเจ้าของ
+    /// แก้ปัญหามอนสเตอร์ใน Camp 2 และ Camp 4 ค้างนิ่งและตีไม่เข้าเมื่อ Host ออกจากห้อง
+    /// </summary>
+    public bool TryRecoverOrphanedAuthority(bool ignoreThrottle = false)
+    {
+        if (!IsSpawned || Object == null || !Object.IsValid || Runner == null || !Runner.IsRunning) return false;
+        if (Object.HasStateAuthority) return false;
+        if (!IsAuthorityOrphaned()) return false;
+        if (!ShouldLocalClientTakeOverAuthority(Runner)) return false;
+
+        if (!ignoreThrottle && Time.unscaledTime < _nextAuthorityRecoveryAt) return false;
+        _nextAuthorityRecoveryAt = Time.unscaledTime + 0.45f;
+
+        Object.RequestStateAuthority();
+        Debug.Log($"[EnemyNPC] Orphaned authority detected on Camp {CampId} ({name}) [PrevAuth={Object.StateAuthority}] -> Requesting StateAuthority for {Runner.LocalPlayer}.");
+        return true;
     }
 
     private void Update()
     {
-        if (!IsSpawned || animator == null || animator.runtimeAnimatorController == null) return;
+        if (!IsSpawned) return;
+
+        // ตรวจสอบและกู้คืน StateAuthority อัตโนมัติทันทีหาก Host เดิมหลุดออกจากห้อง
+        if (Object != null && Object.IsValid && !Object.HasStateAuthority)
+        {
+            TryRecoverOrphanedAuthority();
+        }
+
+        // ซิงก์ตำแหน่ง/รัศมีของเส้นวงกลมโซนส่วนตัวบนพื้น (รองรับทั้ง Host และ Remote Client หลัง Network Sync)
+        if (!IsBoss)
+        {
+            EnsurePersonalZoneGroundRing();
+        }
+
+        if (animator == null || animator.runtimeAnimatorController == null) return;
 
         float dt = Mathf.Max(0.0001f, Time.deltaTime);
         Vector3 pos = transform.position;
@@ -840,13 +1344,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     {
         if (!IsSpawned || !Object.HasStateAuthority) return;
 
-        // อัปเดตระบบสเกลพลังบอสแบบ Co-op (+1x ต่อผู้เล่น และห้ามลด HP เมื่อผู้เล่นออกกลางคัน)
+        float dt = Runner.DeltaTime;
+
+        // อัปเดตระบบผู้ร่วมสู้บอส คูลดาวน์ 10 วินาที และฟื้นฟูเลือดทีละ 25% ทุก 3 วินาที
         if (IsBoss && State != NpcState.Dead)
         {
-            TickBossCoopZoneScaling();
+            TickBossCombatAndRegen(dt);
         }
-
-        float dt = Runner.DeltaTime;
         switch (State)
         {
             case NpcState.Idle:
@@ -996,10 +1500,35 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private void TickChasing(float dt)
     {
         PlayerCombat target = ResolveTarget();
-        if (target == null || target.IsDead) { BeginReturn(target == null ? "target lost" : "target died"); return; }
-        if (SafeZone.IsPlayerInAnySafeZone(target)) { BeginReturn("target entered Comfort Safe Zone"); return; }
+        bool targetInvalid = target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target);
+        if (targetInvalid)
+        {
+            // สำหรับบอส: หากเป้าหมายหลักตายหรือเข้า Safe Zone แต่ยังมีผู้ร่วมตีบอสคนอื่นรอดชีวิต ให้สลับเป้าหมายทันทีโดยไม่รีเซ็ตเลือด!
+            if (IsBoss && TrySwitchBossToNextLivingParticipant(out PlayerCombat nextParticipant))
+            {
+                if (nextParticipant == null) return;
+                target = nextParticipant;
+            }
+            else
+            {
+                BeginReturn(target == null ? "target lost" : (target.IsDead ? "target died" : "target entered Comfort Safe Zone"));
+                return;
+            }
+        }
 
-        if (PlanarDistance(transform.position, HomePosition) > leashRadius) { BeginReturn("leash radius exceeded"); return; }
+        if (PlanarDistance(transform.position, HomePosition) > leashRadius)
+        {
+            if (IsBoss && TrySwitchBossToNextLivingParticipant(out PlayerCombat altTarget) && altTarget != null &&
+                PlanarDistance(altTarget.transform.position, HomePosition) <= leashRadius)
+            {
+                target = altTarget;
+            }
+            else
+            {
+                BeginReturn("leash radius exceeded");
+                return;
+            }
+        }
 
         float dist = PlanarDistance(transform.position, target.transform.position);
 
@@ -1020,8 +1549,21 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
     private void TickAttacking(float dt)
     {
         PlayerCombat target = ResolveTarget();
-        if (target == null || target.IsDead) { BeginReturn(target == null ? "target lost" : "target died"); return; }
-        if (SafeZone.IsPlayerInAnySafeZone(target)) { BeginReturn("target entered Comfort Safe Zone"); return; }
+        bool targetInvalid = target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target);
+        if (targetInvalid)
+        {
+            // สำหรับบอส: สลับเป้าหมายไปยังผู้ร่วมสู้ที่ยังมีชีวิตอยู่แทนการยกเลิกไฟต์และรีเซ็ตเลือด
+            if (IsBoss && TrySwitchBossToNextLivingParticipant(out PlayerCombat nextParticipant))
+            {
+                if (nextParticipant == null) return;
+                target = nextParticipant;
+            }
+            else
+            {
+                BeginReturn(target == null ? "target lost" : (target.IsDead ? "target died" : "target entered Comfort Safe Zone"));
+                return;
+            }
+        }
 
         if (_isTelegraphing)
         {
@@ -1160,6 +1702,16 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
     private void TickReturning(float dt)
     {
+        // สำหรับบอส: หากระหว่างเดินกลับมีผู้ร่วมสู้ที่ยังมีชีวิตอยู่ในลานบอส ให้สลับกลับไปสู้ต่อทันทีโดยไม่รีเซ็ตเลือด
+        if (IsBoss && CountActiveBossParticipants() > 0 && TrySwitchBossToNextLivingParticipant(out PlayerCombat activeFighter))
+        {
+            if (activeFighter != null)
+            {
+                ChangeState(NpcState.Chasing, "active boss participant detected during return");
+                return;
+            }
+        }
+
         if (MoveTowards(HomePosition, returnSpeed, dt) <= 0.35f)
         {
             TargetId = default;
@@ -1167,17 +1719,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
 
             if (IsBoss)
             {
-                // สำหรับบอส: รีเซ็ตตัวคูณ Co-op กลับเป็น 1x เฉพาะเมื่อไม่มีผู้เล่นอยู่ในลานบอสแล้ว (active == 0) เท่านั้น!
-                if (CountLivingPlayersInBossZone() == 0)
-                {
-                    ResetBossCoopScalingToBaseline("returned home with 0 players in Boss Arena");
-                }
-                else
-                {
-                    // หากยังมีผู้เล่นอยู่ในลาน คงค่าสเกลและ MaxHP เดิมไว้ (Anti-Cheese)
-                    CurrentHealth = MaxHealth;
-                    _damageDealtMap.Clear();
-                }
+                // สำหรับบอส: ห้ามเด้งเลือดเต็ม 100% ทันทีและห้ามล้างผู้ร่วมสู้!
+                // ปล่อยให้ TickBossCombatAndRegen รอคูลดาวน์ 10 วินาที แล้วค่อยๆ ฟื้นเลือดทีละ 25% ทุก 3 วินาที
             }
             else
             {
@@ -1185,7 +1728,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
                 _damageDealtMap.Clear();
             }
 
-            ChangeState(NpcState.Idle, "arrived home, health & aggro reset");
+            ChangeState(NpcState.Idle, IsBoss ? "arrived home, awaiting 10s cooldown before gradual regen" : "arrived home, health & aggro reset");
         }
     }
 
@@ -1744,6 +2287,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             return;
         _lastDamageTime[sourceRef] = now;
 
+        // สำหรับบอส: ลงทะเบียน On-Hit Co-op Scaling (+1x ต่อผู้เล่นคนใหม่ที่ตีโดนจริง)
+        // และยกเลิกคูลดาวน์ 10 วินาที / การฟื้นฟูเลือดทีละ 25% ทันทีเมื่อถูกโจมตี
+        if (IsBoss)
+        {
+            RegisterBossAttackerOnHit(sourceRef);
+        }
+
         int raw = Mathf.Clamp(damage, 1, maxDamagePerHit);
         int applied = Defense > 0 ? Mathf.Max(1, raw - Defense) : raw;
 
@@ -1762,7 +2312,15 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
             return;
         }
 
-        if (State == NpcState.Returning) return;
+        // สำหรับบอส: หากถูกตีระหว่างเดินกลับจุดเกิด (Returning) ให้ยกเลิกการเดินกลับและหันกลับมาสู้ต่อทันที
+        if (State == NpcState.Returning)
+        {
+            if (!IsBoss) return;
+            SetTarget(attacker);
+            ChangeState(NpcState.Chasing, "boss re-engaged while returning");
+            return;
+        }
+
         if (!TargetId.IsValid) SetTarget(attacker);
         if (State == NpcState.Idle || State == NpcState.Patrol)
         {
@@ -2223,6 +2781,42 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget
                 GUI.Label(stagBox, "STAGGERED (COUNTER 1.25x)", stagStyle);
                 GUI.color = prevCol;
             }
+            return;
+        }
+
+        // สำหรับมอนสเตอร์ทั่วไปที่มี World-Space Health Bar แล้ว ให้ข้ามการวาดหลอดเลือด OnGUI เดิม (แสดงเฉพาะป้าย Staggered / Stealth Assassinate)
+        if (!IsBoss && _worldHealthBar != null && _worldHealthBar.IsBarBuilt)
+        {
+            var prevCol = GUI.color;
+            float sy = Screen.height - sp.y;
+            var promptStyle = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 11,
+                fontStyle = FontStyle.Bold,
+                wordWrap = false
+            };
+
+            if (State == NpcState.Staggered)
+            {
+                GUI.color = new Color(0.14f, 0.08f, 0.0f, 0.85f);
+                Rect stagRect = new Rect(sp.x - 95f, sy - 42f, 190f, 20f);
+                GUI.DrawTexture(stagRect, Texture2D.whiteTexture);
+                GUI.color = new Color(1f, 0.88f, 0.20f, 1f);
+                GUI.Label(stagRect, "★ STAGGERED (COUNTER 1.25x)", promptStyle);
+            }
+
+            var localPlayer = PlayerCombat.Local;
+            if (localPlayer != null && localPlayer.IsSpawned && !localPlayer.IsDead && CanBeAssassinatedBy(localPlayer.transform))
+            {
+                GUI.color = new Color(0.08f, 0.02f, 0.04f, 0.88f);
+                Rect backstabRect = new Rect(sp.x - 118f, sy - 64f, 236f, 22f);
+                GUI.DrawTexture(backstabRect, Texture2D.whiteTexture);
+                GUI.color = new Color(1f, 0.30f, 0.22f, 1f);
+                GUI.Label(backstabRect, "[LMB] STEALTH ASSASSINATE (3.0x)", promptStyle);
+            }
+
+            GUI.color = prevCol;
             return;
         }
 

@@ -1,6 +1,7 @@
 using System;
 using TMPro;
 using UnityEngine;
+using UnityEngine.AI;
 
 /// <summary>
 /// Dedicated Safe / Comfort Zone (Safe Haven) in Dev_Kulpat.unity.
@@ -14,7 +15,8 @@ public class SafeZone : MonoBehaviour
 {
     public static SafeZone Instance { get; private set; }
 
-    [SerializeField] private float radius = 7.5f;
+    // รัศมีเขตปลอดภัย Comfort Zone (ขยายเป็น 12 เมตรสำหรับศูนย์กลางแผนที่ใหม่ขนาด 220x220 เมตร)
+    [SerializeField] private float radius = 12.0f;
     // ระยะชดเชยแนวดิ่งเมื่อวาร์ปผู้เล่นกลับเข้า Safe Zone (ปรับให้พอดีกับ Pivot ที่ปลายเท้าของ GreatSwordGirl)
     [SerializeField] private Vector3 reconnectLocalOffset = new Vector3(0f, 0.05f, 0f);
 
@@ -93,10 +95,21 @@ public class SafeZone : MonoBehaviour
         if (ac != null) Destroy(ac);
         anchor.transform.SetParent(transform, false);
         anchor.transform.localPosition = new Vector3(0f, 0.035f, 0f);
-        anchor.transform.localScale = new Vector3(3.2f, 0.02f, 3.2f);
+        anchor.transform.localScale = new Vector3(3.6f, 0.02f, 3.6f);
         Tint(anchor.GetComponent<Renderer>(), rimColor);
 
-        // 4 Sanctuary Corner Lantern Pillars (with solid non-blocking perimeter placement)
+        // เส้นวงกลมขอบเขต Comfort Zone สีเขียวมรกตบนพื้นด้วย URP Unlit LineRenderer
+        UrpMaterialHelper.CreateGroundCircleRing(
+            transform,
+            "SafeZoneBoundaryRing",
+            transform.position,
+            radius,
+            lineWidth: 0.24f,
+            color: new Color(0.18f, 0.96f, 0.70f, 0.88f),
+            segments: 72,
+            yHeight: 0.08f);
+
+        // 4 Sanctuary Corner Lantern Pillars (with NavMeshObstacle carving so AI navigates cleanly around them)
         float cornerDist = radius * 0.72f;
         for (int i = 0; i < 4; i++)
         {
@@ -107,8 +120,11 @@ public class SafeZone : MonoBehaviour
             pillar.name = $"SanctuaryPillar_{i + 1}";
             pillar.transform.SetParent(transform, false);
             pillar.transform.localPosition = pPos + new Vector3(0f, 1.4f, 0f);
-            pillar.transform.localScale = new Vector3(0.75f, 2.8f, 0.75f);
+            pillar.transform.localScale = new Vector3(0.85f, 2.8f, 0.85f);
             Tint(pillar.GetComponent<Renderer>(), pillarColor);
+            var navObs = pillar.AddComponent<NavMeshObstacle>();
+            navObs.shape = NavMeshObstacleShape.Box;
+            navObs.carving = true;
 
             var crystal = GameObject.CreatePrimitive(PrimitiveType.Cube);
             crystal.name = "LanternCrystal";

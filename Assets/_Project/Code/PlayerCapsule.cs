@@ -7,7 +7,7 @@ using UnityEngine.InputSystem;
 /// ระบบควบคุมการเคลื่อนที่ของตัวละครผู้เล่นหลัก (GreatSword Character Controller) สำหรับ Photon Fusion Shared Mode:
 ///   - รองรับการทำงานกับ CharacterController โดยตรงบน GreatSwordGirl.prefab (และรองรับโหมด Rigidbody สำรอง)
 ///   - ปรับจูนความเร็วเดิน ย่อง วิ่ง และการออกตัว/เบรกให้มีน้ำหนักสมจริงสไตล์เกมกำลังภายใน (Where Winds Meet) ไม่ลื่นไถล
-///   - รองรับการเดิน 8 ทิศทาง (8-Directional Locomotion), การก้มย่องลอบสังหาร (Crouch ปุ่ม C), การกระโดด (ปุ่ม F) และการกลิ้งหลบ
+///   - รองรับการเดิน 8 ทิศทาง (8-Directional Locomotion), การก้มย่องลอบสังหาร (Crouch ปุ่ม C), การกระโดด (ปุ่ม Spacebar) และการกลิ้งหลบ (Left Ctrl)
 ///   - ซิงก์ AvatarIndex จากหน้า Lobby และระบบเซฟ เพื่อแสดงรูปโปรไฟล์มุมขวาบนและสีชื่อผู้เล่นตรงกันทุกเครื่อง
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
@@ -48,8 +48,9 @@ public class PlayerCapsule : NetworkBehaviour
     // ความเร็วในการหมุนตัวละคร
     public float rotationSpeed = 11f;
 
-    [Header("Jump & Crouch Settings (การกระโดดปุ่ม F และก้มย่องปุ่ม C)")]
-    public Key jumpKey = Key.F;
+    [Header("Jump & Crouch Settings (การกระโดดปุ่ม Spacebar และก้มย่องปุ่ม C)")]
+    // ผูกปุ่มกระโดดเป็น Spacebar แทนปุ่ม F (ปุ่ม F ย้ายไปใช้สำหรับตั้งการ์ด Block/Parry เท่านั้น)
+    public Key jumpKey = Key.Space;
     public Key crouchKey = Key.C;
     public float jumpVelocity = 5.8f;
     public float gravity = -20f;
@@ -140,6 +141,10 @@ public class PlayerCapsule : NetworkBehaviour
 
     private void Awake()
     {
+        // ป้องกันค่าค้างจาก Prefab เก่าที่ยังผูกปุ่มกระโดดเป็น F -> บังคับย้ายเป็น Spacebar เสมอ
+        if (jumpKey == Key.F)
+            jumpKey = Key.Space;
+
         rb = GetComponent<Rigidbody>();
         _cc = GetComponent<CharacterController>();
         collider = GetComponent<CapsuleCollider>();
@@ -356,7 +361,7 @@ public class PlayerCapsule : NetworkBehaviour
             if (keyboard[crouchKey].wasPressedThisFrame && !MovementLocked && !IsDashing)
                 SetCrouch(!_crouchToggle);
 
-            // กด F เพื่อกระโดด (คิวไว้ประมวลผลใน FixedUpdateNetwork เพื่อไม่ให้เฟรมตกแล้วกดไม่ติด)
+            // กด Spacebar เพื่อกระโดด (คิวไว้ประมวลผลใน FixedUpdateNetwork เพื่อไม่ให้เฟรมตกแล้วกดไม่ติด)
             if (keyboard[jumpKey].wasPressedThisFrame && !MovementLocked && !IsDashing)
                 _jumpQueued = true;
         }

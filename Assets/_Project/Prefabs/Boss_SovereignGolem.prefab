@@ -74,7 +74,7 @@ MonoBehaviour:
   SortKey: 972790648
   SendPriority: 1
   EnableInterpolation: 1
-  Flags: 262402
+  Flags: 655618
   NestedObjects: []
   NetworkedBehaviours:
   - {fileID: 2984788559118125889}
@@ -140,6 +140,7 @@ MonoBehaviour:
   aggroRadius: 6.8
   leashRadius: 22
   patrolRadius: 5.5
+  campAllyAlertRadius: 8
   idleWaitRange: {x: 0.8, y: 2.2}
   patrolSpeed: 1.85
   chaseSpeed: 3.4
@@ -175,10 +176,19 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4294967295
   _CurrentHealth: 120
+  _NetworkMaxHealth: 120
+  _CoopPeakPlayerCount: 1
+  _ActivePlayersInBossZone: 0
+  _UniqueBossAttackerCount: 0
+  _BossResetCooldownRemaining: -1
+  _IsBossRegenerating:
+    RawValue: 0
   _State: 0
   _TargetId:
     Raw: 0
   _HomePosition: {x: 0, y: 0, z: 0}
+  _PersonalPatrolRadius: 3.4
+  _PersonalZoneIndex: 0
   _CampId: 0
   _IsBoss:
     RawValue: 0

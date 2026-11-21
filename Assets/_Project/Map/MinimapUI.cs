@@ -47,6 +47,9 @@ public class MinimapUI : MonoBehaviour
     private readonly List<MapMarker> _markers = new List<MapMarker>(96);
     private readonly List<MarkerWidget> _pool = new List<MarkerWidget>(96);
     private readonly List<Rect> _placedLabelRects = new List<Rect>(32);
+    // วงสีโปร่งแสงแสดงอาณาเขตโซนต่างๆ บน World Map (Comfort Zone, Starter Camps 1–2, Frontier Camps 3–4, Boss Citadel)
+    private readonly List<Image> _zoneOverlayPool = new List<Image>(8);
+    private Transform _zoneOverlayContainer;
 
     private class MarkerWidget
     {
@@ -138,6 +141,16 @@ public class MinimapUI : MonoBehaviour
 
         var relay = viewGo.AddComponent<MapClickRelay>();
         relay.owner = this;
+
+        // คอนเทนเนอร์วงสีขอบเขตโซน (วางใต้หมุดเพื่อไม่บังไอคอนผู้เล่นหรือศัตรู)
+        var overlayRoot = new GameObject("ZoneOverlays", typeof(RectTransform));
+        overlayRoot.transform.SetParent(_viewRect, false);
+        var ort = (RectTransform)overlayRoot.transform;
+        ort.anchorMin = Vector2.zero;
+        ort.anchorMax = Vector2.one;
+        ort.offsetMin = Vector2.zero;
+        ort.offsetMax = Vector2.zero;
+        _zoneOverlayContainer = overlayRoot.transform;
 
         MakeText(_viewRect, "North", "N", 16, FontStyle.Bold, TextAnchor.UpperCenter,
             UITheme.BrushedGoldBright, new Vector2(0.5f, 1f), new Vector2(0f, -6f), new Vector2(36f, 24f));
@@ -356,6 +369,7 @@ public class MinimapUI : MonoBehaviour
         float limitY = halfH - 12f;
 
         _placedLabelRects.Clear();
+        UpdateWorldZoneOverlays(focus, scale);
         int used = 0;
 
         for (int i = 0; i < _markers.Count; i++)
@@ -412,6 +426,69 @@ public class MinimapUI : MonoBehaviour
         {
             if (_pool[i].root.activeSelf) _pool[i].root.SetActive(false);
         }
+    }
+
+    /// <summary>
+    /// วาดวงโปร่งแสงแสดงอาณาเขตโซนหลักทั้งหมดบน World Map (Comfort Zone, Starter Camps 1–2, Mid-Field Camps 3–4, Boss Citadel)
+    /// ย่อ-ขยายและเลื่อนตำแหน่งสัมพันธ์กับ Zoom และ Pan ของแผนที่แบบเรียลไทม์
+    /// </summary>
+    private void UpdateWorldZoneOverlays(Vector3 focus, float scale)
+    {
+        if (_zoneOverlayContainer == null) return;
+        if (!_worldMode)
+        {
+            for (int i = 0; i < _zoneOverlayPool.Count; i++)
+                if (_zoneOverlayPool[i].gameObject.activeSelf) _zoneOverlayPool[i].gameObject.SetActive(false);
+            return;
+        }
+
+        int idx = 0;
+        if (SafeZone.Instance != null)
+        {
+            PlaceZoneOverlay(idx++, SafeZone.Instance.Center, SafeZone.Instance.Radius + 2f, focus, scale, new Color(0.14f, 0.90f, 0.64f, 0.16f));
+        }
+
+        if (SandboxWorldSpawner.Instance != null)
+        {
+            var camps = SandboxWorldSpawner.Instance.Camps;
+            for (int i = 0; i < camps.Count; i++)
+            {
+                var c = camps[i];
+                Color col = c.MaxLevel <= 2
+                    ? new Color(0.98f, 0.64f, 0.18f, 0.14f)  // โซน Starter Lv.1–2
+                    : new Color(0.95f, 0.30f, 0.22f, 0.15f); // โซน Mid-Field Lv.3–5
+                PlaceZoneOverlay(idx++, c.Center, Mathf.Max(14f, c.CampAreaRadius), focus, scale, col);
+            }
+
+            PlaceZoneOverlay(idx++, SandboxWorldSpawner.Instance.BossArenaCenter, SandboxWorldSpawner.Instance.BossArenaProximityRadius, focus, scale, new Color(0.92f, 0.14f, 0.18f, 0.18f));
+        }
+
+        for (int i = idx; i < _zoneOverlayPool.Count; i++)
+        {
+            if (_zoneOverlayPool[i].gameObject.activeSelf) _zoneOverlayPool[i].gameObject.SetActive(false);
+        }
+    }
+
+    private void PlaceZoneOverlay(int index, Vector3 worldPos, float worldRadius, Vector3 focus, float scale, Color color)
+    {
+        while (_zoneOverlayPool.Count <= index)
+        {
+            var img = NewImage(_zoneOverlayContainer, $"ZoneOverlay_{_zoneOverlayPool.Count}", color);
+            img.sprite = HudIcons.GetSprite("circle");
+            img.raycastTarget = false;
+            var rt = img.rectTransform;
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+            _zoneOverlayPool.Add(img);
+        }
+
+        var overlay = _zoneOverlayPool[index];
+        overlay.color = color;
+        float x = (worldPos.x - focus.x) * scale;
+        float y = (worldPos.z - focus.z) * scale;
+        float diam = Mathf.Max(20f, worldRadius * 2f * scale);
+        overlay.rectTransform.anchoredPosition = new Vector2(x, y);
+        overlay.rectTransform.sizeDelta = new Vector2(diam, diam);
+        if (!overlay.gameObject.activeSelf) overlay.gameObject.SetActive(true);
     }
 
     private bool OverlapsAnyLabel(Rect candidate)
@@ -485,7 +562,8 @@ public class MinimapUI : MonoBehaviour
             irt.anchoredPosition = Vector2.zero;
 
             var lbl = MakeText(go.transform, "Label", "", 12, FontStyle.Bold, TextAnchor.UpperCenter,
-                Color.white, new Vector2(0.5f, 0.5f), new Vector2(0f, -16f), new Vector2(140f, 20f));
+                Color.white, new Vector2(0.5f, 0.5f), new Vector2(0f, -16f), new Vector2(180f, 22f));
+            lbl.horizontalOverflow = HorizontalWrapMode.Overflow;
             UITheme.AddShadow(lbl.gameObject, 1f);
 
             _pool.Add(new MarkerWidget { root = go, rect = rt, icon = img, label = lbl });

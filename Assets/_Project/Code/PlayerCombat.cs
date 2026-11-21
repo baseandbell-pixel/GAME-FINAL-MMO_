@@ -1144,29 +1144,30 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         return true;
     }
 
+    // ปุ่มควบคุมมาตรฐานของระบบต่อสู้ (Block/Parry = F เท่านั้น ตัด Alt ออก, Dodge = Left Ctrl เพื่อไม่ชนกับ Spacebar กระโดด)
+    public const Key BlockParryKey = Key.F;
+    public const Key DodgeKey = Key.LeftCtrl;
+
+    /// <summary>
+    /// ตรวจจับการกดค้างปุ่มตั้งการ์ด/ปัดป้อง (ปุ่ม F เท่านั้น — ตัด LeftAlt / RightAlt และปุ่มเมาส์ออกทั้งหมด)
+    /// </summary>
     private static bool PollBlockHeld()
     {
-        if (!Application.isFocused || GameplayInput.IsBlocked) return false;
+        if (!Application.isFocused || GameplayInput.IsBlocked || IsAnyTextFieldFocused()) return false;
 
         var kb = Keyboard.current;
-        if (kb != null && kb.leftAltKey.isPressed) return true;
-
-        var mouse = Mouse.current;
-        if (mouse != null && mouse.rightButton.isPressed)
-        {
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return false;
-            return true;
-        }
-
-        return false;
+        return kb != null && kb.fKey.isPressed;
     }
 
+    /// <summary>
+    /// ตรวจจับปุ่มกลิ้งหลบ (Left Ctrl เท่านั้น — ยกเลิก Spacebar เพราะย้าย Spacebar ไปเป็นปุ่มกระโดด Jump แล้ว)
+    /// </summary>
     private static bool PollDodgePressed()
     {
         if (!Application.isFocused || GameplayInput.IsBlocked || IsAnyTextFieldFocused()) return false;
 
         var kb = Keyboard.current;
-        return kb != null && (kb.spaceKey.wasPressedThisFrame || kb.leftCtrlKey.wasPressedThisFrame);
+        return kb != null && kb.leftCtrlKey.wasPressedThisFrame;
     }
 
     /// <summary>
@@ -1183,20 +1184,13 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     }
 
     /// <summary>
-    /// ตรวจจับจังหวะกดปุ่มบล็อกครั้งแรกในเฟรมนี้ เพื่อแจ้งเตือนให้ชักดาบหากยังเก็บดาบอยู่
+    /// ตรวจจับจังหวะกดปุ่มบล็อก [F] ครั้งแรกในเฟรมนี้ (ตัด Alt ออกทั้งหมด) เพื่อแจ้งเตือนให้ชักดาบหากยังเก็บดาบอยู่
     /// </summary>
     private static bool PollBlockJustPressed()
     {
-        if (!Application.isFocused || GameplayInput.IsBlocked) return false;
+        if (!Application.isFocused || GameplayInput.IsBlocked || IsAnyTextFieldFocused()) return false;
         var kb = Keyboard.current;
-        if (kb != null && kb.leftAltKey.wasPressedThisFrame) return true;
-        var mouse = Mouse.current;
-        if (mouse != null && mouse.rightButton.wasPressedThisFrame)
-        {
-            if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return false;
-            return true;
-        }
-        return false;
+        return kb != null && kb.fKey.wasPressedThisFrame;
     }
 
     /// <summary>

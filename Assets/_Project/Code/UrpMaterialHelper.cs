@@ -201,4 +201,61 @@ public static class UrpMaterialHelper
         mat.SetOverrideTag("RenderType", "Transparent");
         mat.renderQueue = (int)RenderQueue.Transparent;
     }
+
+    /// <summary>
+    /// สร้างเส้นวงกลมขอบเขตบนพื้นด้วย LineRenderer ที่ใช้ Material URP Unlit ถาวร (ไม่เป็นสีชมพูทั้งใน Editor และ Build)
+    /// วางนอนขนานกับพื้นโลก (LineAlignment.TransformZ + หมุนแกน X 90 องศา) เพื่อให้คมชัดจากทุกมุมกล้องและแผนที่
+    /// </summary>
+    public static LineRenderer CreateGroundCircleRing(
+        Transform parent,
+        string ringName,
+        Vector3 worldCenter,
+        float radius,
+        float lineWidth,
+        Color color,
+        int segments = 64,
+        float yHeight = 0.06f)
+    {
+        var go = new GameObject(ringName);
+        if (parent != null) go.transform.SetParent(parent, true);
+        go.transform.position = new Vector3(worldCenter.x, yHeight, worldCenter.z);
+        go.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+
+        var lr = go.AddComponent<LineRenderer>();
+        lr.useWorldSpace = false;
+        lr.loop = true;
+        lr.alignment = LineAlignment.TransformZ;
+        lr.startWidth = lineWidth;
+        lr.endWidth = lineWidth;
+        lr.numCornerVertices = 2;
+        lr.numCapVertices = 2;
+        lr.shadowCastingMode = ShadowCastingMode.Off;
+        lr.receiveShadows = false;
+        lr.startColor = color;
+        lr.endColor = color;
+
+        // ผูก URP Unlit Transparent Material ถาวรและตั้งสีผ่าน MaterialPropertyBlock เพื่อรองรับ URP โดยไม่เป็นสีชมพู
+        ApplyTransparentColor(lr, color, disableShadows: true);
+        UpdateGroundCircleRing(lr, worldCenter, radius, segments, yHeight);
+        return lr;
+    }
+
+    /// <summary>
+    /// อัปเดตตำแหน่งและรัศมีของเส้นวงกลมขอบเขตบนพื้น (LineRenderer)
+    /// </summary>
+    public static void UpdateGroundCircleRing(LineRenderer lr, Vector3 worldCenter, float radius, int segments = 64, float yHeight = 0.06f)
+    {
+        if (lr == null) return;
+        int seg = Mathf.Clamp(segments, 16, 180);
+        float r = Mathf.Max(0.25f, radius);
+        lr.transform.position = new Vector3(worldCenter.x, yHeight, worldCenter.z);
+        lr.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
+        lr.positionCount = seg;
+
+        for (int i = 0; i < seg; i++)
+        {
+            float angle = (i / (float)seg) * Mathf.PI * 2f;
+            lr.SetPosition(i, new Vector3(Mathf.Cos(angle) * r, Mathf.Sin(angle) * r, 0f));
+        }
+    }
 }

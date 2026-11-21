@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using Fusion;
 using UnityEngine;
+using UnityEngine.AI;
 
 /// <summary>
 /// Manages the 4 Normal Enemy Camps (~7-block spacing, 90s / 1:30 respawn timer),
@@ -36,6 +37,10 @@ public class SandboxWorldSpawner : MonoBehaviour
         public string ZoneTierName;
         public int MinLevel = 1;
         public int MaxLevel = 2;
+        // รัศมีโซนลาดตระเวนส่วนตัวของมอนสเตอร์แต่ละตัวในแคมป์นี้ (Starter 4.2m, Mid-Field 4.8m)
+        public float PersonalPatrolRadius = 4.2f;
+        // รัศมีเขตภาพรวมของแคมป์สำหรับแสดงบน World Map Overlay
+        public float CampAreaRadius = 15.5f;
         public Vector3 Center;
         public Vector3[] SpawnPositions;
         public bool EverPopulated;
@@ -65,30 +70,35 @@ public class SandboxWorldSpawner : MonoBehaviour
     [SerializeField] private int campId = 1;
 #pragma warning restore CS0414
     [SerializeField] private Transform[] enemyPoints;
-    // รัศมีโซนลาดตระเวนส่วนตัวของมอนสเตอร์แต่ละตัว (3.4m x 2 = 6.8m < ระยะห่าง 10m -> ไม่มีทางทับซ้อนกัน)
-    [Min(1.5f)] [SerializeField] private float individualEnemyPatrolRadius = 3.4f;
+    // รัศมีโซนลาดตระเวนส่วนตัวของมอนสเตอร์ในโซน Starter (ห่างกัน 14m, รัศมี 4.2m -> มีช่องว่าง 5.6m ไม่ทับซ้อน)
+    [Min(1.5f)] [SerializeField] private float individualEnemyPatrolRadius = 4.2f;
+    // รัศมีโซนลาดตระเวนส่วนตัวของมอนสเตอร์ในโซน Mid-Field Frontier (ห่างกัน 16m, รัศมี 4.8m -> มีช่องว่าง 6.4m)
+    [Min(1.5f)] [SerializeField] private float midFieldEnemyPatrolRadius = 4.8f;
     // ระยะห่างขั้นต่ำระหว่างจุดเกิดของมอนสเตอร์แต่ละตัวในแคมป์เดียวกัน หากจุดในฉากชิดกว่านี้จะใช้พิกัดกระจายโซนอัตโนมัติ
-    [Min(6f)] [SerializeField] private float minIndividualZoneSpacing = 8.0f;
+    [Min(6f)] [SerializeField] private float minIndividualZoneSpacing = 11.0f;
     [Min(5f)] [SerializeField] private float campRespawnDelaySeconds = DefaultCampRespawnSeconds;
 
-    [Header("Dedicated Boss Arena (4:00 Respawn & Proximity Zone)")]
+    [Header("Dedicated Boss Arena (Far North Citadel - 4:00 Respawn & Proximity Zone)")]
     // พรีแฟบเฉพาะของบอส 3D Golem (หากเว้นว่างจะใช้ enemyPrefab สำรองอัตโนมัติ)
     [SerializeField] private EnemyNPC bossPrefab;
-    [SerializeField] private Vector3 bossArenaCenter = new Vector3(-26f, 0f, -16f);
-    [Min(5f)] [SerializeField] private float bossArenaProximityRadius = 18f;
+    [SerializeField] private Vector3 bossArenaCenter = new Vector3(0f, 0f, 74f);
+    [Min(5f)] [SerializeField] private float bossArenaProximityRadius = 24f;
     [Min(5f)] [SerializeField] private float bossRespawnDelaySeconds = DefaultBossRespawnSeconds;
 
     [Header("Zone-Based Enemy Levels (Central Server Ready)")]
-    // กำหนดช่วงเลเวลคงที่ตามโซนแทนการสเกลตามผู้เล่นสูงสุดในห้อง เพื่อให้ผู้เล่นใหม่ Lv.1 ฟาร์ม Starter Zone ได้เสมอ
+    // กำหนดช่วงเลเวลคงที่ตามโซนบนแผนที่ขยาย 220x220m:
+    //   - Near-Field Starter Zones (Camps 1 & 2) = Lv.1–2
+    //   - Mid-Field Frontier Zones (Camps 3 & 4) = Lv.3–5
+    //   - Far North Citadel Boss Arena = Lv.5+
     [Min(1)] [SerializeField] private int starterCampMinLevel = 1;
     [Min(1)] [SerializeField] private int starterCampMaxLevel = 2;
-    [Min(1)] [SerializeField] private int midFieldCampMinLevel = 4;
-    [Min(1)] [SerializeField] private int midFieldCampMaxLevel = 6;
+    [Min(1)] [SerializeField] private int midFieldCampMinLevel = 3;
+    [Min(1)] [SerializeField] private int midFieldCampMaxLevel = 5;
     [Min(5)] [SerializeField] private int bossArenaZoneLevel = 5;
 
-    [Header("Comfort Safe Zone (Non-Combat & Reconnect Anchor)")]
-    [SerializeField] private Vector3 safeZoneCenter = new Vector3(-14f, 0f, 8f);
-    [Min(3f)] [SerializeField] private float safeZoneRadius = 7.5f;
+    [Header("Comfort Safe Zone (South-Central Hub - Non-Combat & Reconnect Anchor)")]
+    [SerializeField] private Vector3 safeZoneCenter = new Vector3(0f, 0f, -60f);
+    [Min(3f)] [SerializeField] private float safeZoneRadius = 12.0f;
 
     [Header("Loot & Camp Clear Reward")]
     [SerializeField] private WorldItem itemPrefab;
@@ -140,6 +150,9 @@ public class SandboxWorldSpawner : MonoBehaviour
     private bool _done;
     private float _nextAttempt;
     private float _masterReadyAt = -1f;
+    // บันทึกสถานะ MasterClient เฟรมก่อนหน้าเพื่อตรวจจับการรับตำแหน่งต่อจาก Host ที่หลุดออกทันที
+    private bool _wasSharedModeMasterClient;
+    private float _nextAuthoritySweepAt;
 
     private void Awake()
     {
@@ -160,10 +173,11 @@ public class SandboxWorldSpawner : MonoBehaviour
     }
 
     /// <summary>
-    /// กำหนดตำแหน่งโซนลาดตระเวนส่วนตัวแยกทีละตัว (ห่างกัน 10 เมตร รัศมีโซนละ 3.4 เมตร ไม่มีโซนทับซ้อน)
-    /// และช่วงเลเวลคงที่ตามพื้นที่ (Zone-Based Levels) ของแคมป์ทั้ง 4 แคมป์:
-    ///   - Starter Camps (ใกล้ Comfort Zone: Camp 1 &amp; Camp 4) = Lv.1–2
-    ///   - Mid-Field Camps (โซนกลาง/รอบนอก: Camp 2 &amp; Camp 3) = Lv.4–6
+    /// กำหนดผังโซนบนแผนที่ขยาย 220x220 เมตร (Progression จากทิศใต้ขึ้นทิศเหนืออย่างเป็นระบบ):
+    ///   - South Hub: Comfort Zone (Safe Haven) ที่ (0, 0, -60) รัศมี 12m
+    ///   - Near-Field Outer Ring (Starter Zones, Lv.1–2): Camp 1 (-46, -22) &amp; Camp 2 (46, -22) — ห่างกัน 14m, รัศมีส่วนตัว 4.2m
+    ///   - Mid-Field Frontier (Intermediate Zones, Lv.3–5): Camp 3 (-58, 28) &amp; Camp 4 (58, 28) — ห่างกัน 16m, รัศมีส่วนตัว 4.8m
+    ///   - Far North Citadel (Boss Arena, Lv.5+): Sovereign Golem ที่ (0, 0, 74) รัศมี 24m
     /// </summary>
     private void InitializeCampDefinitions()
     {
@@ -175,46 +189,49 @@ public class SandboxWorldSpawner : MonoBehaviour
         int mMax = Mathf.Max(mMin, midFieldCampMaxLevel);
         int mSplit = Mathf.Clamp(mMin + 1, mMin, mMax);
 
-        // Camp 1: East Starter Camp (center 29, 0, 8 — 4 โซนย่อยห่างกัน 10 เมตร พ้นระยะ CampBarrier)
+        float starterZoneR = Mathf.Clamp(individualEnemyPatrolRadius, 2.0f, 6.0f);
+        float midZoneR = Mathf.Clamp(midFieldEnemyPatrolRadius, 2.5f, 6.5f);
+
+        // Camp 1: West Starter Outskirts (Near-Field ซ้าย, center -46, 0, -22 — 4 โซนส่วนตัวห่างกัน 14m)
         Vector3[] c1Points = new[]
         {
-            new Vector3(24f, 1.2f, 3f),
-            new Vector3(34f, 1.2f, 3f),
-            new Vector3(24f, 1.2f, 13f),
-            new Vector3(34f, 1.2f, 13f)
+            new Vector3(-53f, 1.2f, -29f),
+            new Vector3(-39f, 1.2f, -29f),
+            new Vector3(-53f, 1.2f, -15f),
+            new Vector3(-39f, 1.2f, -15f)
         };
         if (HasWellSpacedScenePoints(enemyPoints, ExpectedCampSize, minIndividualZoneSpacing))
         {
             for (int i = 0; i < ExpectedCampSize; i++)
                 c1Points[i] = enemyPoints[i].position;
         }
-        _camps.Add(BuildCampState(1, "Camp 1 (East Starter)", "Starter Zone", sMin, sMax, c1Points));
+        _camps.Add(BuildCampState(1, "Camp 1 (West Starter)", "Starter Zone", sMin, sMax, starterZoneR, 16f, c1Points));
 
-        // Camp 2: North-East Mid-Field Camp (center 29, 0, 32 — 4 โซนย่อยห่างกัน 10 เมตร)
-        _camps.Add(BuildCampState(2, "Camp 2 (North-East Mid)", "Mid-Field", mMin, mSplit, new[]
+        // Camp 2: East Starter Outskirts (Near-Field ขวา, center 46, 0, -22 — 4 โซนส่วนตัวห่างกัน 14m)
+        _camps.Add(BuildCampState(2, "Camp 2 (East Starter)", "Starter Zone", sMin, sMax, starterZoneR, 16f, new[]
         {
-            new Vector3(24f, 1.2f, 27f),
-            new Vector3(34f, 1.2f, 27f),
-            new Vector3(24f, 1.2f, 37f),
-            new Vector3(34f, 1.2f, 37f)
+            new Vector3(39f, 1.2f, -29f),
+            new Vector3(53f, 1.2f, -29f),
+            new Vector3(39f, 1.2f, -15f),
+            new Vector3(53f, 1.2f, -15f)
         }));
 
-        // Camp 3: South-East Mid-Field Camp (center 29, 0, -18 — 4 โซนย่อยห่างกัน 10 เมตร พ้นระยะลานบอส)
-        _camps.Add(BuildCampState(3, "Camp 3 (South-East Mid)", "Mid-Field", Mathf.Clamp(mMax - 1, mMin, mMax), mMax, new[]
+        // Camp 3: West Mid-Field Frontier (Intermediate ซ้าย, center -58, 0, 28 — 4 โซนส่วนตัวห่างกัน 16m)
+        _camps.Add(BuildCampState(3, "Camp 3 (West Frontier)", "Mid-Field", mMin, mSplit, midZoneR, 18.5f, new[]
         {
-            new Vector3(24f, 1.2f, -23f),
-            new Vector3(34f, 1.2f, -23f),
-            new Vector3(24f, 1.2f, -13f),
-            new Vector3(34f, 1.2f, -13f)
+            new Vector3(-66f, 1.2f, 20f),
+            new Vector3(-50f, 1.2f, 20f),
+            new Vector3(-66f, 1.2f, 36f),
+            new Vector3(-50f, 1.2f, 36f)
         }));
 
-        // Camp 4: North-West Starter Camp (center -4, 0, 32 — 4 โซนย่อยห่างกัน 10 เมตร พ้นระยะ Comfort Safe Zone)
-        _camps.Add(BuildCampState(4, "Camp 4 (North-West Starter)", "Starter Zone", sMin, sMax, new[]
+        // Camp 4: East Mid-Field Frontier (Intermediate ขวา, center 58, 0, 28 — 4 โซนส่วนตัวห่างกัน 16m)
+        _camps.Add(BuildCampState(4, "Camp 4 (East Frontier)", "Mid-Field", Mathf.Clamp(mMax - 1, mMin, mMax), mMax, midZoneR, 18.5f, new[]
         {
-            new Vector3(-9f, 1.2f, 27f),
-            new Vector3(1f, 1.2f, 27f),
-            new Vector3(-9f, 1.2f, 37f),
-            new Vector3(1f, 1.2f, 37f)
+            new Vector3(50f, 1.2f, 20f),
+            new Vector3(66f, 1.2f, 20f),
+            new Vector3(50f, 1.2f, 36f),
+            new Vector3(66f, 1.2f, 36f)
         }));
     }
 
@@ -240,7 +257,7 @@ public class SandboxWorldSpawner : MonoBehaviour
         return true;
     }
 
-    private static CampRuntimeState BuildCampState(int id, string campName, string zoneTierName, int minLevel, int maxLevel, Vector3[] points)
+    private static CampRuntimeState BuildCampState(int id, string campName, string zoneTierName, int minLevel, int maxLevel, float personalRadius, float campAreaRadius, Vector3[] points)
     {
         Vector3 sum = Vector3.zero;
         for (int i = 0; i < points.Length; i++) sum += points[i];
@@ -254,6 +271,8 @@ public class SandboxWorldSpawner : MonoBehaviour
             ZoneTierName = zoneTierName,
             MinLevel = Mathf.Max(1, minLevel),
             MaxLevel = Mathf.Max(minLevel, maxLevel),
+            PersonalPatrolRadius = personalRadius,
+            CampAreaRadius = campAreaRadius,
             Center = center,
             SpawnPositions = points
         };
@@ -513,6 +532,21 @@ public class SandboxWorldSpawner : MonoBehaviour
         NetworkRunner runner = local != null ? local.Runner : null;
         bool isMaster = runner != null && runner.IsRunning && runner.IsSharedModeMasterClient;
 
+        // ตรวจจับการเลื่อนขั้นเป็น SharedModeMasterClient (เมื่อ Host เดิมหลุดออกจากห้อง)
+        // แล้วกวาดกู้คืน StateAuthority ของมอนสเตอร์ทุกตัวในแคมป์ 1–4 และบอสทันทีเพื่อไม่ให้ Camp 2 & 4 ค้าง
+        bool promotedToMaster = isMaster && !_wasSharedModeMasterClient;
+        _wasSharedModeMasterClient = isMaster;
+        if (runner != null && runner.IsRunning && (promotedToMaster || Time.unscaledTime >= _nextAuthoritySweepAt))
+        {
+            _nextAuthoritySweepAt = Time.unscaledTime + 0.5f;
+            if (promotedToMaster)
+            {
+                Debug.Log($"[WorldSpawner] Local client promoted to SharedModeMasterClient ({runner.LocalPlayer}) -> Syncing all 4 camps & recovering orphaned enemy authorities.");
+                SyncExistingEnemiesToCamps();
+            }
+            RecoverOrphanedEnemyAuthorities(runner, immediate: promotedToMaster);
+        }
+
         // 1. ตรวจสอบวงจรชีวิตและเวลาเกิดใหม่ของแคมป์มอนสเตอร์ทั้ง 4 แคมป์ (90 วินาที)
         for (int c = 0; c < _camps.Count; c++)
         {
@@ -614,6 +648,28 @@ public class SandboxWorldSpawner : MonoBehaviour
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// กวาดตรวจสอบมอนสเตอร์ทุกตัวในแคมป์ 1–4 และบอส หากพบตัวใดขาดเจ้าของ StateAuthority (หลัง Host ออกจากห้อง)
+    /// จะสั่งให้ MasterClient หรือผู้เล่นลำดับแรกที่ยังอยู่ในห้องดึงสิทธิ์ StateAuthority กลับมาทันที
+    /// </summary>
+    public int RecoverOrphanedEnemyAuthorities(NetworkRunner runner, bool immediate = false)
+    {
+        if (runner == null || !runner.IsRunning) return 0;
+        if (!EnemyNPC.ShouldLocalClientTakeOverAuthority(runner)) return 0;
+
+        int requested = 0;
+        for (int i = 0; i < EnemyNPC.All.Count; i++)
+        {
+            EnemyNPC enemy = EnemyNPC.All[i];
+            if (enemy == null || !enemy.IsSpawned) continue;
+            if (enemy.TryRecoverOrphanedAuthority(ignoreThrottle: immediate))
+            {
+                requested++;
+            }
+        }
+        return requested;
     }
 
     private int CountLivingInCamp(int targetCampId, bool isBoss)
@@ -740,8 +796,8 @@ public class SandboxWorldSpawner : MonoBehaviour
         int spawned = 0;
         int assignedCampId = camp.CampId;
 
-        // ใช้ระบบ Zone-Based Level คงที่ตามพื้นที่แคมป์ พร้อมกำหนดโซนลาดตระเวนส่วนตัวแยกทีละตัว (Individual Patrol Zone)
-        float zoneRadius = Mathf.Clamp(individualEnemyPatrolRadius, 1.5f, 6.0f);
+        // ใช้ระบบ Zone-Based Level คงที่ตามพื้นที่แคมป์ พร้อมกำหนดโซนลาดตระเวนส่วนตัวแยกทีละตัว (Starter 4.2m, Mid-Field 4.8m)
+        float zoneRadius = Mathf.Clamp(camp.PersonalPatrolRadius > 0.5f ? camp.PersonalPatrolRadius : individualEnemyPatrolRadius, 1.5f, 6.5f);
         for (int i = 0; i < camp.SpawnPositions.Length; i++)
         {
             Vector3 pos = camp.SpawnPositions[i];
@@ -829,6 +885,10 @@ public class SandboxWorldSpawner : MonoBehaviour
         player.AddGold(amount, sourceName);
     }
 
+    /// <summary>
+    /// สร้างสิ่งปลูกสร้างนำสายตาและกำบังยุทธวิธี (Zone Landmarks &amp; Cover Obstacles) กระจายระหว่างโซนต่างๆ บนแผนที่ขยาย 220x220m
+    /// พร้อมติด NavMeshObstacle (Carving) ให้มอนสเตอร์เดินอ้อมสิ่งกีดขวางได้ลื่นไหลผ่าน NavMeshAgent
+    /// </summary>
     private void CreateTestObstacles()
     {
         const string rootName = "SandboxTestObstacles";
@@ -836,10 +896,30 @@ public class SandboxWorldSpawner : MonoBehaviour
 
         Transform root = new GameObject(rootName).transform;
         root.SetParent(transform, false);
-        CreateObstacle(root, "Pillar_West", new Vector3(8f, 1.5f, 3f), new Vector3(1.4f, 3f, 1.4f), new Color(.2f, .25f, .32f));
-        CreateObstacle(root, "Pillar_East", new Vector3(11f, 1.5f, 7f), new Vector3(1.4f, 3f, 1.4f), new Color(.2f, .25f, .32f));
-        CreateObstacle(root, "LowWall_South", new Vector3(10f, 1f, 0f), new Vector3(7f, 2f, .65f), new Color(.2f, .25f, .32f));
-        CreateObstacle(root, "CampBarrier", new Vector3(18f, 1f, 4f), new Vector3(5f, 2f, .65f), new Color(.2f, .25f, .32f));
+
+        Color hubStone = new Color(0.24f, 0.30f, 0.36f);
+        Color frontierStone = new Color(0.28f, 0.24f, 0.30f);
+        Color citadelGate = new Color(0.36f, 0.14f, 0.18f);
+
+        // 1. ซุ้มประตูทางออกทิศเหนือจาก Comfort Zone มุ่งสู่ทางแยกโซน Starter และ Citadel
+        CreateObstacle(root, "SouthHub_GateLeft", new Vector3(-7f, 2.0f, -40f), new Vector3(1.8f, 4.0f, 1.8f), hubStone);
+        CreateObstacle(root, "SouthHub_GateRight", new Vector3(7f, 2.0f, -40f), new Vector3(1.8f, 4.0f, 1.8f), hubStone);
+
+        // 2. กำบังทางเข้าโซน Starter (Camp 1 ซ้าย และ Camp 2 ขวา)
+        CreateObstacle(root, "StarterWest_Wall", new Vector3(-24f, 1.1f, -24f), new Vector3(1.2f, 2.2f, 7.0f), hubStone);
+        CreateObstacle(root, "StarterWest_Pillar", new Vector3(-28f, 1.6f, -14f), new Vector3(1.6f, 3.2f, 1.6f), hubStone);
+        CreateObstacle(root, "StarterEast_Wall", new Vector3(24f, 1.1f, -24f), new Vector3(1.2f, 2.2f, 7.0f), hubStone);
+        CreateObstacle(root, "StarterEast_Pillar", new Vector3(28f, 1.6f, -14f), new Vector3(1.6f, 3.2f, 1.6f), hubStone);
+
+        // 3. กำแพงซากปรักหักพังและเสาหินในโซน Mid-Field Frontier (Camp 3 ซ้าย และ Camp 4 ขวา)
+        CreateObstacle(root, "FrontierWest_RuinWall", new Vector3(-34f, 1.3f, 26f), new Vector3(1.4f, 2.6f, 9.0f), frontierStone);
+        CreateObstacle(root, "FrontierWest_PillarNorth", new Vector3(-58f, 1.8f, 8f), new Vector3(5.5f, 2.2f, 1.2f), frontierStone);
+        CreateObstacle(root, "FrontierEast_RuinWall", new Vector3(34f, 1.3f, 26f), new Vector3(1.4f, 2.6f, 9.0f), frontierStone);
+        CreateObstacle(root, "FrontierEast_PillarNorth", new Vector3(58f, 1.8f, 8f), new Vector3(5.5f, 2.2f, 1.2f), frontierStone);
+
+        // 4. เสาหลักทางขึ้นสู่ Far North Citadel (Boss Arena)
+        CreateObstacle(root, "CitadelApproach_Left", new Vector3(-13f, 2.6f, 42f), new Vector3(2.0f, 5.2f, 2.0f), citadelGate);
+        CreateObstacle(root, "CitadelApproach_Right", new Vector3(13f, 2.6f, 42f), new Vector3(2.0f, 5.2f, 2.0f), citadelGate);
     }
 
     private void CreateBossArenaGeometry()
@@ -850,34 +930,51 @@ public class SandboxWorldSpawner : MonoBehaviour
         Transform root = new GameObject(arenaName).transform;
         root.SetParent(transform, false);
 
-        // Floor boundary disc (non-colliding visual marker)
+        // แผ่นพื้นลานบอส (ไม่ชนคอลไลเดอร์)
         GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         ring.name = "BossArenaFloorRing";
         var ringCol = ring.GetComponent<Collider>();
         if (ringCol != null) Destroy(ringCol);
         ring.transform.SetParent(root, true);
         ring.transform.position = new Vector3(bossArenaCenter.x, 0.02f, bossArenaCenter.z);
-        ring.transform.localScale = new Vector3(bossArenaProximityRadius * 1.4f, 0.015f, bossArenaProximityRadius * 1.4f);
+        ring.transform.localScale = new Vector3(bossArenaProximityRadius * 2.0f, 0.015f, bossArenaProximityRadius * 2.0f);
         // ผูก URP Lit Material ถาวรสำหรับแผ่นพื้นลานบอส (ป้องกันสีชมพูใน Standalone Build)
-        UrpMaterialHelper.ApplyLitColor(ring.GetComponent<Renderer>(), new Color(0.28f, 0.06f, 0.09f, 1f));
+        UrpMaterialHelper.ApplyLitColor(ring.GetComponent<Renderer>(), new Color(0.24f, 0.05f, 0.08f, 1f));
 
-        // 4 Arena Boundary Pillars
-        float rOffset = 10.5f;
-        Vector3[] offsets =
+        // เส้นวงกลมขอบเขตลานบอสสีแดงเข้ม + ขอบทองด้านในด้วย LineRenderer (URP Unlit ถาวร)
+        UrpMaterialHelper.CreateGroundCircleRing(
+            root,
+            "BossArenaBoundaryRing",
+            bossArenaCenter,
+            bossArenaProximityRadius,
+            lineWidth: 0.34f,
+            color: new Color(0.95f, 0.18f, 0.16f, 0.90f),
+            segments: 96,
+            yHeight: 0.09f);
+
+        UrpMaterialHelper.CreateGroundCircleRing(
+            root,
+            "BossArenaInnerGoldRing",
+            bossArenaCenter,
+            Mathf.Max(3f, bossArenaProximityRadius - 0.55f),
+            lineWidth: 0.12f,
+            color: new Color(1.0f, 0.80f, 0.24f, 0.78f),
+            segments: 96,
+            yHeight: 0.095f);
+
+        // เสาประดับขอบลานบอส 8 ต้นรอบวงกลม (Landmark โดดเด่นชัดเจน)
+        float pillarRingRadius = Mathf.Max(10.5f, bossArenaProximityRadius - 1.4f);
+        const int pillarCount = 8;
+        for (int i = 0; i < pillarCount; i++)
         {
-            new Vector3(-rOffset, 2.2f, -rOffset),
-            new Vector3(rOffset, 2.2f, -rOffset),
-            new Vector3(-rOffset, 2.2f, rOffset),
-            new Vector3(rOffset, 2.2f, rOffset)
-        };
-        for (int i = 0; i < offsets.Length; i++)
-        {
-            CreateObstacle(root, $"BossArenaPillar_{i + 1}", bossArenaCenter + offsets[i], new Vector3(1.5f, 4.4f, 1.5f), new Color(0.38f, 0.10f, 0.14f));
+            float angle = (i / (float)pillarCount) * Mathf.PI * 2f + (Mathf.PI * 0.125f);
+            Vector3 offset = new Vector3(Mathf.Cos(angle) * pillarRingRadius, 2.5f, Mathf.Sin(angle) * pillarRingRadius);
+            CreateObstacle(root, $"BossArenaPillar_{i + 1}", bossArenaCenter + offset, new Vector3(1.6f, 5.0f, 1.6f), new Color(0.38f, 0.10f, 0.14f));
         }
     }
 
     /// <summary>
-    /// สร้างสิ่งกีดขวาง/เสาลานบอสพร้อมผูก URP Lit Material ถาวรผ่าน UrpMaterialHelper (ไม่เป็นสีชมพูใน Standalone Build)
+    /// สร้างสิ่งกีดขวาง/เสาลานบอสพร้อมผูก URP Lit Material ถาวร และ NavMeshObstacle (Carving) เพื่อรองรับการนำทาง NavMesh
     /// </summary>
     private static void CreateObstacle(Transform parent, string obstacleName, Vector3 position, Vector3 scale, Color color)
     {
@@ -887,5 +984,10 @@ public class SandboxWorldSpawner : MonoBehaviour
         obstacle.transform.position = position;
         obstacle.transform.localScale = scale;
         UrpMaterialHelper.ApplyLitColor(obstacle.GetComponent<Renderer>(), color);
+
+        // ติด NavMeshObstacle แบบ Carving เพื่อให้ศัตรูที่ใช้ NavMeshAgent เดินหลบเสาและกำแพงได้อัตโนมัติ
+        var navObs = obstacle.AddComponent<NavMeshObstacle>();
+        navObs.shape = NavMeshObstacleShape.Box;
+        navObs.carving = true;
     }
 }

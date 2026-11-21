@@ -1955,7 +1955,7 @@ MonoBehaviour:
   acceleration: 40
   deceleration: 22
   rotationSpeed: 12
-  jumpKey: 20
+  jumpKey: 1
   crouchKey: 17
   jumpVelocity: 5.8
   gravity: -20

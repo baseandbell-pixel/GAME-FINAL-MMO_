@@ -10,13 +10,10 @@ public interface ILockTarget
 }
 
 /// <summary>
-/// Lock-on for the LOCAL player (Middle Mouse or Q toggles). Picks the best valid enemy inside range and a view cone
-/// with a clear line of sight, then:
-///   - tells PlayerFollowCamera to enter Target-Lock mode (camera frames player + target),
-///   - sets PlayerCapsule.FacingTarget so the character faces the target and WASD becomes strafing
-///     (attacks therefore also go toward the target).
-/// Releases automatically when the target dies, despawns, is too far away, or the player dies.
-/// Input is only read by the peer that controls this player.
+/// ระบบล็อกเป้าหมายสำหรับผู้เล่น Local (ใช้คลิกเมาส์กลาง Middle Mouse Button เท่านั้น — ตัดปุ่ม Q ออกทั้งหมด):
+///   - ค้นหาศัตรูที่เหมาะสมที่สุดในระยะและมุมกล้องที่มีเส้นสายตาชัดเจน
+///   - สั่ง PlayerFollowCamera เข้าสู่โหมดล็อกเป้า และให้ PlayerCapsule หันหน้าเข้าหาเป้าหมายพร้อมเดิน Strafe
+///   - ปลดล็อกอัตโนมัติเมื่อเป้าหมายตาย, หลุดระยะ, เก็บดาบ, เข้าเขตปลอดภัย หรือผู้เล่นตาย
 /// </summary>
 [RequireComponent(typeof(PlayerCombat))]
 [RequireComponent(typeof(PlayerCapsule))]
@@ -82,12 +79,14 @@ public class TargetLockSystem : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// ตรวจจับการกดคลิกเมาส์กลาง (Middle Mouse Button / Mouse2) เท่านั้นสำหรับล็อก/ปลดล็อกเป้าหมาย (ตัดปุ่ม Q ออกถาวร)
+    /// </summary>
     private static bool PollTogglePressed()
     {
         if (!Application.isFocused) return false;
         var mouse = Mouse.current;
-        var kb = Keyboard.current;
-        return (mouse != null && mouse.middleButton.wasPressedThisFrame) || (kb != null && kb.qKey.wasPressedThisFrame);
+        return mouse != null && mouse.middleButton.wasPressedThisFrame;
     }
 
     // ------------------------------------------------------------------ acquire / release

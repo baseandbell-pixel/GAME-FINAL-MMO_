@@ -490,7 +490,7 @@ public class InventoryUI : MonoBehaviour
 
         // แถบคำแนะนำด้านล่างสุดของหน้าต่าง
         MakeLabel(inner.transform, "Hint",
-            "Tiers: Normal (Grey) | Rare (Blue) | Epic (Purple) | Legendary (Gold)   •   [1] Draw/Sheathe Weapon   •   Drag items onto Hotbar [2-7] below   •   [M] World Map",
+            "Tiers: Normal | Rare | Epic | Legendary  •  [Space] Jump  •  [F] Block/Parry  •  [Middle Click] Target Lock  •  [1] Draw/Sheathe  •  [M] Map",
             12, FontStyle.Normal, TextAnchor.MiddleCenter, UITheme.TextSecondary, 16f, 740f, PanelWidth - 38f, 28f);
 
         // ============================================================
@@ -1901,11 +1901,11 @@ public class InventoryUI : MonoBehaviour
             EquipmentSlotType.Sword => desc +
                 "• Equip in the WEAPON slot (removed from bag grid while equipped).\n" +
                 "• Press [1] outside Comfort Zone to Draw/Sheathe your GreatSword.\n" +
-                "• Combat: [LMB] Light 3-Hit Combo / Run Attack / Jump Attack / Stealth Assassinate (3.0x from behind), [R] Heavy Slash Combo.\n" +
+                "• Controls: [LMB] Light 3-Hit Combo / Run Attack / Jump Attack ([Space] + [LMB]), [R] Heavy Slash, [F] Block/Parry, [Middle Click] Target Lock, [Left Ctrl] Dodge.\n" +
                 "• Can be enhanced at the Blacksmith up to +10.",
             EquipmentSlotType.Shield => desc +
                 "• Equip in the SHIELD slot to boost Defense & Health.\n" +
-                "• Hold [Right-Click] or [Left Alt] to block incoming damage by 75% (drains Stamina on impact).\n" +
+                "• Hold [F] to Block incoming damage by 75% (tap [F] right before impact for Perfect Parry — staggers enemies!).\n" +
                 "• Can be enhanced at the Blacksmith up to +10.",
             EquipmentSlotType.Armor => desc +
                 "• Equip in the ARMOR slot for flat Defense and Max HP scaling.\n" +

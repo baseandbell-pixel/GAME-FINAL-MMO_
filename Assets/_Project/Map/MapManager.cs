@@ -33,15 +33,15 @@ public class MapManager : MonoBehaviour
     public static MapManager Instance { get; private set; }
 
     [Header("Camera")]
-    [SerializeField] private int textureSize = 512;
-    [SerializeField] private float cameraHeight = 120f;
+    [SerializeField] private int textureSize = 1024;
+    [SerializeField] private float cameraHeight = 165f;
     [SerializeField] private float refreshInterval = 0.1f;
     [SerializeField] private Color backgroundColor = new Color(0.07f, 0.09f, 0.11f, 1f);
 
-    [Header("Ranges (world metres from the focus to the map edge)")]
-    [Min(5f)] [SerializeField] private float minimapRadius = 30f;
-    [Min(10f)] [SerializeField] private float worldMapRadius = 52f;
-    [SerializeField] private Vector3 worldMapCenter = new Vector3(-2f, 0f, 4f);
+    [Header("Ranges (ขอบเขตแผนที่โลกขยาย 220x220 เมตร)")]
+    [Min(5f)] [SerializeField] private float minimapRadius = 38f;
+    [Min(10f)] [SerializeField] private float worldMapRadius = 112f;
+    [SerializeField] private Vector3 worldMapCenter = new Vector3(0f, 0f, 6f);
 
     [Header("Waypoint")]
     [SerializeField] private float waypointAutoClearRadius = 2.5f;
@@ -297,8 +297,8 @@ public class MapManager : MonoBehaviour
     public void PanWorldMap(Vector2 deltaWorldXZ)
     {
         Vector2 next = WorldMapPanOffset + deltaWorldXZ;
-        next.x = Mathf.Clamp(next.x, -85f, 85f);
-        next.y = Mathf.Clamp(next.y, -85f, 85f);
+        next.x = Mathf.Clamp(next.x, -110f, 110f);
+        next.y = Mathf.Clamp(next.y, -110f, 110f);
         WorldMapPanOffset = next;
         UpdateFocus();
         _nextRender = 0f;
@@ -367,7 +367,7 @@ public class MapManager : MonoBehaviour
             {
                 position = SafeZone.Instance.Center,
                 kind = MarkerKind.SafeZone,
-                label = "Safe Zone"
+                label = "Comfort Zone (Safe)"
             });
         }
 
@@ -378,7 +378,8 @@ public class MapManager : MonoBehaviour
             {
                 var c = camps[i];
                 string levelTag = c.MinLevel == c.MaxLevel ? $"Lv.{c.MinLevel}" : $"Lv.{c.MinLevel}-{c.MaxLevel}";
-                string shortName = $"Camp {c.CampId} ({levelTag})";
+                string tierShort = c.MaxLevel <= 2 ? "Starter" : "Frontier";
+                string shortName = $"Camp {c.CampId} {tierShort} ({levelTag})";
                 into.Add(new MapMarker
                 {
                     position = c.Center,
@@ -387,13 +388,19 @@ public class MapManager : MonoBehaviour
                 });
             }
 
+            // แสดงหมุด Boss Arena เพียง 1 หมุด (ติดตามตำแหน่งบอสจริงเมื่อยังมีชีวิต เพื่อไม่ให้ชื่อบอสซ้อนกัน 2 บรรทัด)
+            var activeBoss = SandboxWorldSpawner.Instance.ActiveBoss;
+            Vector3 bossMarkerPos = (activeBoss != null && activeBoss.IsAlive)
+                ? activeBoss.transform.position
+                : SandboxWorldSpawner.Instance.BossArenaCenter;
+
             into.Add(new MapMarker
             {
-                position = SandboxWorldSpawner.Instance.BossArenaCenter,
+                position = bossMarkerPos,
                 kind = MarkerKind.Boss,
                 label = SandboxWorldSpawner.Instance.IsBossRespawning
-                    ? $"BOSS ({SandboxWorldSpawner.Instance.GetBossRespawnCountdownText().Replace("Boss respawns in ", "")})"
-                    : $"BOSS (Lv.{SandboxWorldSpawner.Instance.BossArenaZoneLevel})"
+                    ? $"Boss Citadel ({SandboxWorldSpawner.Instance.GetBossRespawnCountdownText().Replace("Boss respawns in ", "")})"
+                    : $"Boss Citadel (Lv.{SandboxWorldSpawner.Instance.BossArenaZoneLevel})"
             });
         }
 
@@ -401,11 +408,13 @@ public class MapManager : MonoBehaviour
         {
             var e = EnemyNPC.All[i];
             if (e == null || !e.IsAlive) continue;
+            // บอสถูกเพิ่มเป็นหมุดหลักของ Boss Citadel แล้วด้านบน ข้ามเพื่อไม่ให้ซ้อนทับ
+            if (e.IsBoss) continue;
             into.Add(new MapMarker
             {
                 position = e.transform.position,
-                kind = e.IsBoss ? MarkerKind.Boss : MarkerKind.Enemy,
-                label = e.IsBoss ? "BOSS" : ""
+                kind = MarkerKind.Enemy,
+                label = ""
             });
         }
 

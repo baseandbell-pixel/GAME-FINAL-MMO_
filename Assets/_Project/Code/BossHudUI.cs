@@ -417,15 +417,22 @@ public class BossHudUI : MonoBehaviour
         int coopMult = Mathf.Max(1, boss.CoopPeakPlayerCount);
         string staggerSuffix = boss.IsStaggered ? "  •  STAGGERED!" : string.Empty;
         string coopSuffix = coopMult > 1 ? $"  •  Co-op {coopMult}x" : string.Empty;
+        string regenSuffix = boss.IsBossRegenerating
+            ? "  •  REGEN +25%"
+            : (boss.BossResetCooldownRemaining > 0.05f ? $"  •  Reset {boss.BossResetCooldownRemaining:0}s" : string.Empty);
 
-        _bossSubtitleText.text = $"Lv.{boss.ScaledLevel} World Boss{coopSuffix}{staggerSuffix}";
+        _bossSubtitleText.text = $"Lv.{boss.ScaledLevel} World Boss{coopSuffix}{staggerSuffix}{regenSuffix}";
         _bossSubtitleText.color = boss.IsStaggered
             ? new Color(1f, 0.90f, 0.25f, 1f)
-            : (coopMult > 1 ? new Color(1f, 0.58f, 0.30f, 1f) : new Color(0.95f, 0.78f, 0.42f, 1f));
+            : (boss.IsBossRegenerating
+                ? new Color(0.42f, 0.96f, 0.62f, 1f)
+                : (coopMult > 1 ? new Color(1f, 0.58f, 0.30f, 1f) : new Color(0.95f, 0.78f, 0.42f, 1f)));
 
         _bossNameText.text = "Sovereign Golem";
         _hpValueText.text = $"{curHp:N0} / {maxHp:N0}";
-        _rightBadgeText.text = coopMult > 1 ? $"Co-op {coopMult}x  •  Boss Chest" : "Boss Reward Chest";
+        _rightBadgeText.text = boss.IsBossRegenerating
+            ? "Regenerating (+25%/3s)"
+            : (coopMult > 1 ? $"Co-op {coopMult}x  •  Boss Chest" : "Boss Reward Chest");
 
         _hpFill.rectTransform.anchorMax = new Vector2(hpFrac, 1f);
         _hpTrailFill.rectTransform.anchorMax = new Vector2(_displayedTrailFrac, 1f);
