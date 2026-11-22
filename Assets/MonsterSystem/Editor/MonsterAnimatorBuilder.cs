@@ -61,6 +61,10 @@ public static class MonsterAnimatorBuilder
     public const string BossOgrePrefabPath = MonsterPrefabsRoot + "/Enemy_BossOgre.prefab";
     public const string BossOgreZonePrefabPath = ZonePrefabsRoot + "/Zone_BossOgre.prefab";
 
+    public const string GoblinSourceFolder = ModelsRoot + "/Goblin";
+    public const string GoblinPrefabPath = MonsterPrefabsRoot + "/Enemy_Goblin.prefab";
+    public const string GoblinZonePrefabPath = ZonePrefabsRoot + "/Zone_Goblin.prefab";
+
     // Canonical placeholder clip keys embedded inside AC_Monster_Base.controller
     private const string KeySpawn = "Placeholder_Spawn";
     private const string KeyIdle = "Placeholder_Idle";
@@ -97,7 +101,8 @@ public static class MonsterAnimatorBuilder
                              (Directory.Exists(TrollSourceFolder) && (!File.Exists(TrollPrefabPath) || !File.Exists(TrollZonePrefabPath))) ||
                              (Directory.Exists(SlimeSourceFolder) && (!File.Exists(SlimePrefabPath) || !File.Exists(SlimeZonePrefabPath))) ||
                              (Directory.Exists(TurtleShellSourceFolder) && (!File.Exists(TurtleShellPrefabPath) || !File.Exists(TurtleShellZonePrefabPath))) ||
-                             (Directory.Exists(BossOgreSourceFolder) && (!File.Exists(BossOgrePrefabPath) || !File.Exists(BossOgreZonePrefabPath)));
+                             (Directory.Exists(BossOgreSourceFolder) && (!File.Exists(BossOgrePrefabPath) || !File.Exists(BossOgreZonePrefabPath))) ||
+                             (Directory.Exists(GoblinSourceFolder) && (!File.Exists(GoblinPrefabPath) || !File.Exists(GoblinZonePrefabPath)));
             if (needBuild && Directory.Exists(ModelsRoot))
             {
                 BuildAllMonstersInModelsFolder();
@@ -186,14 +191,14 @@ public static class MonsterAnimatorBuilder
                                      : monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 15f
                                      : monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 14f
                                      : monsterName.Equals("Slime", StringComparison.OrdinalIgnoreCase) ? 10f
-                                     : monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase) ? 11f
+                                     : (monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase) || monsterName.Equals("Goblin", StringComparison.OrdinalIgnoreCase)) ? 11f
                                      : 12f;
                 float defaultRadius = defaultSpacing + 3f;
                 float respawnMin = isBoss ? 120f
                                  : monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 50f
                                  : monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 40f
                                  : monsterName.Equals("Slime", StringComparison.OrdinalIgnoreCase) ? 25f
-                                 : monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase) ? 30f
+                                 : (monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase) || monsterName.Equals("Goblin", StringComparison.OrdinalIgnoreCase)) ? 30f
                                  : 35f;
                 float respawnMax = isBoss ? 150f : respawnMin + 15f;
 
@@ -265,6 +270,7 @@ public static class MonsterAnimatorBuilder
         if (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase)) return 2.70f;
         if (monsterName.Equals("Slime", StringComparison.OrdinalIgnoreCase)) return 1.10f;
         if (monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase)) return 1.30f;
+        if (monsterName.Equals("Goblin", StringComparison.OrdinalIgnoreCase)) return 1.45f;
         return 2.15f;
     }
 
@@ -812,6 +818,13 @@ public static class MonsterAnimatorBuilder
                 config.defenseBonus = 3;
                 config.attackRange = 2.15f;
             }
+            else if (monsterName.Equals("Goblin", StringComparison.OrdinalIgnoreCase))
+            {
+                config.healthMultiplier = 1.10f; // ~132 HP at Lv.1 (agile 3-combo mob)
+                config.damageMultiplier = 1.20f; // 12 ATK at Lv.1
+                config.defenseBonus = 1;
+                config.attackRange = 2.20f;
+            }
             else
             {
                 config.attackRange = Mathf.Clamp(targetWorldHeight * 1.15f, 1.8f, 3.8f);
@@ -1240,8 +1253,9 @@ public static class MonsterAnimatorBuilder
 
                 string suffix = keySource.Trim().ToLowerInvariant().Replace(" ", "_").Replace("-", "_");
 
-                // Skip transition helpers & secondary directional/emote clips so primary locomotion/attacks stay clean!
-                if (suffix.Contains("_to_") ||
+                // Skip numeric-only dummy takes (e.g. "001", "002"), transition helpers & secondary directional/emote clips!
+                if (int.TryParse(suffix, out _) ||
+                    suffix.Contains("_to_") ||
                     suffix.Contains("walkbwd") || suffix.Contains("walkback") ||
                     suffix.Contains("walkleft") || suffix.Contains("walkright") ||
                     suffix.Contains("sensesomething") || suffix.Contains("victory") ||
@@ -1254,10 +1268,16 @@ public static class MonsterAnimatorBuilder
                     result["guard"] = clip;
                 }
                 else if (suffix.Contains("combat_idle") || suffix.Contains("combatidle") ||
-                    suffix.Contains("idlebattle") || suffix.Contains("fighting_stance"))
+                    suffix.Contains("idlebattle") || suffix.Contains("fighting_stance") ||
+                    suffix.Contains("crouch_idle"))
                 {
                     if (!result.ContainsKey("combat_idle") || !suffix.EndsWith("_2"))
                         result["combat_idle"] = clip;
+                }
+                else if (suffix == "crouch")
+                {
+                    if (!result.ContainsKey("hit_react"))
+                        result["hit_react"] = clip;
                 }
                 else if (suffix == "idle" || suffix == "idlenormal" || suffix == "idle_1" ||
                          (suffix.Contains("idle") && !suffix.Contains("break") && !suffix.EndsWith("_2")))
@@ -1441,29 +1461,32 @@ public static class MonsterAnimatorBuilder
             string texPath = AssetDatabase.GUIDToAssetPath(texGuids[i]);
             string baseName = Path.GetFileNameWithoutExtension(texPath);
             string[] tokens = baseName.Split('_');
-            string partName;
-            string channel;
+            string lastToken = tokens[tokens.Length - 1].ToLowerInvariant();
 
-            if (tokens.Length >= 3)
-            {
-                partName = tokens[1];
-                channel = tokens[tokens.Length - 1].ToLowerInvariant();
-            }
-            else if (tokens.Length == 2)
-            {
-                partName = "Main";
-                channel = tokens[1].ToLowerInvariant();
-            }
+            string channel;
+            bool lastIsChannel = true;
+            if (lastToken.Contains("normal") || lastToken.Contains("bump")) channel = "normal";
+            else if (lastToken == "ao" || lastToken.Contains("occlusion")) channel = "ao";
+            else if (lastToken.Contains("rough")) channel = "roughness";
+            else if (lastToken.Contains("metal")) channel = "metallic";
+            else if (lastToken == "basecolor" || lastToken == "color" || lastToken == "albedo" || lastToken == "diffuse" || lastToken == "skin") channel = "basecolor";
             else
             {
-                partName = "Main";
-                string lower = baseName.ToLowerInvariant();
-                if (lower.Contains("normal") || lower.Contains("bump")) channel = "normal";
-                else if (lower.Contains("rough")) channel = "roughness";
-                else if (lower.Contains("metal")) channel = "metallic";
-                else if (lower.Contains("ao") || lower.Contains("occlusion")) channel = "ao";
-                else channel = "basecolor";
+                channel = "basecolor";
+                lastIsChannel = false;
             }
+
+            string partName;
+            int endIdx = lastIsChannel ? tokens.Length - 1 : tokens.Length;
+            int startIdx = 0;
+            // Strip leading "<MonsterName>_" prefix only when there is still a part name after it (e.g. Orc_Body_Color -> Body, while Goblin_Skin -> Goblin)
+            if (endIdx - startIdx >= 2 && tokens[0].Equals(monsterName, StringComparison.OrdinalIgnoreCase))
+                startIdx = 1;
+
+            if (endIdx > startIdx)
+                partName = string.Join("_", tokens, startIdx, endIdx - startIdx);
+            else
+                partName = "Main";
 
             if (!partTextures.TryGetValue(partName, out var channels))
             {
@@ -1618,11 +1641,19 @@ public static class MonsterAnimatorBuilder
     private static Material MatchMaterial(Dictionary<string, Material> urpMaterials, string matName, string rendererName)
     {
         if (urpMaterials == null || urpMaterials.Count == 0) return null;
-        string probe = (matName + " " + rendererName).ToLowerInvariant();
+        string probe = (matName + " " + rendererName).ToLowerInvariant().Replace('_', ' ');
+        Material bestMatch = null;
+        int bestLen = -1;
         foreach (var kv in urpMaterials)
         {
-            if (probe.Contains(kv.Key.ToLowerInvariant())) return kv.Value;
+            string normKey = kv.Key.ToLowerInvariant().Replace('_', ' ');
+            if (probe.Contains(normKey) && normKey.Length > bestLen)
+            {
+                bestMatch = kv.Value;
+                bestLen = normKey.Length;
+            }
         }
+        if (bestMatch != null) return bestMatch;
         if (probe.Contains("body") || probe.Contains("teeth") || probe.Contains("nail") || probe.Contains("eye"))
         {
             if (urpMaterials.TryGetValue("Body", out Material bodyMat)) return bodyMat;
@@ -1783,21 +1814,22 @@ public static class MonsterAnimatorBuilder
                 return;
             }
 
-            // Tier 2: Generic SkinnedMeshRenderer world bounds (works for Blender, Rigify, Quadrupeds, Dragons, Slimes!)
-            SkinnedMeshRenderer[] smrs = temp.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-            float smrMinY = float.MaxValue;
-            float smrMaxY = float.MinValue;
-            for (int i = 0; i < smrs.Length; i++)
+            // Tier 1e: Generic Blender humanoid bones (Goblin: Toes.L/R, Foot.L/R + Head)
+            Transform genToeL = FindDeepChild(temp.transform, "Toes.L") ?? FindDeepChild(temp.transform, "Foot.L");
+            Transform genToeR = FindDeepChild(temp.transform, "Toes.R") ?? FindDeepChild(temp.transform, "Foot.R");
+            Transform genHead = FindDeepChild(temp.transform, "Head");
+            if ((genToeL != null || genToeR != null) && genHead != null)
             {
-                smrs[i].updateWhenOffscreen = true;
-                Bounds b = smrs[i].bounds;
-                if (b.size.sqrMagnitude > 0.0001f)
-                {
-                    smrMinY = Mathf.Min(smrMinY, b.min.y);
-                    smrMaxY = Mathf.Max(smrMaxY, b.max.y);
-                }
+                float gMin = float.MaxValue;
+                if (genToeL != null) gMin = Mathf.Min(gMin, genToeL.position.y);
+                if (genToeR != null) gMin = Mathf.Min(gMin, genToeR.position.y);
+                feetY = gMin - 0.03f;
+                height = Mathf.Max(0.6f, (genHead.position.y + 0.22f) - feetY);
+                return;
             }
-            if (smrMinY < float.MaxValue && smrMaxY > smrMinY + 0.20f)
+
+            // Tier 2: Vertex-exact baked SkinnedMeshRenderer bounds (zero loose culling AABB padding -> fixes floating Slime & TurtleShell!)
+            if (MeasureBakedSkinnedMeshWorldY(temp, out float smrMinY, out float smrMaxY) && smrMaxY > smrMinY + 0.15f)
             {
                 feetY = smrMinY;
                 height = smrMaxY - smrMinY;
@@ -2049,6 +2081,8 @@ public static class MonsterAnimatorBuilder
             footBoneA: "", footBoneB: "", moveBoneA: "Spine01", moveBoneB: "Head", Check);
         VerifyAdditionalMonster("11", "BossOgre", BossOgreSourceFolder, BossOgrePrefabPath, BossOgreZonePrefabPath,
             footBoneA: "toe.L", footBoneB: "toe.R", moveBoneA: "upper_arm.R", moveBoneB: "spine", Check);
+        VerifyAdditionalMonster("12", "Goblin", GoblinSourceFolder, GoblinPrefabPath, GoblinZonePrefabPath,
+            footBoneA: "Toes.L", footBoneB: "Toes.R", moveBoneA: "Upper Arm.R", moveBoneB: "Hips", Check);
 
         sb.AppendLine($"TOTAL: {pass + fail} | PASSED: {pass} | FAILED: {fail}");
         File.WriteAllText(VerificationReportPath, sb.ToString(), new UTF8Encoding(false));
@@ -2117,13 +2151,8 @@ public static class MonsterAnimatorBuilder
                     }
                     else
                     {
-                        var smrs = bridge.VisualRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-                        for (int s = 0; s < smrs.Length; s++)
-                        {
-                            smrs[s].updateWhenOffscreen = true;
-                            if (smrs[s].bounds.size.sqrMagnitude > 0.0001f)
-                                feetY = Mathf.Min(feetY, smrs[s].bounds.min.y);
-                        }
+                        if (MeasureBakedSkinnedMeshWorldY(bridge.VisualRoot.gameObject, out float bakedMinY, out _))
+                            feetY = bakedMinY;
                     }
                     check($"{sectionPrefix}.4 Enemy_{monsterName} Feet Seated Flush On Ground (y=0)", feetY >= -0.10f && feetY <= 0.18f, $"feetWorldY={feetY:0.000}m");
 
@@ -2190,6 +2219,43 @@ public static class MonsterAnimatorBuilder
         check($"{sectionPrefix}.6 Plug-and-Play Zone_{monsterName}.prefab Wired",
             zComp != null && zComp.MonsterPrefab != null && zComp.MonsterPrefab.GetComponent<MonsterEnemyNPC>() != null,
             $"Prefab={zComp?.MonsterPrefab?.name}, Count={zComp?.SpawnCount ?? 0}");
+    }
+
+    private static bool MeasureBakedSkinnedMeshWorldY(GameObject root, out float minY, out float maxY)
+    {
+        minY = float.MaxValue;
+        maxY = float.MinValue;
+        if (root == null) return false;
+
+        SkinnedMeshRenderer[] smrs = root.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        if (smrs == null || smrs.Length == 0) return false;
+
+        Mesh baked = new Mesh();
+        try
+        {
+            for (int i = 0; i < smrs.Length; i++)
+            {
+                SkinnedMeshRenderer smr = smrs[i];
+                if (smr == null || smr.sharedMesh == null) continue;
+                smr.updateWhenOffscreen = true;
+                baked.Clear();
+                smr.BakeMesh(baked, useScale: false);
+                Vector3[] verts = baked.vertices;
+                Transform tr = smr.transform;
+                for (int v = 0; v < verts.Length; v++)
+                {
+                    float wy = tr.TransformPoint(verts[v]).y;
+                    if (wy < minY) minY = wy;
+                    if (wy > maxY) maxY = wy;
+                }
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(baked);
+        }
+
+        return minY < float.MaxValue && maxY > minY;
     }
 
     private static Transform FindDeepChild(Transform parent, string name)

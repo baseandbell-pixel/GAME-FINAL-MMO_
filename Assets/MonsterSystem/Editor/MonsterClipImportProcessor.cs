@@ -188,7 +188,7 @@ public class MonsterClipImportProcessor : AssetPostprocessor
         {
             importer.textureType = TextureImporterType.NormalMap;
         }
-        else if (lower.Contains("roughness") || lower.Contains("metalness") || lower.Contains("metallic") || lower.EndsWith("_ao") || lower.Contains("_ao_"))
+        else if (lower.Contains("roughness") || lower.Contains("metalness") || lower.Contains("metallic") || lower.Contains("occlusion") || lower.EndsWith("_ao") || lower.Contains("_ao_"))
         {
             importer.sRGBTexture = false;
         }

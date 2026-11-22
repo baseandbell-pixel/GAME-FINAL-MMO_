@@ -13,8 +13,8 @@ GameObject:
   - component: {fileID: 5235202917195216156}
   - component: {fileID: 8664194040742867682}
   - component: {fileID: 5671322680256836529}
-  - component: {fileID: 374134107380278274}
-  - component: {fileID: 7776604807336540838}
+  - component: {fileID: 7991191178389256514}
+  - component: {fileID: 5241784134090968963}
   m_Layer: 0
   m_Name: Enemy_Slime
   m_TagString: Untagged
@@ -35,7 +35,7 @@ Transform:
   m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 7695543208273135840}
+  - {fileID: 964861250098091089}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!136 &7017532049848410666
@@ -100,14 +100,14 @@ MonoBehaviour:
   m_Script: {fileID: -1552182283, guid: e725a070cec140c4caffb81624c8c787, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Fusion.Runtime.dll::Fusion.NetworkObject
-  SortKey: 3941520290
+  SortKey: 1260550507
   SendPriority: 1
   EnableInterpolation: 1
   Flags: 258
   NestedObjects: []
   NetworkedBehaviours:
   - {fileID: 5671322680256836529}
-  - {fileID: 7776604807336540838}
+  - {fileID: 5241784134090968963}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &5671322680256836529
 MonoBehaviour:
@@ -149,7 +149,7 @@ MonoBehaviour:
     MinImpactfulCollisionAlignment: 0.3
     ImpactStartCorrectionTime: 0.1
     ImpactCorrectionTimeComplete: 0.3
---- !u!114 &374134107380278274
+--- !u!114 &7991191178389256514
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -161,12 +161,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c635d115200c66b4cb228118bc97e407, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MonsterAnimatorBridge
-  animator: {fileID: 4024463242756641650}
+  animator: {fileID: 625649675598775086}
   config: {fileID: 11400000, guid: d3b854a3005ab054db3f255b67190dd6, type: 2}
-  visualRoot: {fileID: 7695543208273135840}
+  visualRoot: {fileID: 964861250098091089}
   visualRenderers:
-  - {fileID: 7695543208261802444}
---- !u!114 &7776604807336540838
+  - {fileID: 964861250095138173}
+--- !u!114 &5241784134090968963
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -218,7 +218,7 @@ MonoBehaviour:
   _IsBoss:
     RawValue: 0
   _ScaledLevel: 1
-  animatorBridge: {fileID: 374134107380278274}
+  animatorBridge: {fileID: 7991191178389256514}
   personalAggroRadius: 5.5
   personalLeashRadius: 20
   personalPatrolRadius: 2
@@ -259,7 +259,7 @@ MonoBehaviour:
     RawValue: 0
   _ZoneSignature: 0
   _ZoneSlotIndex: -1
---- !u!1001 &7695543208273269356
+--- !u!1001 &964861250098220765
 PrefabInstance:
   m_ObjectHideFlags: 0
   serializedVersion: 2
@@ -273,15 +273,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 400012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
       propertyPath: m_LocalScale.x
-      value: 0.72971606
+      value: 0.9756428
       objectReference: {fileID: 0}
     - target: {fileID: 400012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
       propertyPath: m_LocalScale.y
-      value: 0.72971606
+      value: 0.9756428
       objectReference: {fileID: 0}
     - target: {fileID: 400012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
       propertyPath: m_LocalScale.z
-      value: 0.72971606
+      value: 0.9756428
       objectReference: {fileID: 0}
     - target: {fileID: 400012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
       propertyPath: m_LocalPosition.x
@@ -289,7 +289,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 400012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
       propertyPath: m_LocalPosition.y
-      value: -0.34721583
+      value: -0.50875
       objectReference: {fileID: 0}
     - target: {fileID: 400012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
       propertyPath: m_LocalPosition.z
@@ -333,31 +333,31 @@ PrefabInstance:
     m_AddedComponents:
     - targetCorrespondingSourceObject: {fileID: 100012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
       insertIndex: -1
-      addedObject: {fileID: 4024463242756641650}
+      addedObject: {fileID: 625649675598775086}
   m_SourcePrefab: {fileID: 100100000, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
---- !u!137 &7695543208261802444 stripped
+--- !u!137 &964861250095138173 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 13700000, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
-  m_PrefabInstance: {fileID: 7695543208273269356}
+  m_PrefabInstance: {fileID: 964861250098220765}
   m_PrefabAsset: {fileID: 0}
---- !u!4 &7695543208273135840 stripped
+--- !u!4 &964861250098091089 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 400012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
-  m_PrefabInstance: {fileID: 7695543208273269356}
+  m_PrefabInstance: {fileID: 964861250098220765}
   m_PrefabAsset: {fileID: 0}
---- !u!1 &7695543208273368256 stripped
+--- !u!1 &964861250098251889 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 100012, guid: 6520c6d7889f4c72b416f07f34edd515, type: 3}
-  m_PrefabInstance: {fileID: 7695543208273269356}
+  m_PrefabInstance: {fileID: 964861250098220765}
   m_PrefabAsset: {fileID: 0}
---- !u!95 &4024463242756641650
+--- !u!95 &625649675598775086
 Animator:
   serializedVersion: 7
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 7695543208273368256}
+  m_GameObject: {fileID: 964861250098251889}
   m_Enabled: 1
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 22100000, guid: 74c48ffa57f9bb94eaee4699f1a43b53, type: 2}

@@ -13,8 +13,8 @@ GameObject:
   - component: {fileID: 5235202917195216156}
   - component: {fileID: 8664194040742867682}
   - component: {fileID: 5671322680256836529}
-  - component: {fileID: 199033611668760111}
-  - component: {fileID: 7458101703862068004}
+  - component: {fileID: 7861650620047428247}
+  - component: {fileID: 3990694995269136698}
   m_Layer: 0
   m_Name: Enemy_BossOgre
   m_TagString: Untagged
@@ -35,7 +35,7 @@ Transform:
   m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 1651844954671855710}
+  - {fileID: 403351174003146146}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!136 &7017532049848410666
@@ -100,14 +100,14 @@ MonoBehaviour:
   m_Script: {fileID: -1552182283, guid: e725a070cec140c4caffb81624c8c787, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Fusion.Runtime.dll::Fusion.NetworkObject
-  SortKey: 1677906221
+  SortKey: 2804737636
   SendPriority: 1
   EnableInterpolation: 1
   Flags: 258
   NestedObjects: []
   NetworkedBehaviours:
   - {fileID: 5671322680256836529}
-  - {fileID: 7458101703862068004}
+  - {fileID: 3990694995269136698}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &5671322680256836529
 MonoBehaviour:
@@ -149,7 +149,7 @@ MonoBehaviour:
     MinImpactfulCollisionAlignment: 0.3
     ImpactStartCorrectionTime: 0.1
     ImpactCorrectionTimeComplete: 0.3
---- !u!114 &199033611668760111
+--- !u!114 &7861650620047428247
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -161,13 +161,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c635d115200c66b4cb228118bc97e407, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MonsterAnimatorBridge
-  animator: {fileID: 4563835886019971349}
+  animator: {fileID: 7158521992762159005}
   config: {fileID: 11400000, guid: 04daacbf41c56df4ab9ee174dddd6761, type: 2}
-  visualRoot: {fileID: 1651844954671855710}
+  visualRoot: {fileID: 403351174003146146}
   visualRenderers:
-  - {fileID: 1651844954683320630}
-  - {fileID: 1651844954683320628}
---- !u!114 &7458101703862068004
+  - {fileID: 403351174015003850}
+  - {fileID: 403351174015003848}
+--- !u!114 &3990694995269136698
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -219,7 +219,7 @@ MonoBehaviour:
   _IsBoss:
     RawValue: 0
   _ScaledLevel: 1
-  animatorBridge: {fileID: 199033611668760111}
+  animatorBridge: {fileID: 7861650620047428247}
   personalAggroRadius: 5.5
   personalLeashRadius: 20
   personalPatrolRadius: 2
@@ -260,7 +260,7 @@ MonoBehaviour:
     RawValue: 0
   _ZoneSignature: 0
   _ZoneSlotIndex: -1
---- !u!1001 &1651844954671719062
+--- !u!1001 &403351174003533674
 PrefabInstance:
   m_ObjectHideFlags: 0
   serializedVersion: 2
@@ -338,21 +338,26 @@ PrefabInstance:
     m_AddedComponents:
     - targetCorrespondingSourceObject: {fileID: 100072, guid: 61b8698a2176146289745095c88a5155, type: 3}
       insertIndex: -1
-      addedObject: {fileID: 4563835886019971349}
+      addedObject: {fileID: 7158521992762159005}
   m_SourcePrefab: {fileID: 100100000, guid: 61b8698a2176146289745095c88a5155, type: 3}
---- !u!1 &1651844954671752318 stripped
+--- !u!4 &403351174003146146 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 400072, guid: 61b8698a2176146289745095c88a5155, type: 3}
+  m_PrefabInstance: {fileID: 403351174003533674}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &403351174003433858 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 100072, guid: 61b8698a2176146289745095c88a5155, type: 3}
-  m_PrefabInstance: {fileID: 1651844954671719062}
+  m_PrefabInstance: {fileID: 403351174003533674}
   m_PrefabAsset: {fileID: 0}
---- !u!95 &4563835886019971349
+--- !u!95 &7158521992762159005
 Animator:
   serializedVersion: 7
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1651844954671752318}
+  m_GameObject: {fileID: 403351174003433858}
   m_Enabled: 1
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 22100000, guid: 1c527eda9bf3f8647babd93913273581, type: 2}
@@ -367,18 +372,13 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
---- !u!4 &1651844954671855710 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 400072, guid: 61b8698a2176146289745095c88a5155, type: 3}
-  m_PrefabInstance: {fileID: 1651844954671719062}
-  m_PrefabAsset: {fileID: 0}
---- !u!137 &1651844954683320628 stripped
+--- !u!137 &403351174015003848 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 13700002, guid: 61b8698a2176146289745095c88a5155, type: 3}
-  m_PrefabInstance: {fileID: 1651844954671719062}
+  m_PrefabInstance: {fileID: 403351174003533674}
   m_PrefabAsset: {fileID: 0}
---- !u!137 &1651844954683320630 stripped
+--- !u!137 &403351174015003850 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 13700000, guid: 61b8698a2176146289745095c88a5155, type: 3}
-  m_PrefabInstance: {fileID: 1651844954671719062}
+  m_PrefabInstance: {fileID: 403351174003533674}
   m_PrefabAsset: {fileID: 0}

@@ -1,34 +1,37 @@
 # MonsterSystem — แพ็กเกจมอนสเตอร์แบบพกพา (โฟลเดอร์เดียวจบ / Zero Merge Conflicts)
 
-ทุกอย่างของระบบมอนสเตอร์ทั้ง **6 เผ่า (Slime, TurtleShell, Orc, Troll, Golem, BossOgre)** ถูกรวมและแยกสัดส่วนไว้อย่างเป็นระเบียบใน **โฟลเดอร์เดียวเท่านั้น (`Assets/MonsterSystem/`)**:
+ทุกอย่างของระบบมอนสเตอร์ทั้ง **7 เผ่า (Slime, TurtleShell, Goblin, Orc, Troll, Golem, BossOgre)** ถูกรวมและแยกสัดส่วนไว้อย่างเป็นระเบียบใน **โฟลเดอร์เดียวเท่านั้น (`Assets/MonsterSystem/`)**:
 
 ```text
 Assets/MonsterSystem/
 ├── Models/
 │   ├── Slime/                            # สไลม์ (16 ท่าแยก + PBR URP Lit)
 │   ├── TurtleShell/                      # เต่าเกราะ (18 ท่าแยก มี Defend/Dizzy + PBR URP Lit)
+│   ├── Goblin/                           # ก็อบลิน (11 ท่าในตัว ตี 3 คอมโบ + 4 ชิ้น PBR Textures)
 │   ├── Orc/                              # ออร์ค (8 ท่าแยก + PBR Textures)
 │   ├── Troll/                            # โทรลล์ (8 ท่าในตัว + 4 URP Lit Materials + 15 PBR Maps)
 │   ├── Golem/                            # โกเล็ม (7 ท่าในตัว + URP Lit Material)
 │   └── BossOgre/                         # บอสโอเกอร์ (15 ท่าในตัว ตี 3 คอมโบ + URP Lit Body & Eyes)
 ├── Animations/
-│   ├── AC_Monster_Base.controller        # Base Animator กลาง (10 Params ใช้ร่วมกันทุกมอนสเตอร์)
+│   ├── AC_Monster_Base.controller        # Base Animator กลาง (11 Params / 14 Slots ใช้ร่วมกันทุกมอนสเตอร์)
 │   └── <ชื่อเผ่า>/
 │       ├── AOC_<ชื่อเผ่า>.overrideController
 │       └── Config_<ชื่อเผ่า>.asset       # ปรับ Stat, ความสูง, จังหวะฟัน, isBoss, Loot Drop (%), Gold, เสียง 3D
 ├── Materials/<ชื่อเผ่า>/                 # URP Lit PBR Materials + _EMISSION (Hit/Block Flash)
 ├── Prefabs/
-│   ├── MonsterSystem_Manager.prefab      # Empty กลางคุมระบบทั้งฉาก (มีครบทั้ง 6 โซนในตัวเดียว!)
+│   ├── MonsterSystem_Manager.prefab      # Empty กลางคุมระบบทั้งฉาก (มีครบทั้ง 7 โซนในตัวเดียว!)
 │   ├── Monsters/
 │   │   ├── Enemy_Slime.prefab            # Slime (1.10m | Lv.1 ~96 HP / 8 ATK | 2 ท่าตี + Dizzy)
-│   │   ├── Enemy_TurtleShell.prefab      # TurtleShell (1.30m | Lv.1 ~156 HP / 11 ATK / +3 DEF | 2 ท่าตี + Dizzy)
+│   │   ├── Enemy_TurtleShell.prefab      # TurtleShell (1.30m | Lv.1 ~156 HP / 11 ATK / +3 DEF | Defend + Dizzy)
+│   │   ├── Enemy_Goblin.prefab           # Goblin (1.45m | Lv.1 ~132 HP / 12 ATK / +1 DEF | 3 คอมโบ)
 │   │   ├── Enemy_Orc.prefab              # Orc (2.15m | Lv.1 ~200 HP / 15 ATK | 2 ท่าตี)
 │   │   ├── Enemy_Troll.prefab            # Troll (2.70m | Lv.1 ~258 HP / 18 ATK / +2 DEF | 2 ท่าตี)
 │   │   ├── Enemy_Golem.prefab            # Golem (3.00m | Lv.1 ~318 HP / 22 ATK / +4 DEF | ตีหนัก)
-│   │   └── Enemy_BossOgre.prefab         # BOSS Ogre (3.20m | Boss HP 750+ / ~28 ATK / +5 DEF | 3 คอมโบ | SuperArmor)
+│   │   └── Enemy_BossOgre.prefab         # BOSS Ogre (3.20m | Boss HP 750+ / ~28 ATK / +5 DEF | 3 คอมโบ | Block | Slam | Enrage)
 │   └── Zones/
 │       ├── Zone_Slime.prefab             # 4 ตัว, ระยะ 10m, เกิดใหม่ 25–40 วิ
 │       ├── Zone_TurtleShell.prefab       # 4 ตัว, ระยะ 11m, เกิดใหม่ 30–45 วิ
+│       ├── Zone_Goblin.prefab            # 4 ตัว, ระยะ 11m, เกิดใหม่ 30–45 วิ
 │       ├── Zone_Orc.prefab               # 4 ตัว, ระยะ 12m, เกิดใหม่ 35–50 วิ
 │       ├── Zone_Troll.prefab             # 3 ตัว, ระยะ 14m, เกิดใหม่ 40–55 วิ
 │       ├── Zone_Golem.prefab             # 2 ตัว, ระยะ 15m, เกิดใหม่ 50–65 วิ

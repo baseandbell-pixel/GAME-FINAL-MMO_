@@ -1,5 +1,5 @@
 === MONSTER SYSTEM ZERO-CONFLICT PACKAGE VERIFICATION ===
-Timestamp: 2569-11-22 21:23:14
+Timestamp: 2569-11-22 22:57:00
 [VERIFY PASS] 1.1 Base Controller Exists -> Assets/MonsterSystem/Animations/AC_Monster_Base.controller
 [VERIFY PASS] 1.2 Base Controller Has All 11 Parameters -> Found 11/11
 [VERIFY PASS] 1.3 UpperBody Override Layer (Weight=0) -> Layers=2
@@ -14,7 +14,7 @@ Timestamp: 2569-11-22 21:23:14
 [VERIFY PASS] 4.4 Enemy_Orc Real Bone Motion (Zero T-Pose) -> 7/7: Idle(7.1deg), Walk(11.8deg), Run(31.3deg), Attack_01(112.3deg), Attack_02(101.0deg), Hit_React(37.3deg), Death(55.2deg)
 [VERIFY PASS] 4.5 Enemy_Orc Textured URP Materials (Non-Gray) -> TexturedRenderers=21/21
 [VERIFY PASS] 5.1 Plug-and-Play Zone_Orc.prefab Wired -> Prefab=Enemy_Orc, Count=4
-[VERIFY PASS] 5.2 Scene Hub MonsterSystem_Manager.prefab Wired -> Zones=6, WorldItem=WorldItem
+[VERIFY PASS] 5.2 Scene Hub MonsterSystem_Manager.prefab Wired -> Zones=7, WorldItem=WorldItem
 [VERIFY PASS] 6.1 Friend Enemy.prefab 100% Untouched Capsule -> Zero modifications to friend's prefab
 [VERIFY PASS] 7.1 AOC_Golem All 14 Override Slots Non-Null -> Mapped 14/14
 [VERIFY PASS] 7.2 Enemy_Golem.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_Golem.prefab
@@ -40,7 +40,7 @@ Timestamp: 2569-11-22 21:23:14
 [VERIFY PASS] 10.1 AOC_TurtleShell All 14 Override Slots Non-Null -> Mapped 14/14
 [VERIFY PASS] 10.2 Enemy_TurtleShell.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_TurtleShell.prefab
 [VERIFY PASS] 10.3 Enemy_TurtleShell Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=1, Config=Config_TurtleShell
-[VERIFY PASS] 10.4 Enemy_TurtleShell Feet Seated Flush On Ground (y=0) -> feetWorldY=0.000m
+[VERIFY PASS] 10.4 Enemy_TurtleShell Feet Seated Flush On Ground (y=0) -> feetWorldY=0.001m
 [VERIFY PASS] 10.5 Enemy_TurtleShell Real Bone Motion (Zero T-Pose) -> 6/6: Idle(10.3deg), Walk(13.2deg), Run(34.7deg), Attack_01(53.8deg), Hit_React(40.8deg), Death(169.5deg)
 [VERIFY PASS] 10.7 Enemy_TurtleShell Textured URP Materials (Non-Gray) -> TexturedRenderers=1/1
 [VERIFY PASS] 10.6 Plug-and-Play Zone_TurtleShell.prefab Wired -> Prefab=Enemy_TurtleShell, Count=4
@@ -51,4 +51,11 @@ Timestamp: 2569-11-22 21:23:14
 [VERIFY PASS] 11.5 Enemy_BossOgre Real Bone Motion (Zero T-Pose) -> 6/6: Idle(40.7deg), Walk(83.4deg), Run(118.1deg), Attack_01(103.4deg), Hit_React(34.8deg), Death(65.6deg)
 [VERIFY PASS] 11.7 Enemy_BossOgre Textured URP Materials (Non-Gray) -> TexturedRenderers=2/2
 [VERIFY PASS] 11.6 Plug-and-Play Zone_BossOgre.prefab Wired -> Prefab=Enemy_BossOgre, Count=1
-TOTAL: 51 | PASSED: 51 | FAILED: 0
+[VERIFY PASS] 12.1 AOC_Goblin All 14 Override Slots Non-Null -> Mapped 14/14
+[VERIFY PASS] 12.2 Enemy_Goblin.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_Goblin.prefab
+[VERIFY PASS] 12.3 Enemy_Goblin Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=5, Config=Config_Goblin
+[VERIFY PASS] 12.4 Enemy_Goblin Feet Seated Flush On Ground (y=0) -> feetWorldY=0.035m
+[VERIFY PASS] 12.5 Enemy_Goblin Real Bone Motion (Zero T-Pose) -> 6/6: Idle(34.6deg), Walk(74.9deg), Run(93.6deg), Attack_01(70.6deg), Hit_React(41.2deg), Death(90.2deg)
+[VERIFY PASS] 12.7 Enemy_Goblin Textured URP Materials (Non-Gray) -> TexturedRenderers=5/5
+[VERIFY PASS] 12.6 Plug-and-Play Zone_Goblin.prefab Wired -> Prefab=Enemy_Goblin, Count=4
+TOTAL: 58 | PASSED: 58 | FAILED: 0
