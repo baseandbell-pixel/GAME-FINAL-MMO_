@@ -13,8 +13,8 @@ GameObject:
   - component: {fileID: 5235202917195216156}
   - component: {fileID: 8664194040742867682}
   - component: {fileID: 5671322680256836529}
-  - component: {fileID: 4242690656426281364}
-  - component: {fileID: 7027188407311195849}
+  - component: {fileID: 8414793992994672849}
+  - component: {fileID: 3202597570922201046}
   m_Layer: 0
   m_Name: Enemy_Troll
   m_TagString: Untagged
@@ -35,7 +35,7 @@ Transform:
   m_LocalScale: {x: 1.2, y: 1.2, z: 1.2}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 4595469181554580198}
+  - {fileID: 4180265696024178807}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!136 &7017532049848410666
@@ -100,14 +100,14 @@ MonoBehaviour:
   m_Script: {fileID: -1552182283, guid: e725a070cec140c4caffb81624c8c787, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Fusion.Runtime.dll::Fusion.NetworkObject
-  SortKey: 2778745852
+  SortKey: 2355687712
   SendPriority: 1
   EnableInterpolation: 1
   Flags: 258
   NestedObjects: []
   NetworkedBehaviours:
   - {fileID: 5671322680256836529}
-  - {fileID: 7027188407311195849}
+  - {fileID: 3202597570922201046}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &5671322680256836529
 MonoBehaviour:
@@ -149,7 +149,7 @@ MonoBehaviour:
     MinImpactfulCollisionAlignment: 0.3
     ImpactStartCorrectionTime: 0.1
     ImpactCorrectionTimeComplete: 0.3
---- !u!114 &4242690656426281364
+--- !u!114 &8414793992994672849
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -161,18 +161,18 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c635d115200c66b4cb228118bc97e407, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MonsterAnimatorBridge
-  animator: {fileID: 4742523941630394658}
+  animator: {fileID: 217729425764958251}
   config: {fileID: 11400000, guid: 1d3a9d3729a82a146acbbc81128b4a59, type: 2}
-  visualRoot: {fileID: 4595469181554580198}
+  visualRoot: {fileID: 4180265696024178807}
   visualRenderers:
-  - {fileID: 5340844510736648411}
-  - {fileID: 3679869993474651454}
-  - {fileID: 4494881331308966363}
-  - {fileID: 6786796483530461129}
-  - {fileID: 328587716519643865}
-  - {fileID: 7293556096147633042}
-  - {fileID: 3924260901551968903}
---- !u!114 &7027188407311195849
+  - {fileID: 5754288154892362314}
+  - {fileID: 3950973112844656559}
+  - {fileID: 4297610102332054346}
+  - {fileID: 6623282322825373016}
+  - {fileID: 92969851007574088}
+  - {fileID: 6985859275865643267}
+  - {fileID: 3724737615046440982}
+--- !u!114 &3202597570922201046
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -224,7 +224,7 @@ MonoBehaviour:
   _IsBoss:
     RawValue: 0
   _ScaledLevel: 1
-  animatorBridge: {fileID: 4242690656426281364}
+  animatorBridge: {fileID: 8414793992994672849}
   personalAggroRadius: 5.5
   personalLeashRadius: 20
   personalPatrolRadius: 2
@@ -258,7 +258,7 @@ MonoBehaviour:
     RawValue: 0
   _ZoneSignature: 0
   _ZoneSlotIndex: -1
---- !u!1001 &4056858853460786445
+--- !u!1001 &4434340281180542876
 PrefabInstance:
   m_ObjectHideFlags: 0
   serializedVersion: 2
@@ -356,31 +356,26 @@ PrefabInstance:
     m_AddedComponents:
     - targetCorrespondingSourceObject: {fileID: 919132149155446097, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
       insertIndex: -1
-      addedObject: {fileID: 4742523941630394658}
+      addedObject: {fileID: 217729425764958251}
   m_SourcePrefab: {fileID: 100100000, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
---- !u!137 &328587716519643865 stripped
+--- !u!137 &92969851007574088 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: -4844822703320303660, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}
---- !u!23 &3679869993474651454 stripped
-MeshRenderer:
-  m_CorrespondingSourceObject: {fileID: -8404458107769370573, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
-  m_PrefabAsset: {fileID: 0}
---- !u!1 &3786879072779403356 stripped
+--- !u!1 &3551256721461996237 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 919132149155446097, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}
---- !u!95 &4742523941630394658
+--- !u!95 &217729425764958251
 Animator:
   serializedVersion: 7
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 3786879072779403356}
+  m_GameObject: {fileID: 3551256721461996237}
   m_Enabled: 1
   m_Avatar: {fileID: 0}
   m_Controller: {fileID: 22100000, guid: da20974d838337040bafea3bd2add57d, type: 2}
@@ -395,33 +390,38 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
---- !u!137 &3924260901551968903 stripped
+--- !u!137 &3724737615046440982 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 1024883227419488138, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}
---- !u!137 &4494881331308966363 stripped
-SkinnedMeshRenderer:
-  m_CorrespondingSourceObject: {fileID: -8778116678914863914, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+--- !u!23 &3950973112844656559 stripped
+MeshRenderer:
+  m_CorrespondingSourceObject: {fileID: -8404458107769370573, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}
---- !u!4 &4595469181554580198 stripped
+--- !u!4 &4180265696024178807 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}
---- !u!137 &5340844510736648411 stripped
+--- !u!137 &4297610102332054346 stripped
+SkinnedMeshRenderer:
+  m_CorrespondingSourceObject: {fileID: -8778116678914863914, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
+  m_PrefabInstance: {fileID: 4434340281180542876}
+  m_PrefabAsset: {fileID: 0}
+--- !u!137 &5754288154892362314 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: -985542389825260074, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}
---- !u!137 &6786796483530461129 stripped
+--- !u!137 &6623282322825373016 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: 7377829484077626052, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}
---- !u!137 &7293556096147633042 stripped
+--- !u!137 &6985859275865643267 stripped
 SkinnedMeshRenderer:
   m_CorrespondingSourceObject: {fileID: -2487340482583196001, guid: 4b9b7954db6250c4297d8a0fe405811f, type: 3}
-  m_PrefabInstance: {fileID: 4056858853460786445}
+  m_PrefabInstance: {fileID: 4434340281180542876}
   m_PrefabAsset: {fileID: 0}

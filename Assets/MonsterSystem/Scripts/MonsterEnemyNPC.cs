@@ -76,6 +76,18 @@ public class MonsterEnemyNPC : EnemyNPC
     [Tooltip("Max vertical step height considered walkable floor instead of an obstacle wall.")]
     [Min(0.1f)] [SerializeField] private float walkableStepHeight = 0.40f;
 
+    [Header("Boss Mechanics (Active when Config.isBoss = true)")]
+    [Tooltip("Cooldown between Boss AoE Ground Slams (seconds). Faster during Phase 2 Enrage.")]
+    [SerializeField] private float bossSlamCooldown = 11.0f;
+    [Tooltip("Red ground telegraph warning time before Boss AoE Slam impacts (lets players dodge-roll out!).")]
+    [SerializeField] private float bossSlamTelegraphSeconds = 1.20f;
+    [Tooltip("Blast radius of the Boss AoE Ground Slam (meters).")]
+    [SerializeField] private float bossSlamRadius = 4.60f;
+    [Tooltip("Boss AoE Slam damage multiplier relative to AttackDamage (clamped to base EnemyNPC Boss ceiling).")]
+    [SerializeField] private float bossSlamDamageMultiplier = 1.55f;
+    [Tooltip("HP ratio threshold that triggers Boss Phase 2 Enrage (crimson glow, +18% speed, faster attacks/slams).")]
+    [Range(0.15f, 0.80f)] [SerializeField] private float bossEnrageHpFraction = 0.50f;
+
     [Header("Debug")]
     [SerializeField] private bool verboseLogs = false;
 
@@ -85,6 +97,9 @@ public class MonsterEnemyNPC : EnemyNPC
 
     [Networked, OnChangedRender(nameof(OnStunVisualStateChanged))]
     public NetworkBool IsStunnedNet { get; set; }
+
+    [Networked, OnChangedRender(nameof(OnEnrageVisualStateChanged))]
+    public NetworkBool IsEnragedNet { get; set; }
 
     [Networked]
     public int ZoneSignature { get; set; }
@@ -104,6 +119,8 @@ public class MonsterEnemyNPC : EnemyNPC
     private static Material s_guardBarrierMat;
     private static Material s_guardRingMat;
     private static Material s_stunOrbMat;
+    private static Material s_slamOuterRingMat;
+    private static Material s_slamInnerFillMat;
 
     // ---- Runtime Private State ----
     private int _baseDefense;
@@ -111,6 +128,7 @@ public class MonsterEnemyNPC : EnemyNPC
     private float _lastHitStamp = -100f;
     private float _lastDamageDealtToPlayerStamp = -100f;
     private float _nextAttackAt;
+    private float _nextBossSlamAt;
     private float _attackLockUntil;
     private float _hitFlinchUntil;
     private float _hyperArmorUntil;
@@ -125,14 +143,22 @@ public class MonsterEnemyNPC : EnemyNPC
     private bool _hasPatrolDest;
     private Vector3 _patrolDest;
     private bool _isSwinging;
+    private bool _isBossSlamming;
     private bool _listenersWired;
     private bool _speciesStatsApplied;
     private bool _lootDropped;
+    private bool _capturedInitialScale;
+    private Vector3 _initialPrefabScale = Vector3.one;
     private int _avoidDirSign;
     private float _avoidSignUntil;
     private PlayerCombat _lastKnownAttacker;
 
+    public bool IsConfiguredAsBoss => animatorBridge != null && animatorBridge.Config != null && animatorBridge.Config.isBoss;
+
     private Coroutine _swingRoutine;
+    private Coroutine _bossSlamRoutine;
+    private Coroutine _slamVfxRoutine;
+    private GameObject _activeSlamTelegraphGo;
     private AudioSource _audioSource;
     private GameObject _guardVfxRoot;
     private Transform _guardShieldMesh;
@@ -147,6 +173,11 @@ public class MonsterEnemyNPC : EnemyNPC
 
     private void OnEnable()
     {
+        if (!_capturedInitialScale)
+        {
+            _initialPrefabScale = transform.localScale;
+            _capturedInitialScale = true;
+        }
         DisconnectBaseAnimatorAndRenderer();
         EnsureBridgeAndListeners();
         EnsureAudioSource();
@@ -156,12 +187,7 @@ public class MonsterEnemyNPC : EnemyNPC
     private void OnDisable()
     {
         RemoveListeners();
-        if (_swingRoutine != null)
-        {
-            StopCoroutine(_swingRoutine);
-            _swingRoutine = null;
-        }
-        _isSwinging = false;
+        StopAllCombatRoutines();
         SetGuardVfxVisible(false);
         SetStunVfxVisible(false);
     }
@@ -176,9 +202,14 @@ public class MonsterEnemyNPC : EnemyNPC
         _speciesStatsApplied = false;
         _lootDropped = false;
         _lastKnownAttacker = null;
+        if (Object.HasStateAuthority && IsConfiguredAsBoss)
+            IsBoss = true;
         base.Spawned();
 
-        // Clean display name (removes "(Clone)" so Lock-On HUD displays e.g. "[Lv.1] Orc")
+        // Prevent base EnemyNPC.ApplyBossVisualAndCore() from inflating our rigged 3D Boss or spawning primitive cubes
+        SuppressBaseBossPrimitives();
+
+        // Clean display name (removes "(Clone)" so Lock-On HUD displays e.g. "[Lv.1] Orc" or "[Lv.1 BOSS] BossOgre")
         if (animatorBridge != null && animatorBridge.Config != null && !string.IsNullOrWhiteSpace(animatorBridge.Config.monsterName))
             gameObject.name = animatorBridge.Config.monsterName;
         else if (gameObject.name.EndsWith("(Clone)"))
@@ -200,8 +231,11 @@ public class MonsterEnemyNPC : EnemyNPC
             _baseDefense = Defense;
             IsGuarding = false;
             IsStunnedNet = false;
+            IsEnragedNet = false;
             _consecutiveHits = 0;
             _isSwinging = false;
+            _isBossSlamming = false;
+            _nextBossSlamAt = Time.time + Random.Range(4.5f, 7.0f);
             _returnStuckTimer = 0f;
             _lastReturnCheckPos = transform.position;
             _idleTimer = Random.Range(personalIdleWait.x, personalIdleWait.y);
@@ -211,23 +245,31 @@ public class MonsterEnemyNPC : EnemyNPC
         {
             animatorBridge.ResetForPoolSpawn();
             animatorBridge.SetSuperArmor(IsBoss);
+            animatorBridge.SetPersistentEnrageGlow(IsEnragedNet);
+            animatorBridge.SetSpeedScale(IsEnragedNet ? 1.18f : 1.0f);
         }
         SetGuardVfxVisible(false);
         SetStunVfxVisible(false);
+        ClearActiveSlamTelegraph();
         MonsterSystemManager.NotifyMonsterSpawned(this);
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
     {
-        if (_swingRoutine != null)
-        {
-            StopCoroutine(_swingRoutine);
-            _swingRoutine = null;
-        }
-        _isSwinging = false;
+        StopAllCombatRoutines();
         SetGuardVfxVisible(false);
         SetStunVfxVisible(false);
         base.Despawned(runner, hasState);
+    }
+
+    private void StopAllCombatRoutines()
+    {
+        if (_swingRoutine != null) { StopCoroutine(_swingRoutine); _swingRoutine = null; }
+        if (_bossSlamRoutine != null) { StopCoroutine(_bossSlamRoutine); _bossSlamRoutine = null; }
+        if (_slamVfxRoutine != null) { StopCoroutine(_slamVfxRoutine); _slamVfxRoutine = null; }
+        _isSwinging = false;
+        _isBossSlamming = false;
+        ClearActiveSlamTelegraph();
     }
 
     /// <summary>
@@ -239,6 +281,29 @@ public class MonsterEnemyNPC : EnemyNPC
     {
         BaseAnimatorField?.SetValue(this, null);
         BaseBodyRendererField?.SetValue(this, null);
+    }
+
+    /// <summary>
+    /// Restores our calibrated rigged-model scale and hides base EnemyNPC's primitive BossVisualCrown
+    /// cubes whenever a MonsterSystem Boss (e.g. BossOgre) activates base EnemyNPC.IsBoss.
+    /// </summary>
+    public void SuppressBaseBossPrimitives()
+    {
+        if (_capturedInitialScale && transform.localScale != _initialPrefabScale)
+            transform.localScale = _initialPrefabScale;
+
+        Transform baseCrown = transform.Find("BossVisualCrown");
+        if (baseCrown != null && baseCrown.gameObject.activeSelf)
+            baseCrown.gameObject.SetActive(false);
+
+        if (animatorBridge != null && animatorBridge.Config != null && !string.IsNullOrWhiteSpace(animatorBridge.Config.monsterName))
+            gameObject.name = animatorBridge.Config.monsterName;
+    }
+
+    private void LateUpdate()
+    {
+        if (IsSpawned && IsBoss && _capturedInitialScale && transform.localScale != _initialPrefabScale)
+            SuppressBaseBossPrimitives();
     }
 
     private void ApplySpeciesStatMultipliers()
@@ -448,13 +513,21 @@ public class MonsterEnemyNPC : EnemyNPC
         }
 
         float dist = PlanarDistance(transform.position, target.transform.position);
+        if (IsBoss && !IsGuarding && !IsStunnedNet && !_isBossSlamming &&
+            Time.time >= _nextBossSlamAt && dist <= bossSlamRadius + 2.5f && HasClearLineLocal(target.transform.position))
+        {
+            StartBossSlamAuthority(target);
+            return;
+        }
+
         if (dist <= AttackRange && HasClearLineLocal(target.transform.position))
         {
             State = NpcState.Attacking;
             return;
         }
 
-        MoveTowardsLocal(target.transform.position, runMoveSpeed, dt);
+        float effectiveRunSpeed = IsEnragedNet ? runMoveSpeed * 1.18f : runMoveSpeed;
+        MoveTowardsLocal(target.transform.position, effectiveRunSpeed, dt);
     }
 
     private void TickAttackingAuthority(float dt)
@@ -466,7 +539,7 @@ public class MonsterEnemyNPC : EnemyNPC
             return;
         }
 
-        // Strict Anti-Slide: plant feet until Attack & Hit_React finish completely!
+        // Strict Anti-Slide: plant feet until Attack, Boss Slam & Hit_React finish completely!
         if (IsMovementAnimationLocked())
         {
             FaceTowards(target.transform.position, dt * 0.40f);
@@ -481,6 +554,12 @@ public class MonsterEnemyNPC : EnemyNPC
         }
 
         FaceTowards(target.transform.position, dt);
+
+        if (IsBoss && !IsGuarding && !IsStunnedNet && !_isBossSlamming && Time.time >= _nextBossSlamAt)
+        {
+            StartBossSlamAuthority(target);
+            return;
+        }
 
         if (Time.time >= _nextAttackAt)
         {
@@ -530,6 +609,7 @@ public class MonsterEnemyNPC : EnemyNPC
     {
         CurrentHealth = MaxHealth;
         TargetId = default;
+        if (IsEnragedNet) IsEnragedNet = false;
         _consecutiveHits = 0;
         _returnStuckTimer = 0f;
         _idleTimer = Random.Range(personalIdleWait.x, personalIdleWait.y);
@@ -548,7 +628,7 @@ public class MonsterEnemyNPC : EnemyNPC
 
     private bool IsMovementAnimationLocked()
     {
-        if (_isSwinging || Time.time < _attackLockUntil || Time.time < _hitFlinchUntil)
+        if (_isSwinging || _isBossSlamming || Time.time < _attackLockUntil || Time.time < _hitFlinchUntil)
             return true;
         if (animatorBridge != null && (animatorBridge.IsInAttackState || animatorBridge.IsInHitState))
             return true;
@@ -563,13 +643,71 @@ public class MonsterEnemyNPC : EnemyNPC
         if (_swingRoutine != null) StopCoroutine(_swingRoutine);
 
         _isSwinging = true;
-        _attackLockUntil = Time.time + minAttackAnimLock;
-        _nextAttackAt = Time.time + AttackCooldown;
+        float cdScale = IsEnragedNet ? 0.78f : 1.0f;
+        _attackLockUntil = Time.time + (minAttackAnimLock * cdScale);
+        _nextAttackAt = Time.time + (AttackCooldown * cdScale);
         if (isCounter)
             _hyperArmorUntil = Time.time + 1.45f;
 
         RPC_MonsterPlayAttack(attackIndex, isCounter);
         _swingRoutine = StartCoroutine(MeleeSwingImpactRoutine(target, isCounter));
+    }
+
+    // ------------------------------------------------------------------ Boss AoE Ground Slam (Telegraphed & Dodgeable)
+
+    private void StartBossSlamAuthority(PlayerCombat target)
+    {
+        if (!IsAlive || !IsBoss || _isBossSlamming || target == null) return;
+        if (_swingRoutine != null) { StopCoroutine(_swingRoutine); _swingRoutine = null; _isSwinging = false; }
+        if (_bossSlamRoutine != null) StopCoroutine(_bossSlamRoutine);
+
+        _isBossSlamming = true;
+        float cd = IsEnragedNet ? Mathf.Max(5.5f, bossSlamCooldown * 0.72f) : bossSlamCooldown;
+        _nextBossSlamAt = Time.time + cd;
+        _nextAttackAt = Time.time + bossSlamTelegraphSeconds + 0.9f;
+        _hyperArmorUntil = Time.time + bossSlamTelegraphSeconds + 0.65f;
+
+        FaceInstant(target.transform.position);
+        Vector3 slamCenter = Vector3.Lerp(transform.position, target.transform.position, 0.35f);
+        SnapToGround(ref slamCenter, searchUp: 4.0f, searchDown: 15.0f);
+
+        _bossSlamRoutine = StartCoroutine(BossSlamAuthorityRoutine(slamCenter));
+    }
+
+    private IEnumerator BossSlamAuthorityRoutine(Vector3 groundCenter)
+    {
+        float telegraphDur = IsEnragedNet ? Mathf.Max(0.85f, bossSlamTelegraphSeconds * 0.85f) : bossSlamTelegraphSeconds;
+        RPC_BossSlamTelegraph(groundCenter, bossSlamRadius, telegraphDur);
+
+        float endAt = Time.time + telegraphDur;
+        while (Time.time < endAt && IsAlive && !IsStunnedNet)
+            yield return null;
+
+        if (IsAlive && !IsStunnedNet && Object != null && Object.IsValid && Object.HasStateAuthority)
+        {
+            RPC_BossSlamImpact(groundCenter, bossSlamRadius);
+
+            int rawSlam = Mathf.RoundToInt(AttackDamage * bossSlamDamageMultiplier);
+            int slamDmg = Mathf.Min(rawSlam, AttackDamage * 2);
+            _lastDamageDealtToPlayerStamp = Time.time;
+
+            for (int i = 0; i < PlayerCombat.All.Count; i++)
+            {
+                PlayerCombat p = PlayerCombat.All[i];
+                if (p == null || !p.IsSpawned || p.IsDead) continue;
+                if (SafeZone.IsPlayerInAnySafeZone(p)) continue;
+
+                float dist = PlanarDistance(groundCenter, p.transform.position);
+                if (dist <= bossSlamRadius)
+                {
+                    p.RPC_ReceiveNpcDamage(Object.Id, slamDmg);
+                }
+            }
+        }
+
+        yield return new WaitForSeconds(0.55f);
+        _isBossSlamming = false;
+        _bossSlamRoutine = null;
     }
 
     private IEnumerator MeleeSwingImpactRoutine(PlayerCombat target, bool isCounter)
@@ -639,6 +777,15 @@ public class MonsterEnemyNPC : EnemyNPC
                 State = NpcState.Chasing;
         }
 
+        // Boss Phase 2 Enrage check (< 50% HP while alive)
+        if (IsBoss && !IsEnragedNet && CurrentHealth > 0 &&
+            CurrentHealth <= Mathf.RoundToInt(MaxHealth * bossEnrageHpFraction))
+        {
+            IsEnragedNet = true;
+            _nextBossSlamAt = Mathf.Min(_nextBossSlamAt, Time.time + 1.8f);
+            RPC_BossEnrageFeedback();
+        }
+
         // Case 1: Player hit the monster while Guarding!
         if (IsGuarding)
         {
@@ -706,17 +853,13 @@ public class MonsterEnemyNPC : EnemyNPC
     private void HandleBaseOnDeath()
     {
         _deathStamp = Time.time;
-        _isSwinging = false;
-        if (_swingRoutine != null)
-        {
-            StopCoroutine(_swingRoutine);
-            _swingRoutine = null;
-        }
+        StopAllCombatRoutines();
 
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
         {
             if (IsGuarding) ExitGuardAuthority();
             IsStunnedNet = false;
+            IsEnragedNet = false;
             RollAndSpawnConfiguredLoot();
         }
 
@@ -876,6 +1019,7 @@ public class MonsterEnemyNPC : EnemyNPC
         _guardUntil = Time.time + duration;
         _nextGuardAllowedAt = Time.time + duration + guardCooldown;
         _hyperArmorUntil = Time.time + duration;
+        animatorBridge?.SetGuarding(true);
         RPC_MonsterGuardFeedback((byte)MonsterGuardFeedback.GuardRaised);
     }
 
@@ -886,7 +1030,15 @@ public class MonsterEnemyNPC : EnemyNPC
         {
             IsGuarding = false;
             Defense = _baseDefense;
+            animatorBridge?.SetGuarding(false);
         }
+    }
+
+    private Vector3 GetOverheadPopupPosition()
+    {
+        float modelHeight = animatorBridge?.Config != null ? Mathf.Max(0.8f, animatorBridge.Config.targetWorldHeight) : 2.15f;
+        float footY = transform.position.y - GetGroundPivotHeight();
+        return new Vector3(transform.position.x, footY + modelHeight + 0.35f, transform.position.z);
     }
 
     // ------------------------------------------------------------------ RPCs (All Peers)
@@ -894,11 +1046,12 @@ public class MonsterEnemyNPC : EnemyNPC
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_MonsterPlayAttack(int attackIndex, NetworkBool isCounter)
     {
+        animatorBridge?.SetGuarding(false);
         animatorBridge?.TriggerAttack(attackIndex);
         PlayRandomClip(animatorBridge?.Config?.attackSwingClips);
         if (isCounter)
         {
-            FloatingDamagePopup.SpawnWarning(transform.position + Vector3.up * 2.4f, "COUNTER!", new Color(1.0f, 0.42f, 0.12f, 1f));
+            FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "COUNTER!", new Color(1.0f, 0.42f, 0.12f, 1f));
         }
     }
 
@@ -915,17 +1068,19 @@ public class MonsterEnemyNPC : EnemyNPC
     public void RPC_MonsterGuardFeedback(byte feedbackByte)
     {
         var kind = (MonsterGuardFeedback)feedbackByte;
-        Vector3 topPos = transform.position + Vector3.up * 2.45f;
+        Vector3 topPos = GetOverheadPopupPosition();
 
         switch (kind)
         {
             case MonsterGuardFeedback.GuardRaised:
                 SetGuardVfxVisible(true);
+                animatorBridge?.SetGuarding(true);
                 PlayClip(animatorBridge?.Config?.guardRaiseClip);
                 FloatingDamagePopup.SpawnWarning(topPos, "GUARD!", new Color(1.0f, 0.78f, 0.22f, 1f));
                 break;
 
             case MonsterGuardFeedback.Blocked:
+                animatorBridge?.SetGuarding(false);
                 animatorBridge?.PlayBlockFlash();
                 PlayClip(animatorBridge?.Config?.guardBlockClip);
                 FloatingDamagePopup.SpawnWarning(topPos, "BLOCKED!", new Color(0.95f, 0.85f, 0.25f, 1f));
@@ -934,6 +1089,7 @@ public class MonsterEnemyNPC : EnemyNPC
             case MonsterGuardFeedback.GuardBreak:
                 SetGuardVfxVisible(false);
                 SetStunVfxVisible(true);
+                animatorBridge?.SetGuarding(false);
                 animatorBridge?.PlayHitFlash();
                 animatorBridge?.SetStunned(true);
                 PlayClip(animatorBridge?.Config?.guardBreakClip);
@@ -942,9 +1098,38 @@ public class MonsterEnemyNPC : EnemyNPC
         }
     }
 
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BossSlamTelegraph(Vector3 groundCenter, float radius, float duration)
+    {
+        animatorBridge?.StartSkillCast(0);
+        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "SLAM!", new Color(1.0f, 0.22f, 0.12f, 1f));
+        if (_slamVfxRoutine != null) StopCoroutine(_slamVfxRoutine);
+        _slamVfxRoutine = StartCoroutine(BossSlamTelegraphRoutine(groundCenter, radius, duration));
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BossSlamImpact(Vector3 groundCenter, float radius)
+    {
+        ClearActiveSlamTelegraph();
+        animatorBridge?.ReleaseSkill();
+        PlayRandomClip(animatorBridge?.Config?.attackSwingClips);
+        if (_slamVfxRoutine != null) StopCoroutine(_slamVfxRoutine);
+        _slamVfxRoutine = StartCoroutine(BossSlamShockwaveRoutine(groundCenter, radius));
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BossEnrageFeedback()
+    {
+        animatorBridge?.SetPersistentEnrageGlow(true);
+        animatorBridge?.SetSpeedScale(1.18f);
+        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "ENRAGE!", new Color(1.0f, 0.14f, 0.14f, 1f));
+    }
+
     private void OnGuardVisualStateChanged()
     {
-        SetGuardVfxVisible(IsGuarding && IsAlive);
+        bool guarding = IsGuarding && IsAlive;
+        SetGuardVfxVisible(guarding);
+        animatorBridge?.SetGuarding(guarding);
     }
 
     private void OnStunVisualStateChanged()
@@ -954,11 +1139,19 @@ public class MonsterEnemyNPC : EnemyNPC
         SetStunVfxVisible(stunned);
     }
 
-    // ------------------------------------------------------------------ Shared-Material Combat VFX (Guard + Stun)
+    private void OnEnrageVisualStateChanged()
+    {
+        bool enraged = IsEnragedNet && IsAlive;
+        animatorBridge?.SetPersistentEnrageGlow(enraged);
+        animatorBridge?.SetSpeedScale(enraged ? 1.18f : 1.0f);
+    }
+
+    // ------------------------------------------------------------------ Shared-Material Combat VFX (Guard + Stun + Boss Slam)
 
     private static void EnsureSharedVfxMaterials()
     {
-        if (s_guardBarrierMat != null && s_guardRingMat != null && s_stunOrbMat != null) return;
+        if (s_guardBarrierMat != null && s_guardRingMat != null && s_stunOrbMat != null &&
+            s_slamOuterRingMat != null && s_slamInnerFillMat != null) return;
 
         Shader shader = Shader.Find("Sprites/Default");
         if (shader == null) shader = Shader.Find("Universal Render Pipeline/Unlit");
@@ -980,11 +1173,121 @@ public class MonsterEnemyNPC : EnemyNPC
             s_stunOrbMat = new Material(shader) { name = "Mat_MonsterStunOrb_Shared" };
             s_stunOrbMat.color = new Color(1.0f, 0.90f, 0.25f, 0.95f);
         }
+        if (s_slamOuterRingMat == null)
+        {
+            s_slamOuterRingMat = new Material(shader) { name = "Mat_BossSlamOuter_Shared" };
+            s_slamOuterRingMat.color = new Color(1.0f, 0.15f, 0.10f, 0.42f);
+        }
+        if (s_slamInnerFillMat == null)
+        {
+            s_slamInnerFillMat = new Material(shader) { name = "Mat_BossSlamInner_Shared" };
+            s_slamInnerFillMat.color = new Color(1.0f, 0.32f, 0.10f, 0.55f);
+        }
+    }
+
+    private void ClearActiveSlamTelegraph()
+    {
+        if (_activeSlamTelegraphGo != null)
+        {
+            Destroy(_activeSlamTelegraphGo);
+            _activeSlamTelegraphGo = null;
+        }
+    }
+
+    private IEnumerator BossSlamTelegraphRoutine(Vector3 groundCenter, float radius, float duration)
+    {
+        EnsureSharedVfxMaterials();
+        ClearActiveSlamTelegraph();
+
+        GameObject root = new GameObject("BossSlamTelegraphVFX");
+        root.transform.position = new Vector3(groundCenter.x, groundCenter.y + 0.06f, groundCenter.z);
+        _activeSlamTelegraphGo = root;
+
+        GameObject outerDisc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        outerDisc.name = "OuterBoundary";
+        var oc = outerDisc.GetComponent<Collider>();
+        if (oc != null) Destroy(oc);
+        outerDisc.transform.SetParent(root.transform, false);
+        outerDisc.transform.localScale = new Vector3(radius * 2f, 0.015f, radius * 2f);
+        var or = outerDisc.GetComponent<Renderer>();
+        if (or != null)
+        {
+            or.shadowCastingMode = ShadowCastingMode.Off;
+            or.receiveShadows = false;
+            if (s_slamOuterRingMat != null) or.sharedMaterial = s_slamOuterRingMat;
+        }
+
+        GameObject innerFill = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        innerFill.name = "InnerFill";
+        var ic = innerFill.GetComponent<Collider>();
+        if (ic != null) Destroy(ic);
+        innerFill.transform.SetParent(root.transform, false);
+        innerFill.transform.localPosition = new Vector3(0f, 0.02f, 0f);
+        innerFill.transform.localScale = new Vector3(0.2f, 0.02f, 0.2f);
+        var ir = innerFill.GetComponent<Renderer>();
+        if (ir != null)
+        {
+            ir.shadowCastingMode = ShadowCastingMode.Off;
+            ir.receiveShadows = false;
+            if (s_slamInnerFillMat != null) ir.sharedMaterial = s_slamInnerFillMat;
+        }
+
+        float start = Time.time;
+        float safeDur = Mathf.Max(0.1f, duration);
+        while (Time.time - start < safeDur && _activeSlamTelegraphGo != null && IsAlive)
+        {
+            float t = Mathf.Clamp01((Time.time - start) / safeDur);
+            float d = Mathf.Lerp(0.3f, radius * 2f, t);
+            innerFill.transform.localScale = new Vector3(d, 0.02f, d);
+            yield return null;
+        }
+
+        ClearActiveSlamTelegraph();
+        _slamVfxRoutine = null;
+    }
+
+    private IEnumerator BossSlamShockwaveRoutine(Vector3 groundCenter, float radius)
+    {
+        EnsureSharedVfxMaterials();
+        GameObject wave = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        wave.name = "BossSlamShockwaveVFX";
+        var wc = wave.GetComponent<Collider>();
+        if (wc != null) Destroy(wc);
+        wave.transform.position = new Vector3(groundCenter.x, groundCenter.y + 0.12f, groundCenter.z);
+        var wr = wave.GetComponent<Renderer>();
+        if (wr != null)
+        {
+            wr.shadowCastingMode = ShadowCastingMode.Off;
+            wr.receiveShadows = false;
+            if (s_slamInnerFillMat != null) wr.sharedMaterial = s_slamInnerFillMat;
+        }
+
+        float start = Time.time;
+        const float waveDur = 0.28f;
+        while (Time.time - start < waveDur && wave != null)
+        {
+            float t = (Time.time - start) / waveDur;
+            float diam = Mathf.Lerp(radius * 0.6f, radius * 2.25f, t);
+            float h = Mathf.Lerp(0.28f, 0.01f, t);
+            wave.transform.localScale = new Vector3(diam, h, diam);
+            yield return null;
+        }
+
+        if (wave != null) Destroy(wave);
+        _slamVfxRoutine = null;
     }
 
     private void BuildCombatVfx()
     {
         EnsureSharedVfxMaterials();
+
+        // Dynamically calibrate VFX height & size to this monster's real world height (Slime 1.1m .. BossOgre 3.2m!)
+        float modelHeight = animatorBridge?.Config != null ? Mathf.Max(0.8f, animatorBridge.Config.targetWorldHeight) : 2.15f;
+        float rootScaleY = Mathf.Max(0.1f, transform.localScale.y);
+        float groundLocalY = -GetGroundPivotHeight() / rootScaleY;
+        float heightScale = Mathf.Clamp(modelHeight / 2.15f, 0.55f, 1.45f);
+        float chestLocalY = groundLocalY + (modelHeight * 0.50f / rootScaleY);
+        float headLocalY = groundLocalY + (modelHeight / rootScaleY) + (0.22f / rootScaleY);
 
         // 1. Guard Shield VFX
         if (_guardVfxRoot == null)
@@ -1008,8 +1311,8 @@ public class MonsterEnemyNPC : EnemyNPC
                 var col = barrier.GetComponent<Collider>();
                 if (col != null) Destroy(col);
                 barrier.transform.SetParent(_guardVfxRoot.transform, false);
-                barrier.transform.localPosition = new Vector3(0f, 0.10f, 0.55f);
-                barrier.transform.localScale = new Vector3(1.15f, 1.35f, 0.35f);
+                barrier.transform.localPosition = new Vector3(0f, chestLocalY, 0.55f * heightScale);
+                barrier.transform.localScale = new Vector3(1.10f * heightScale, 1.25f * heightScale, 0.35f * heightScale);
                 var br = barrier.GetComponent<Renderer>();
                 if (br != null)
                 {
@@ -1024,8 +1327,8 @@ public class MonsterEnemyNPC : EnemyNPC
                 var rcol = ring.GetComponent<Collider>();
                 if (rcol != null) Destroy(rcol);
                 ring.transform.SetParent(_guardVfxRoot.transform, false);
-                ring.transform.localPosition = new Vector3(0f, -0.96f, 0f);
-                ring.transform.localScale = new Vector3(1.65f, 0.02f, 1.65f);
+                ring.transform.localPosition = new Vector3(0f, groundLocalY + 0.04f, 0f);
+                ring.transform.localScale = new Vector3(1.60f * heightScale, 0.02f, 1.60f * heightScale);
                 var rr = ring.GetComponent<Renderer>();
                 if (rr != null)
                 {
@@ -1039,7 +1342,7 @@ public class MonsterEnemyNPC : EnemyNPC
             }
         }
 
-        // 2. Orbiting Stun Halo VFX (makes Guard Break Stun unmistakable even without a custom Stun animation clip)
+        // 2. Orbiting Stun Halo VFX (auto-positioned right above the monster's real head height!)
         if (_stunVfxRoot == null)
         {
             Transform existingStun = transform.Find("MonsterStunVFX");
@@ -1047,13 +1350,13 @@ public class MonsterEnemyNPC : EnemyNPC
             {
                 _stunVfxRoot = existingStun.gameObject;
                 _stunOrbitPivot = existingStun.Find("OrbitPivot") ?? existingStun;
+                _stunVfxRoot.transform.localPosition = new Vector3(0f, headLocalY, 0f);
                 _stunVfxRoot.SetActive(false);
             }
             else
             {
                 _stunVfxRoot = new GameObject("MonsterStunVFX");
                 _stunVfxRoot.transform.SetParent(transform, false);
-                float headLocalY = 1.15f;
                 _stunVfxRoot.transform.localPosition = new Vector3(0f, headLocalY, 0f);
 
                 var pivotGo = new GameObject("OrbitPivot");
@@ -1061,7 +1364,7 @@ public class MonsterEnemyNPC : EnemyNPC
                 _stunOrbitPivot = pivotGo.transform;
 
                 const int orbCount = 3;
-                const float orbitRadius = 0.42f;
+                float orbitRadius = 0.42f * Mathf.Clamp(heightScale, 0.75f, 1.35f);
                 for (int i = 0; i < orbCount; i++)
                 {
                     float ang = (i / (float)orbCount) * Mathf.PI * 2f;

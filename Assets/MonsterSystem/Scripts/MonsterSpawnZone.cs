@@ -421,19 +421,23 @@ public class MonsterSpawnZone : MonoBehaviour
 
         EnemyNPC spawned = runner.Spawn(monsterPrefab, spawnPos, rot, null, (r, obj) =>
         {
+            var monsterNpc = obj.GetComponent<MonsterEnemyNPC>();
+            bool configuredBoss = monsterNpc != null && monsterNpc.IsConfiguredAsBoss;
+
             var npc = obj.GetComponent<EnemyNPC>();
             if (npc != null)
             {
                 npc.CampId = 0; // Individual solo-pull zone (no shared camp aggro)
-                npc.IsBoss = false;
+                npc.IsBoss = configuredBoss;
                 npc.ScaledLevel = scaleLvl;
                 npc.ApplyDynamicScaling(scaleLvl);
             }
-            var monsterNpc = obj.GetComponent<MonsterEnemyNPC>();
             if (monsterNpc != null)
             {
                 monsterNpc.ZoneSignature = sig;
                 monsterNpc.ZoneSlotIndex = slotIdx;
+                if (configuredBoss)
+                    monsterNpc.SuppressBaseBossPrimitives();
             }
         });
 

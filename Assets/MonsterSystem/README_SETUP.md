@@ -1,49 +1,49 @@
 # MonsterSystem — แพ็กเกจมอนสเตอร์แบบพกพา (โฟลเดอร์เดียวจบ / Zero Merge Conflicts)
 
-ทุกอย่างของระบบมอนสเตอร์ทั้ง **3 เผ่า (Orc, Golem, Troll)** ถูกรวมและแยกสัดส่วนไว้อย่างเป็นระเบียบใน **โฟลเดอร์เดียวเท่านั้น (`Assets/MonsterSystem/`)**:
+ทุกอย่างของระบบมอนสเตอร์ทั้ง **6 เผ่า (Slime, TurtleShell, Orc, Troll, Golem, BossOgre)** ถูกรวมและแยกสัดส่วนไว้อย่างเป็นระเบียบใน **โฟลเดอร์เดียวเท่านั้น (`Assets/MonsterSystem/`)**:
 
 ```text
 Assets/MonsterSystem/
 ├── Models/
-│   ├── Orc/                              # โมเดล Rigged FBX + คลิปแอนิเมชัน + PBR Textures
-│   ├── Golem/                            # โมเดล Rigged FBX (7 ท่าในตัว) + G2.mat + Golem_Albedo.png
-│   └── Troll/                            # โมเดล Rigged FBX (8 ท่าในตัว) + Textures/ (4 URP Lit Materials + 15 PBR Maps)
+│   ├── Slime/                            # สไลม์ (16 ท่าแยก + PBR URP Lit)
+│   ├── TurtleShell/                      # เต่าเกราะ (18 ท่าแยก มี Defend/Dizzy + PBR URP Lit)
+│   ├── Orc/                              # ออร์ค (8 ท่าแยก + PBR Textures)
+│   ├── Troll/                            # โทรลล์ (8 ท่าในตัว + 4 URP Lit Materials + 15 PBR Maps)
+│   ├── Golem/                            # โกเล็ม (7 ท่าในตัว + URP Lit Material)
+│   └── BossOgre/                         # บอสโอเกอร์ (15 ท่าในตัว ตี 3 คอมโบ + URP Lit Body & Eyes)
 ├── Animations/
 │   ├── AC_Monster_Base.controller        # Base Animator กลาง (10 Params ใช้ร่วมกันทุกมอนสเตอร์)
-│   ├── Orc/
-│   │   ├── AOC_Orc.overrideController
-│   │   └── Config_Orc.asset              # ปรับ Stat, ความสูง, จังหวะฟัน, ตาราง Loot Drop (%), Gold, เสียง 3D
-│   ├── Golem/
-│   │   ├── AOC_Golem.overrideController
-│   │   └── Config_Golem.asset
-│   └── Troll/
-│       ├── AOC_Troll.overrideController
-│       └── Config_Troll.asset
-├── Materials/
-│   ├── Orc/                              # URP Lit PBR Materials + Packed MetallicSmoothness + _EMISSION
-│   ├── Golem/                            # URP Lit PBR Material + _EMISSION (Hit/Block Flash)
-│   └── Troll/                            # 4 URP Lit PBR Materials (Body/Hair/Tanga/Weapon) + _EMISSION
+│   └── <ชื่อเผ่า>/
+│       ├── AOC_<ชื่อเผ่า>.overrideController
+│       └── Config_<ชื่อเผ่า>.asset       # ปรับ Stat, ความสูง, จังหวะฟัน, isBoss, Loot Drop (%), Gold, เสียง 3D
+├── Materials/<ชื่อเผ่า>/                 # URP Lit PBR Materials + _EMISSION (Hit/Block Flash)
 ├── Prefabs/
-│   ├── MonsterSystem_Manager.prefab      # Empty กลางคุมระบบทั้งฉาก (มี Zone_Orc + Zone_Golem + Zone_Troll ครบในตัวเดียว!)
+│   ├── MonsterSystem_Manager.prefab      # Empty กลางคุมระบบทั้งฉาก (มีครบทั้ง 6 โซนในตัวเดียว!)
 │   ├── Monsters/
-│   │   ├── Enemy_Orc.prefab              # Orc (สูง 2.15m | Lv.1 ~200 HP / 15 ATK | 2 ท่าตี)
-│   │   ├── Enemy_Golem.prefab            # Golem (สูง 3.00m | Lv.1 ~318 HP / 22 ATK / +4 DEF | 1 ท่าตีหนัก)
-│   │   └── Enemy_Troll.prefab            # Troll (สูง 2.70m | Lv.1 ~258 HP / 18 ATK / +2 DEF | 2 ท่าตี)
+│   │   ├── Enemy_Slime.prefab            # Slime (1.10m | Lv.1 ~96 HP / 8 ATK | 2 ท่าตี + Dizzy)
+│   │   ├── Enemy_TurtleShell.prefab      # TurtleShell (1.30m | Lv.1 ~156 HP / 11 ATK / +3 DEF | 2 ท่าตี + Dizzy)
+│   │   ├── Enemy_Orc.prefab              # Orc (2.15m | Lv.1 ~200 HP / 15 ATK | 2 ท่าตี)
+│   │   ├── Enemy_Troll.prefab            # Troll (2.70m | Lv.1 ~258 HP / 18 ATK / +2 DEF | 2 ท่าตี)
+│   │   ├── Enemy_Golem.prefab            # Golem (3.00m | Lv.1 ~318 HP / 22 ATK / +4 DEF | ตีหนัก)
+│   │   └── Enemy_BossOgre.prefab         # BOSS Ogre (3.20m | Boss HP 750+ / ~28 ATK / +5 DEF | 3 คอมโบ | SuperArmor)
 │   └── Zones/
-│       ├── Zone_Orc.prefab               # โซนเกิด Orc (4 ตัว, ระยะห่าง 12m, เกิดใหม่ 35–50 วิ)
-│       ├── Zone_Golem.prefab             # โซนเกิด Golem (2 ตัว, ระยะห่าง 15m, เกิดใหม่ 50–65 วิ)
-│       └── Zone_Troll.prefab             # โซนเกิด Troll (3 ตัว, ระยะห่าง 14m, เกิดใหม่ 40–55 วิ)
+│       ├── Zone_Slime.prefab             # 4 ตัว, ระยะ 10m, เกิดใหม่ 25–40 วิ
+│       ├── Zone_TurtleShell.prefab       # 4 ตัว, ระยะ 11m, เกิดใหม่ 30–45 วิ
+│       ├── Zone_Orc.prefab               # 4 ตัว, ระยะ 12m, เกิดใหม่ 35–50 วิ
+│       ├── Zone_Troll.prefab             # 3 ตัว, ระยะ 14m, เกิดใหม่ 40–55 วิ
+│       ├── Zone_Golem.prefab             # 2 ตัว, ระยะ 15m, เกิดใหม่ 50–65 วิ
+│       └── Zone_BossOgre.prefab          # บอส 1 ตัว, เกิดใหม่ 120–150 วิ
 ├── Scripts/
-│   ├── MonsterSystemManager.cs           # ตัวคุมกลางในฉาก (Global Multipliers + Event Hook สำหรับ Quest/รางวัลในอนาคต)
+│   ├── MonsterSystemManager.cs           # ตัวคุมกลางในฉาก (Global Multipliers + Event Hook สำหรับ Quest)
 │   ├── MonsterAnimationConfig.cs         # ข้อมูลมอนสเตอร์ + ตารางดรอป (%) + ตัวคำนวณโอกาสไม่ออกเลย
-│   ├── MonsterAnimatorBridge.cs          # เชื่อม Animator + ล็อกสะโพกกันสไลด์ (Mixamo / Auto-Rig Pro / CAT Rig) + Hit/Block Flash
-│   ├── MonsterEnemyNPC.cs                # สืบทอด EnemyNPC (ไม่แก้ไฟล์เพื่อน!) + Loot/Gold Drop + Terrain Safe
-│   └── MonsterSpawnZone.cs               # ระบบเกิดใหม่รายตัวแบบ MMO + Anti-Pop-In + Host-Migration Safe
+│   ├── MonsterAnimatorBridge.cs          # เชื่อม Animator + ล็อกสะโพกกันสไลด์ทุก Rig + Hit/Block Flash
+│   ├── MonsterEnemyNPC.cs                # สืบทอด EnemyNPC (ไม่แก้ไฟล์เพื่อน!) + Boss Mode + Loot/Gold Drop + Terrain Safe
+│   └── MonsterSpawnZone.cs               # ระบบเกิดใหม่รายตัวแบบ MMO + Anti-Pop-In + Host-Migration Safe + Boss Spawn
 ├── Editor/
 │   ├── MonsterClipImportProcessor.cs     # ตั้งค่า Generic/NoAvatar/In-Place/Loop อัตโนมัติ
-│   ├── MonsterAnimatorBuilder.cs         # สร้าง Prefab/Zone/Manager อัตโนมัติ + ระบบตรวจสอบ 30 ข้อ
+│   ├── MonsterAnimatorBuilder.cs         # สร้าง Prefab/Zone/Manager อัตโนมัติ + ระบบตรวจสอบครบ 6 เผ่า
 │   └── MonsterSystemEditors.cs           # Custom Inspector ภาษาไทยสำหรับ Config & Manager
-├── VerificationReport.txt                # รายงานผลตรวจอัตโนมัติ (30/30 PASS)
+├── VerificationReport.txt                # รายงานผลตรวจอัตโนมัติ (ครบทั้ง 6 เผ่า)
 └── README_SETUP.md
 ```
 
@@ -51,45 +51,19 @@ Assets/MonsterSystem/
 
 ---
 
-## วิธีขนไปลงบน Branch เพื่อน (2 ขั้นตอนจบ)
+## วิธีขนไปลงบน Branch เพื่อน (3 ขั้นตอนจบ)
 
-### ขั้นตอนที่ 1 — ย้ายโฟลเดอร์เดียวเข้าโปรเจกต์เพื่อน
-1. ก๊อปปี้โฟลเดอร์ **`Assets/MonsterSystem/`** (พร้อมไฟล์ `Assets/MonsterSystem.meta`) ไปวางใน `Assets/` ของ Branch เพื่อน
-2. เปิด Unity รอคอมไพล์เสร็จ
-3. กด **`Tools > Fusion > Rebuild Network Project Config`** 1 ครั้ง เพื่อให้ Photon Fusion ลงทะเบียน `Enemy_Orc`, `Enemy_Golem`, และ `Enemy_Troll` เข้า Network Prefab Table ในเครื่องเพื่อน
-
-### ขั้นตอนที่ 2 — วางตัวคุมกลางลงฉากเพื่อน
-เลือกทำวิธีใดวิธีหนึ่ง:
-- **วิธี A (แนะนำ — วาง Empty ตัวเดียวจบ):** กดเมนู **`Tools > Monster System > 3. Place MonsterSystem_Manager in Active Scene`** (หรือลาก `Assets/MonsterSystem/Prefabs/MonsterSystem_Manager.prefab` ลง Hierarchy) → กางลูกออกมาแล้วเลื่อน **`Zone_Orc`**, **`Zone_Golem`**, **`Zone_Troll`** ไปวางตามจุดที่ต้องการในแมป (รองรับทั้งพื้นราบและ `Terrain` เนินเขาอัตโนมัติ)
-- **วิธี B (วางเฉพาะโซนเดี่ยว):** ลาก `Zone_Orc.prefab`, `Zone_Golem.prefab`, หรือ `Zone_Troll.prefab` จาก `Assets/MonsterSystem/Prefabs/Zones/` ลง Hierarchy ได้โดยตรง
-
----
-
-## วิธีตั้งค่าของดรอป (Loot Drop & % Rate) หลังไปเชื่อมกับของเพื่อน
-1. คลิกเลือก **`Config_Orc.asset`**, **`Config_Golem.asset`**, หรือ **`Config_Troll.asset`** ใน `Assets/MonsterSystem/Animations/<ชื่อเผ่า>/`
-2. ในหมวด **`Loot Drop Table`**:
-   - กด `+` เพิ่มช่อง แล้วลาก **`ItemData`** ของเพื่อนมาวาง
-   - ลากแถบ **`Drop Rate Percent`** (`0% – 100%`) และตั้งจำนวน **`Min / Max Amount`**
-   - เลือกโหมดได้ 2 แบบ:
-     - **`IndependentPerItem`:** ทอยแยกทีละชิ้นตาม `%` ถ้าไม่ติดสักชิ้น = **ไม่ออกเลย**
-     - **`SinglePickTable`:** ทอย 1 ครั้งจาก 100% ส่วนที่เหลือ = **ไม่ออกเลย**
-   - ด้านบน Inspector จะคำนวณให้ดูสด ๆ ว่า **"Chance of NO DROP: XX.X%"**
-3. ตารางดรอปจะไม่หายแม้จะกด Rebuild Prefab ใหม่ และของที่ดรอปจะยิง Raycast วางบนพื้น/เนินจริง (ไม่จมดิน)
-4. *(ถ้าอยากให้ดรอปเงิน Gold ด้วย)* ปรับ `Gold Drop Chance Percent` จาก `0%` เป็นเรทที่ต้องการได้เลย
-
----
-
-## วิธีเพิ่มมอนสเตอร์ตัวใหม่ในอนาคต (แยกโซนใครโซนมัน 100%)
-1. สร้างโฟลเดอร์ใหม่ไว้ใน `Assets/MonsterSystem/Models/<ชื่อมอนสเตอร์>/` เช่น `Models/Goblin/`
-2. วางไฟล์โมเดล FBX (แบบมีกระดูก) + คลิปแอนิเมชัน (รองรับทั้งแยกไฟล์มี `@`, แยกไฟล์ไม่มี `@`, และ 1 ไฟล์ FBX รวมทุกท่า) + `.mat` / Textures (ระบบจะกรองใช้เฉพาะ `.mat` จริงหรือประกอบจาก PNG เป็น URP Lit ให้อัตโนมัติ ไม่ขึ้นสีชมพู/สีเทา)
-3. กดเมนู **`Tools > Monster System > 2. Build All Monsters in Models Folder`** → ได้ `Enemy_Goblin.prefab`, `Zone_Goblin.prefab`, `Config_Goblin.asset` และพ่วงเข้า `MonsterSystem_Manager.prefab` ให้ทันทีโดยไม่ยุ่งกับ Orc/Golem/Troll!
+1. **ย้ายโฟลเดอร์เดียวเข้าโปรเจกต์เพื่อน:** ก๊อปปี้โฟลเดอร์ **`Assets/MonsterSystem/`** (พร้อม `Assets/MonsterSystem.meta`) ไปวางใน `Assets/` ของ branch เพื่อน *(หรือ Merge branch `CharactersEnemy` เข้าไปได้เลย)*
+2. **ลงทะเบียน Fusion 1 ครั้ง:** เปิด Unity รอคอมไพล์เสร็จ แล้วกด **`Tools > Fusion > Rebuild Network Project Config`** 1 ครั้ง เพื่อให้ Photon Fusion ลงทะเบียนมอนสเตอร์ทั้ง 6 ตัว (`Enemy_Slime`, `Enemy_TurtleShell`, `Enemy_Orc`, `Enemy_Troll`, `Enemy_Golem`, `Enemy_BossOgre`)
+3. **วางลงฉากเพื่อนแล้วกด Play:**
+   - **แบบวางตัวเดียวจบ:** ลาก **`Assets/MonsterSystem/Prefabs/MonsterSystem_Manager.prefab`** ลง Hierarchy (หรือกด `Tools > Monster System > 3. Place MonsterSystem_Manager in Active Scene`) แล้วขยับโซนลูกทั้ง 6 โซนไปวางตามจุดต่าง ๆ บนแมป
+   - **แบบวางแยกโซนเดี่ยว:** ลาก `Zone_Slime`, `Zone_TurtleShell`, `Zone_Orc`, `Zone_Troll`, `Zone_Golem`, หรือ `Zone_BossOgre` จาก `Assets/MonsterSystem/Prefabs/Zones/` ไปวางตรงจุดที่ต้องการได้เลย
 
 ---
 
 ## ฟีเจอร์เด่นในแพ็ก
-- **3 สายพันธุ์พร้อมใช้งาน:** **Orc** (สายสมดุล), **Troll** (อึด+ตีแรง 2 ท่า), **Golem** (ยักษ์แทงก์พลังโจมตีหนัก + DEF สูง)
+- **6 สายพันธุ์ไล่ระดับครบทั้งแมป:** มอนเริ่มต้น (`Slime`) → มอนเกราะ (`TurtleShell`) → สายสมดุล (`Orc`) → มอนใหญ่ (`Troll`) → แทงก์ยักษ์ (`Golem`) → **บอสใหญ่ (`BossOgre` ตี 3 คอมโบ, SuperArmor ไม่ชะงัก, แถบเลือด Boss สีทองแดง, EXP 300+)**
 - **Solo-Pull (ลากตีทีละตัว):** ระยะเห็น `5.5m`, `CampId = 0` ไม่ลากทั้งค่ายมารุม
-- **Zero-Slide + Impact Timing:** ล็อกขา + ล็อกสะโพกทุกโครงกระดูก (`Hips`/`Pelvis`/`root.x`/`cave_troll_Hub001`), เช็กโดนดาเมจตรงจังหวะแขนเหวี่ยง ผู้เล่นกลิ้งหลบได้จริง
-- **Anti-Stunlock + Block & Counter + Guard Break:** ตีสะดุ้งครบ 2 ที → ยกการ์ด (`GUARD!`), สแปม Combo 1–2 ใส่การ์ด → สวนทันที (`COUNTER!`), ใช้ Combo 3 → `GUARD BREAK!` ติด Stun `1.5 วิ` พร้อมดาวหมุนบนหัว
+- **Zero-Slide + Grounding เป๊ะทุก Rig:** รองรับทั้ง Mixamo, Auto-Rig Pro, 3ds Max CAT, Blender Rigify, และ Non-Humanoid (Slime/TurtleShell) ติดพื้น `y = 0` ไม่มี T-Pose
+- **Anti-Stunlock + Block & Counter + Guard Break:** ตีสะดุ้งครบ 2 ที → ยกการ์ด (`GUARD!`), สแปม Combo 1–2 → สวน (`COUNTER!`), ใช้ Combo 3 → `GUARD BREAK!` ติด Stun `1.5 วิ` พร้อมดาวหมุนบนหัว
 - **MMO Respawn + Host-Migration Safe:** เกิดใหม่แยกรายตัว + Anti-Pop-In `6m` + โอน Host ในโหมดหลายคนไม่เสกเบิ้ล + Fallback Spawn เมื่อเข้าห้อง Shared ที่ Master ยังไม่ได้วางโซน
-- **Scene Hub (`MonsterSystem_Manager`):** ปรับตัวคูณ HP/ATK/Respawn Speed/Drop Rate ทั้งแมปจากจุดเดียว + Event `OnAnyMonsterKilled` เผื่อเชื่อมระบบ Quest ของเพื่อนในอนาคต

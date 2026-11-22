@@ -49,12 +49,25 @@ public static class MonsterAnimatorBuilder
     public const string TrollPrefabPath = MonsterPrefabsRoot + "/Enemy_Troll.prefab";
     public const string TrollZonePrefabPath = ZonePrefabsRoot + "/Zone_Troll.prefab";
 
+    public const string SlimeSourceFolder = ModelsRoot + "/Slime";
+    public const string SlimePrefabPath = MonsterPrefabsRoot + "/Enemy_Slime.prefab";
+    public const string SlimeZonePrefabPath = ZonePrefabsRoot + "/Zone_Slime.prefab";
+
+    public const string TurtleShellSourceFolder = ModelsRoot + "/TurtleShell";
+    public const string TurtleShellPrefabPath = MonsterPrefabsRoot + "/Enemy_TurtleShell.prefab";
+    public const string TurtleShellZonePrefabPath = ZonePrefabsRoot + "/Zone_TurtleShell.prefab";
+
+    public const string BossOgreSourceFolder = ModelsRoot + "/BossOgre";
+    public const string BossOgrePrefabPath = MonsterPrefabsRoot + "/Enemy_BossOgre.prefab";
+    public const string BossOgreZonePrefabPath = ZonePrefabsRoot + "/Zone_BossOgre.prefab";
+
     // Canonical placeholder clip keys embedded inside AC_Monster_Base.controller
     private const string KeySpawn = "Placeholder_Spawn";
     private const string KeyIdle = "Placeholder_Idle";
     private const string KeyWalk = "Placeholder_Walk";
     private const string KeyRun = "Placeholder_Run";
     private const string KeyCombatIdle = "Placeholder_Combat_Idle";
+    private const string KeyGuard = "Placeholder_Guard";
     private const string KeyAttack01 = "Placeholder_Attack_01";
     private const string KeyAttack02 = "Placeholder_Attack_02";
     private const string KeyAttack03 = "Placeholder_Attack_03";
@@ -81,7 +94,10 @@ public static class MonsterAnimatorBuilder
                              !File.Exists(ManagerPrefabPath) ||
                              !File.Exists(VerificationReportPath) ||
                              (Directory.Exists(GolemSourceFolder) && (!File.Exists(GolemPrefabPath) || !File.Exists(GolemZonePrefabPath))) ||
-                             (Directory.Exists(TrollSourceFolder) && (!File.Exists(TrollPrefabPath) || !File.Exists(TrollZonePrefabPath)));
+                             (Directory.Exists(TrollSourceFolder) && (!File.Exists(TrollPrefabPath) || !File.Exists(TrollZonePrefabPath))) ||
+                             (Directory.Exists(SlimeSourceFolder) && (!File.Exists(SlimePrefabPath) || !File.Exists(SlimeZonePrefabPath))) ||
+                             (Directory.Exists(TurtleShellSourceFolder) && (!File.Exists(TurtleShellPrefabPath) || !File.Exists(TurtleShellZonePrefabPath))) ||
+                             (Directory.Exists(BossOgreSourceFolder) && (!File.Exists(BossOgrePrefabPath) || !File.Exists(BossOgreZonePrefabPath)));
             if (needBuild && Directory.Exists(ModelsRoot))
             {
                 BuildAllMonstersInModelsFolder();
@@ -166,11 +182,20 @@ public static class MonsterAnimatorBuilder
                 bool isBoss = monsterName.IndexOf("boss", StringComparison.OrdinalIgnoreCase) >= 0;
                 float height = ResolveDefaultWorldHeight(monsterName, isBoss);
                 int defaultCount = ResolveDefaultSpawnCount(monsterName, isBoss);
-                float defaultSpacing = monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 15f
-                                     : (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 14f : 12f);
+                float defaultSpacing = isBoss ? 16f
+                                     : monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 15f
+                                     : monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 14f
+                                     : monsterName.Equals("Slime", StringComparison.OrdinalIgnoreCase) ? 10f
+                                     : monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase) ? 11f
+                                     : 12f;
                 float defaultRadius = defaultSpacing + 3f;
-                float respawnMin = isBoss ? 180f : (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 50f : (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 40f : 35f));
-                float respawnMax = respawnMin + 15f;
+                float respawnMin = isBoss ? 120f
+                                 : monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 50f
+                                 : monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 40f
+                                 : monsterName.Equals("Slime", StringComparison.OrdinalIgnoreCase) ? 25f
+                                 : monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase) ? 30f
+                                 : 35f;
+                float respawnMax = isBoss ? 150f : respawnMin + 15f;
 
                 string prefabPath = $"{MonsterPrefabsRoot}/Enemy_{monsterName}.prefab";
                 string zonePath = $"{ZonePrefabsRoot}/Zone_{monsterName}.prefab";
@@ -235,9 +260,11 @@ public static class MonsterAnimatorBuilder
 
     private static float ResolveDefaultWorldHeight(string monsterName, bool isBoss)
     {
-        if (isBoss) return 3.2f;
+        if (isBoss) return 3.20f;
         if (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase)) return 3.00f;
         if (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase)) return 2.70f;
+        if (monsterName.Equals("Slime", StringComparison.OrdinalIgnoreCase)) return 1.10f;
+        if (monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase)) return 1.30f;
         return 2.15f;
     }
 
@@ -363,8 +390,9 @@ public static class MonsterAnimatorBuilder
         controller.AddParameter("Hit", AnimatorControllerParameterType.Trigger);
         controller.AddParameter("IsStunned", AnimatorControllerParameterType.Bool);
         controller.AddParameter("IsDead", AnimatorControllerParameterType.Bool);
+        controller.AddParameter("IsGuarding", AnimatorControllerParameterType.Bool);
 
-        // 2. Embed 13 unique placeholder clips
+        // 2. Embed 14 unique placeholder clips
         var clips = new Dictionary<string, AnimationClip>
         {
             { KeySpawn, CreatePlaceholderClip(controller, KeySpawn, 0.20f, loop: false) },
@@ -372,6 +400,7 @@ public static class MonsterAnimatorBuilder
             { KeyWalk, CreatePlaceholderClip(controller, KeyWalk, 1.00f, loop: true) },
             { KeyRun, CreatePlaceholderClip(controller, KeyRun, 1.00f, loop: true) },
             { KeyCombatIdle, CreatePlaceholderClip(controller, KeyCombatIdle, 1.00f, loop: true) },
+            { KeyGuard, CreatePlaceholderClip(controller, KeyGuard, 1.00f, loop: true) },
             { KeyAttack01, CreatePlaceholderClip(controller, KeyAttack01, 1.00f, loop: false) },
             { KeyAttack02, CreatePlaceholderClip(controller, KeyAttack02, 1.00f, loop: false) },
             { KeyAttack03, CreatePlaceholderClip(controller, KeyAttack03, 1.00f, loop: false) },
@@ -409,6 +438,25 @@ public static class MonsterAnimatorBuilder
 
         AnimatorState combatIdleState = rootSm.AddState("Combat_Idle", new Vector3(520f, 0f, 0f));
         combatIdleState.motion = clips[KeyCombatIdle];
+
+        AnimatorState guardState = rootSm.AddState("Guard", new Vector3(520f, 110f, 0f));
+        guardState.motion = clips[KeyGuard];
+        guardState.tag = "Guard";
+
+        var tLocoToGuard = locomotionState.AddTransition(guardState);
+        tLocoToGuard.hasExitTime = false;
+        tLocoToGuard.duration = 0.12f;
+        tLocoToGuard.AddCondition(AnimatorConditionMode.If, 0f, "IsGuarding");
+
+        var tCombatToGuard = combatIdleState.AddTransition(guardState);
+        tCombatToGuard.hasExitTime = false;
+        tCombatToGuard.duration = 0.12f;
+        tCombatToGuard.AddCondition(AnimatorConditionMode.If, 0f, "IsGuarding");
+
+        var tGuardToCombat = guardState.AddTransition(combatIdleState);
+        tGuardToCombat.hasExitTime = false;
+        tGuardToCombat.duration = 0.14f;
+        tGuardToCombat.AddCondition(AnimatorConditionMode.IfNot, 0f, "IsGuarding");
 
         var tSpawnDone = spawnState.AddTransition(locomotionState);
         tSpawnDone.hasExitTime = true;
@@ -463,6 +511,7 @@ public static class MonsterAnimatorBuilder
 
         AddAttackEntryTransitions(locomotionState, atk1, atk2, atk3);
         AddAttackEntryTransitions(combatIdleState, atk1, atk2, atk3);
+        AddAttackEntryTransitions(guardState, atk1, atk2, atk3);
         AddReturnToIdleOrLocoTransitions(atk1, combatIdleState, locomotionState, 0.85f);
         AddReturnToIdleOrLocoTransitions(atk2, combatIdleState, locomotionState, 0.85f);
         AddReturnToIdleOrLocoTransitions(atk3, combatIdleState, locomotionState, 0.85f);
@@ -673,11 +722,13 @@ public static class MonsterAnimatorBuilder
         AnimationClip walkClip = GetClipOrFallback(discoveredClips, "walk", idleClip);
         AnimationClip runClip = GetClipOrFallback(discoveredClips, "run", walkClip);
         AnimationClip combatIdleClip = GetClipOrFallback(discoveredClips, "combat_idle", idleClip);
+        AnimationClip guardClip = GetClipOrFallback(discoveredClips, "guard", combatIdleClip);
         AnimationClip atk1Clip = GetClipOrFallback(discoveredClips, "attack_01", idleClip);
         AnimationClip atk2Clip = GetClipOrFallback(discoveredClips, "attack_02", atk1Clip);
         AnimationClip atk3Clip = GetClipOrFallback(discoveredClips, "attack_03", atk1Clip);
         AnimationClip skillCastClip = GetClipOrFallback(discoveredClips, "skill_cast", combatIdleClip);
-        AnimationClip skillReleaseClip = GetClipOrFallback(discoveredClips, "skill_release", atk2Clip);
+        AnimationClip heavySlamFallback = atk3Clip != atk1Clip ? atk3Clip : atk2Clip;
+        AnimationClip skillReleaseClip = GetClipOrFallback(discoveredClips, "skill_release", heavySlamFallback);
         AnimationClip hitReactClip = GetClipOrFallback(discoveredClips, "hit_react", idleClip);
         AnimationClip stunClip = GetClipOrFallback(discoveredClips, "stun", idleClip);
         AnimationClip deathClip = GetClipOrFallback(discoveredClips, "death", idleClip);
@@ -696,6 +747,7 @@ public static class MonsterAnimatorBuilder
                 KeyWalk => walkClip,
                 KeyRun => runClip,
                 KeyCombatIdle => combatIdleClip,
+                KeyGuard => guardClip,
                 KeyAttack01 => atk1Clip,
                 KeyAttack02 => atk2Clip,
                 KeyAttack03 => atk3Clip,
@@ -724,7 +776,15 @@ public static class MonsterAnimatorBuilder
             config.targetWorldHeight = targetWorldHeight;
 
             // Species-tuned defaults (user can customize anytime in Config_<Name>.asset!)
-            if (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase))
+            if (isBoss)
+            {
+                // Base EnemyNPC.IsBoss already provides Lv.1 750 HP / 24 ATK / 2 DEF / 300 EXP!
+                config.healthMultiplier = 1.00f; // 750 HP at Lv.1, 1850 HP at Lv.6
+                config.damageMultiplier = 1.15f; // ~28 ATK at Lv.1
+                config.defenseBonus = 3;         // 5 DEF at Lv.1
+                config.attackRange = 3.40f;
+            }
+            else if (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase))
             {
                 config.healthMultiplier = 2.65f; // ~318 HP at Lv.1
                 config.damageMultiplier = 2.20f; // 22 ATK at Lv.1
@@ -737,6 +797,20 @@ public static class MonsterAnimatorBuilder
                 config.damageMultiplier = 1.80f; // 18 ATK at Lv.1
                 config.defenseBonus = 2;
                 config.attackRange = 2.85f;
+            }
+            else if (monsterName.Equals("Slime", StringComparison.OrdinalIgnoreCase))
+            {
+                config.healthMultiplier = 0.80f; // ~96 HP at Lv.1 (starter mob)
+                config.damageMultiplier = 0.80f; // 8 ATK at Lv.1
+                config.defenseBonus = 0;
+                config.attackRange = 2.00f;
+            }
+            else if (monsterName.Equals("TurtleShell", StringComparison.OrdinalIgnoreCase))
+            {
+                config.healthMultiplier = 1.30f; // ~156 HP at Lv.1 (armored mob)
+                config.damageMultiplier = 1.10f; // 11 ATK at Lv.1
+                config.defenseBonus = 3;
+                config.attackRange = 2.15f;
             }
             else
             {
@@ -1048,7 +1122,9 @@ public static class MonsterAnimatorBuilder
                     {
                         GameObject zInst = (GameObject)PrefabUtility.InstantiatePrefab(zPrefab, root.transform);
                         zInst.name = zName;
-                        zInst.transform.localPosition = new Vector3(nextSlotIdx * 36f, 0f, -26f);
+                        int col = nextSlotIdx % 3;
+                        int row = nextSlotIdx / 3;
+                        zInst.transform.localPosition = new Vector3(col * 36f, 0f, -26f - (row * 36f));
                         nextSlotIdx++;
                     }
                 }
@@ -1102,7 +1178,11 @@ public static class MonsterAnimatorBuilder
             var skinned = go.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             if (skinned != null && skinned.Length > 0)
             {
-                if (!Path.GetFileNameWithoutExtension(path).Contains("@")) return go;
+                string fileName = Path.GetFileNameWithoutExtension(path);
+                bool looksLikeAnimOnly = fileName.Contains("@") ||
+                                         fileName.EndsWith("_Anim", StringComparison.OrdinalIgnoreCase) ||
+                                         path.Replace('\\', '/').IndexOf("/Animations/", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!looksLikeAnimOnly) return go;
                 if (fallback == null) fallback = go;
             }
         }
@@ -1110,8 +1190,8 @@ public static class MonsterAnimatorBuilder
     }
 
     /// <summary>
-    /// Universal clip discovery: supports Mixamo '@'-split FBX files, non-'@' split FBX files (e.g. Goblin_Idle.fbx),
-    /// AND single multi-clip FBX files with all animations embedded inside!
+    /// Universal clip discovery: supports Mixamo '@'-split FBX files, non-'@' split FBX files (e.g. Slime/TurtleShell),
+    /// AND single multi-clip FBX files with all animations embedded inside (Golem/Troll/BossOgre)!
     /// </summary>
     private static Dictionary<string, AnimationClip> DiscoverMonsterClips(string folder, out int uniqueAttackCount)
     {
@@ -1135,8 +1215,6 @@ public static class MonsterAnimatorBuilder
                 if (clip.name.StartsWith("__preview__", StringComparison.OrdinalIgnoreCase)) continue;
                 if (clip.length <= 0.01f) continue;
 
-                if (firstValidClip == null) firstValidClip = clip;
-
                 // Build clean matching key from either '@suffix', clip.name (stripping 'Armature|'), or filename
                 string keySource;
                 if (fileName.Contains("@"))
@@ -1151,43 +1229,69 @@ public static class MonsterAnimatorBuilder
                     bool genericClipName = string.IsNullOrWhiteSpace(cn) ||
                                            cn.Equals("mixamo.com", StringComparison.OrdinalIgnoreCase) ||
                                            cn.StartsWith("Take 00", StringComparison.OrdinalIgnoreCase);
+                    // Skip placeholder static Take 001 on mesh-only FBXs (e.g. SlimeMesh.fbx, TurtleShellMesh.fbx)
+                    if (cn.StartsWith("Take 00", StringComparison.OrdinalIgnoreCase) &&
+                        fileName.EndsWith("Mesh", StringComparison.OrdinalIgnoreCase))
+                        continue;
                     keySource = genericClipName ? fileName : cn;
                 }
 
+                if (firstValidClip == null) firstValidClip = clip;
+
                 string suffix = keySource.Trim().ToLowerInvariant().Replace(" ", "_").Replace("-", "_");
 
-                // Skip transition helper clips (e.g. Golem's "Idle_To_Walk") so they never overwrite primary Idle/Walk!
-                if (suffix.Contains("_to_"))
+                // Skip transition helpers & secondary directional/emote clips so primary locomotion/attacks stay clean!
+                if (suffix.Contains("_to_") ||
+                    suffix.Contains("walkbwd") || suffix.Contains("walkback") ||
+                    suffix.Contains("walkleft") || suffix.Contains("walkright") ||
+                    suffix.Contains("sensesomething") || suffix.Contains("victory") ||
+                    suffix.Contains("taunt") || suffix.Contains("dodge") ||
+                    suffix.Contains("defendgethit") || suffix.Contains("defendhit"))
                     continue;
 
-                if (suffix.Contains("combat_idle") || suffix.Contains("combatidle") || suffix.Contains("block_idle") || suffix.Contains("guard"))
-                    result["combat_idle"] = clip;
-                else if (suffix == "idle" || (suffix.Contains("idle") && !suffix.Contains("break")))
+                if (suffix == "defend" || suffix == "block" || suffix.Contains("block_idle") || suffix.Contains("guard"))
+                {
+                    result["guard"] = clip;
+                }
+                else if (suffix.Contains("combat_idle") || suffix.Contains("combatidle") ||
+                    suffix.Contains("idlebattle") || suffix.Contains("fighting_stance"))
+                {
+                    if (!result.ContainsKey("combat_idle") || !suffix.EndsWith("_2"))
+                        result["combat_idle"] = clip;
+                }
+                else if (suffix == "idle" || suffix == "idlenormal" || suffix == "idle_1" ||
+                         (suffix.Contains("idle") && !suffix.Contains("break") && !suffix.EndsWith("_2")))
+                {
                     result["idle"] = clip;
+                }
                 else if (suffix.Contains("idle") || suffix.Contains("stand") || suffix.Contains("breathe"))
                 {
                     if (!result.ContainsKey("idle")) result["idle"] = clip;
                 }
-                else if (suffix == "walk" || suffix.Contains("walk"))
+                else if (suffix == "walk" || suffix == "walkfwd" || suffix.Contains("walk"))
                     result["walk"] = clip;
-                else if (suffix == "run" || suffix.Contains("run") || suffix.Contains("sprint") || suffix.Contains("chase"))
+                else if (suffix == "run" || suffix == "runfwd" || suffix.Contains("run") || suffix.Contains("sprint") || suffix.Contains("chase"))
                     result["run"] = clip;
-                else if (suffix.Contains("attack_01") || suffix.Contains("attack01") || suffix.Contains("attack_1") || suffix == "attack1")
+                else if (suffix.Contains("attack_01") || suffix.Contains("attack01") || suffix.Contains("attack_1") ||
+                         suffix == "attack1" || suffix == "atack" || suffix == "atack_1")
                 {
                     result["attack_01"] = clip;
                     if (!attackClips.Contains(clip)) attackClips.Add(clip);
                 }
-                else if (suffix.Contains("attack_02") || suffix.Contains("attack02") || suffix.Contains("attack_2") || suffix == "attack2")
+                else if (suffix.Contains("attack_02") || suffix.Contains("attack02") || suffix.Contains("attack_2") ||
+                         suffix == "attack2" || suffix == "atack_2" || suffix == "atack2")
                 {
                     result["attack_02"] = clip;
                     if (!attackClips.Contains(clip)) attackClips.Add(clip);
                 }
-                else if (suffix.Contains("attack_03") || suffix.Contains("attack03") || suffix.Contains("attack_3") || suffix == "attack3")
+                else if (suffix.Contains("attack_03") || suffix.Contains("attack03") || suffix.Contains("attack_3") ||
+                         suffix == "attack3" || suffix == "atack_3" || suffix == "atack3")
                 {
                     result["attack_03"] = clip;
                     if (!attackClips.Contains(clip)) attackClips.Add(clip);
                 }
-                else if (suffix.Contains("attack") || suffix.Contains("slash") || suffix.Contains("bite") || suffix.Contains("claw") || suffix.Contains("punch") || suffix.Contains("swing"))
+                else if (suffix.Contains("attack") || suffix.Contains("atack") || suffix.Contains("slash") ||
+                         suffix.Contains("bite") || suffix.Contains("claw") || suffix.Contains("punch") || suffix.Contains("swing"))
                 {
                     if (!result.ContainsKey("attack_01")) result["attack_01"] = clip;
                     else if (!result.ContainsKey("attack_02")) result["attack_02"] = clip;
@@ -1198,8 +1302,13 @@ public static class MonsterAnimatorBuilder
                     result["skill_cast"] = clip;
                 else if (suffix.Contains("skill_release") || suffix.Contains("skillrelease") || suffix.Contains("roar") || suffix.Contains("skill"))
                     result["skill_release"] = clip;
-                else if (suffix.Contains("hit_react") || suffix.Contains("hitreact") || suffix.Contains("hit") || suffix.Contains("damage") || suffix.Contains("hurt") || suffix.Contains("flinch"))
-                    result["hit_react"] = clip;
+                else if (suffix.Contains("hit_react") || suffix.Contains("hitreact") || suffix.Contains("get_hit") ||
+                         suffix.Contains("gethit") || suffix.Contains("hit") || suffix.Contains("damage") ||
+                         suffix.Contains("hurt") || suffix.Contains("flinch"))
+                {
+                    if (!result.ContainsKey("hit_react") || !suffix.EndsWith("_2"))
+                        result["hit_react"] = clip;
+                }
                 else if (suffix.Contains("stun") || suffix.Contains("dizzy"))
                     result["stun"] = clip;
                 else if (suffix == "death" || suffix == "die")
@@ -1234,8 +1343,9 @@ public static class MonsterAnimatorBuilder
 
         Shader urpLit = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
 
-        // Priority A: If sourceFolder already contains standalone ready-made .mat files (e.g. Golem's G2.mat, Troll's Body/Tanga/Hair/Weapon.mat),
-        // clone ONLY standalone .mat assets (NEVER embedded blank materials inside .fbx files!) with _EMISSION enabled for PBR Hit/Block Flash!
+        // Priority A: If sourceFolder already contains standalone ready-made .mat files (e.g. Golem's G2.mat, Troll's Body/Tanga/Hair/Weapon.mat,
+        // Slime/TurtleShell's PBRDefault.mat, BossOgre's Monster.mat & Eyes.mat), clone ONLY standalone .mat assets (NEVER embedded FBX dummy mats!)
+        // and guarantee URP Lit shader with _BaseMap + _EMISSION for PBR Hit/Block Flash!
         string[] existingMatGuids = AssetDatabase.FindAssets("t:Material", new[] { sourceFolder });
         if (existingMatGuids != null && existingMatGuids.Length > 0)
         {
@@ -1250,21 +1360,65 @@ public static class MonsterAnimatorBuilder
 
                 string partKey = Path.GetFileNameWithoutExtension(srcPath);
                 string dstPath = $"{matDir}/Mat_{monsterName}_{partKey}.mat";
+                bool srcIsUrp = srcMat.shader != null && srcMat.shader.name.Contains("Universal Render Pipeline");
+
+                // Capture textures/colors from non-URP source mats BEFORE changing shader to URP Lit
+                Texture mainTex = srcMat.HasProperty("_BaseMap") ? srcMat.GetTexture("_BaseMap") : null;
+                if (mainTex == null && srcMat.HasProperty("_MainTex")) mainTex = srcMat.GetTexture("_MainTex");
+                Color baseCol = srcMat.HasProperty("_BaseColor") ? srcMat.GetColor("_BaseColor")
+                              : (srcMat.HasProperty("_Color") ? srcMat.GetColor("_Color") : Color.white);
+                Texture bumpTex = srcMat.HasProperty("_BumpMap") ? srcMat.GetTexture("_BumpMap") : null;
+                Texture metTex = srcMat.HasProperty("_MetallicGlossMap") ? srcMat.GetTexture("_MetallicGlossMap") : null;
+                float metallic = srcMat.HasProperty("_Metallic") ? srcMat.GetFloat("_Metallic") : 0.05f;
+                float smoothness = srcMat.HasProperty("_Smoothness") ? srcMat.GetFloat("_Smoothness")
+                                 : (srcMat.HasProperty("_Glossiness") ? srcMat.GetFloat("_Glossiness") : 0.35f);
+
                 Material dstMat = AssetDatabase.LoadAssetAtPath<Material>(dstPath);
                 if (dstMat == null)
                 {
-                    dstMat = new Material(srcMat);
-                    if (dstMat.shader == null || !dstMat.shader.name.Contains("Universal Render Pipeline"))
-                        dstMat.shader = urpLit;
+                    dstMat = srcIsUrp ? new Material(srcMat) : new Material(urpLit);
                     AssetDatabase.CreateAsset(dstMat, dstPath);
                 }
                 else
                 {
-                    dstMat.CopyPropertiesFromMaterial(srcMat);
-                    if (dstMat.shader == null || !dstMat.shader.name.Contains("Universal Render Pipeline"))
+                    if (srcIsUrp)
+                    {
+                        dstMat.shader = srcMat.shader;
+                        dstMat.CopyPropertiesFromMaterial(srcMat);
+                    }
+                    else
+                    {
                         dstMat.shader = urpLit;
+                    }
                 }
 
+                if (!srcIsUrp)
+                {
+                    if (mainTex != null) dstMat.SetTexture("_BaseMap", mainTex);
+                    dstMat.SetColor("_BaseColor", baseCol);
+                    if (bumpTex != null)
+                    {
+                        dstMat.SetTexture("_BumpMap", bumpTex);
+                        dstMat.SetFloat("_BumpScale", 1.0f);
+                        dstMat.EnableKeyword("_NORMALMAP");
+                    }
+                    if (metTex != null)
+                    {
+                        dstMat.SetTexture("_MetallicGlossMap", metTex);
+                        dstMat.SetFloat("_Metallic", 1.0f);
+                        dstMat.SetFloat("_Smoothness", Mathf.Clamp(smoothness, 0.25f, 0.65f));
+                        dstMat.EnableKeyword("_METALLICSPECGLOSSMAP");
+                    }
+                    else
+                    {
+                        dstMat.SetFloat("_Metallic", metallic);
+                        dstMat.SetFloat("_Smoothness", Mathf.Clamp(smoothness, 0.15f, 0.55f));
+                    }
+                }
+
+                // Clear any baked high-HDR emission map so idle albedo stays crisp and Hit/Block Flash illuminates the entire body cleanly
+                if (dstMat.HasProperty("_EmissionMap"))
+                    dstMat.SetTexture("_EmissionMap", null);
                 dstMat.EnableKeyword("_EMISSION");
                 dstMat.SetColor("_EmissionColor", Color.black);
                 dstMat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
@@ -1615,6 +1769,20 @@ public static class MonsterAnimatorBuilder
                 return;
             }
 
+            // Tier 1d: Blender Rigify bones (BossOgre: toe.L/R, Left_Foot/Right_Foot.001, foot.L/R + spine.006_end)
+            Transform rigToeL = FindDeepChild(temp.transform, "toe.L") ?? FindDeepChild(temp.transform, "Left_Foot");
+            Transform rigToeR = FindDeepChild(temp.transform, "toe.R") ?? FindDeepChild(temp.transform, "Right_Foot.001");
+            Transform rigHead = FindDeepChild(temp.transform, "spine.006_end") ?? FindDeepChild(temp.transform, "spine.006");
+            if ((rigToeL != null || rigToeR != null) && rigHead != null)
+            {
+                float rMin = float.MaxValue;
+                if (rigToeL != null) rMin = Mathf.Min(rMin, rigToeL.position.y);
+                if (rigToeR != null) rMin = Mathf.Min(rMin, rigToeR.position.y);
+                feetY = rMin - 0.04f;
+                height = Mathf.Max(0.8f, rigHead.position.y - feetY);
+                return;
+            }
+
             // Tier 2: Generic SkinnedMeshRenderer world bounds (works for Blender, Rigify, Quadrupeds, Dragons, Slimes!)
             SkinnedMeshRenderer[] smrs = temp.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             float smrMinY = float.MaxValue;
@@ -1696,12 +1864,12 @@ public static class MonsterAnimatorBuilder
         Check("1.1 Base Controller Exists", baseCtrl != null, BaseControllerPath);
         if (baseCtrl != null)
         {
-            string[] expectedParams = { "Speed", "IsCombat", "Attack", "AttackIndex", "Skill", "SkillIndex", "IsCasting", "Hit", "IsStunned", "IsDead" };
+            string[] expectedParams = { "Speed", "IsCombat", "IsGuarding", "Attack", "AttackIndex", "Skill", "SkillIndex", "IsCasting", "Hit", "IsStunned", "IsDead" };
             int found = 0;
             foreach (string ep in expectedParams)
                 foreach (var p in baseCtrl.parameters)
                     if (p.name == ep) { found++; break; }
-            Check("1.2 Base Controller Has All 10 Parameters", found == 10, $"Found {found}/10");
+            Check("1.2 Base Controller Has All 11 Parameters", found == 11, $"Found {found}/11");
 
             bool upperOk = baseCtrl.layers.Length >= 2 &&
                            baseCtrl.layers[1].name == "UpperBody" &&
@@ -1759,7 +1927,7 @@ public static class MonsterAnimatorBuilder
                 else mapped++;
             }
         }
-        Check("3.1 AOC_Orc All 13 Override Slots Non-Null", allFilled && mapped == 13, $"Mapped {mapped}/13");
+        Check("3.1 AOC_Orc All 14 Override Slots Non-Null", allFilled && mapped == 14, $"Mapped {mapped}/14");
 
         // 4. Enemy_Orc.prefab (MonsterEnemyNPC + Grounded Feet + URP Mats + Real Bone Motion)
         GameObject orcPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(OrcPrefabPath);
@@ -1870,11 +2038,17 @@ public static class MonsterAnimatorBuilder
                            friendEnemy.GetComponent<MonsterEnemyNPC>() == null;
         Check("6.1 Friend Enemy.prefab 100% Untouched Capsule", friendClean, "Zero modifications to friend's prefab");
 
-        // 7. Golem & Troll Checks (when present in Models/)
+        // 7-11. Additional Species Checks (Golem, Troll, Slime, TurtleShell, BossOgre — when present in Models/)
         VerifyAdditionalMonster("7", "Golem", GolemSourceFolder, GolemPrefabPath, GolemZonePrefabPath,
             footBoneA: "toes_01.l", footBoneB: "toes_01.r", moveBoneA: "arm_stretch.r", moveBoneB: "root.x", Check);
         VerifyAdditionalMonster("8", "Troll", TrollSourceFolder, TrollPrefabPath, TrollZonePrefabPath,
             footBoneA: "cave_troll_LLegPlatform", footBoneB: "cave_troll_RLegPlatform", moveBoneA: "cave_troll_Spine2", moveBoneB: "cave_troll_Hub001", Check);
+        VerifyAdditionalMonster("9", "Slime", SlimeSourceFolder, SlimePrefabPath, SlimeZonePrefabPath,
+            footBoneA: "", footBoneB: "", moveBoneA: "Spine01", moveBoneB: "Body", Check);
+        VerifyAdditionalMonster("10", "TurtleShell", TurtleShellSourceFolder, TurtleShellPrefabPath, TurtleShellZonePrefabPath,
+            footBoneA: "", footBoneB: "", moveBoneA: "Spine01", moveBoneB: "Head", Check);
+        VerifyAdditionalMonster("11", "BossOgre", BossOgreSourceFolder, BossOgrePrefabPath, BossOgreZonePrefabPath,
+            footBoneA: "toe.L", footBoneB: "toe.R", moveBoneA: "upper_arm.R", moveBoneB: "spine", Check);
 
         sb.AppendLine($"TOTAL: {pass + fail} | PASSED: {pass} | FAILED: {fail}");
         File.WriteAllText(VerificationReportPath, sb.ToString(), new UTF8Encoding(false));
@@ -1910,7 +2084,7 @@ public static class MonsterAnimatorBuilder
                 else mapped++;
             }
         }
-        check($"{sectionPrefix}.1 AOC_{monsterName} All 13 Override Slots Non-Null", allFilled && mapped == 13, $"Mapped {mapped}/13");
+        check($"{sectionPrefix}.1 AOC_{monsterName} All 14 Override Slots Non-Null", allFilled && mapped == 14, $"Mapped {mapped}/14");
 
         GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
         check($"{sectionPrefix}.2 Enemy_{monsterName}.prefab Exists", prefab != null, prefabPath);
@@ -1933,34 +2107,58 @@ public static class MonsterAnimatorBuilder
                 {
                     AnimationClip idleClip = aoc[KeyIdle];
                     if (idleClip != null) idleClip.SampleAnimation(bridge.VisualRoot.gameObject, 0f);
-                    Transform fA = FindDeepChild(bridge.VisualRoot, footBoneA);
-                    Transform fB = FindDeepChild(bridge.VisualRoot, footBoneB);
-                    float feetY = (fA != null && fB != null) ? Mathf.Min(fA.position.y, fB.position.y) : 99f;
+                    float feetY = 99f;
+                    if (!string.IsNullOrEmpty(footBoneA) && !string.IsNullOrEmpty(footBoneB))
+                    {
+                        Transform fA = FindDeepChild(bridge.VisualRoot, footBoneA);
+                        Transform fB = FindDeepChild(bridge.VisualRoot, footBoneB);
+                        if (fA != null && fB != null)
+                            feetY = Mathf.Min(fA.position.y, fB.position.y);
+                    }
+                    else
+                    {
+                        var smrs = bridge.VisualRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                        for (int s = 0; s < smrs.Length; s++)
+                        {
+                            smrs[s].updateWhenOffscreen = true;
+                            if (smrs[s].bounds.size.sqrMagnitude > 0.0001f)
+                                feetY = Mathf.Min(feetY, smrs[s].bounds.min.y);
+                        }
+                    }
                     check($"{sectionPrefix}.4 Enemy_{monsterName} Feet Seated Flush On Ground (y=0)", feetY >= -0.10f && feetY <= 0.18f, $"feetWorldY={feetY:0.000}m");
 
-                    Transform bA = FindDeepChild(bridge.VisualRoot, moveBoneA);
-                    Transform bB = FindDeepChild(bridge.VisualRoot, moveBoneB);
+                    Transform[] allBones = bridge.VisualRoot.GetComponentsInChildren<Transform>(true);
                     string[] keys = { KeyIdle, KeyWalk, KeyRun, KeyAttack01, KeyHitReact, KeyDeath };
                     int moving = 0;
                     var details = new List<string>();
-                    if (bA != null && bB != null)
+                    if (allBones != null && allBones.Length > 0)
                     {
+                        var r0 = new Quaternion[allBones.Length];
+                        var p0 = new Vector3[allBones.Length];
+                        var s0 = new Vector3[allBones.Length];
                         foreach (string k in keys)
                         {
                             AnimationClip c = aoc[k];
                             if (c == null) continue;
                             c.SampleAnimation(bridge.VisualRoot.gameObject, 0f);
-                            Quaternion a0 = bA.localRotation;
-                            Quaternion b0 = bB.localRotation;
-                            Vector3 p0 = bB.localPosition;
-                            float maxDeg = 0f, maxPos = 0f;
+                            for (int bi = 0; bi < allBones.Length; bi++)
+                            {
+                                r0[bi] = allBones[bi].localRotation;
+                                p0[bi] = allBones[bi].localPosition;
+                                s0[bi] = allBones[bi].localScale;
+                            }
+                            float maxDeg = 0f, maxPos = 0f, maxScale = 0f;
                             foreach (float f in new[] { 0.25f, 0.5f, 0.75f, 0.9f })
                             {
                                 c.SampleAnimation(bridge.VisualRoot.gameObject, c.length * f);
-                                maxDeg = Mathf.Max(maxDeg, Quaternion.Angle(a0, bA.localRotation), Quaternion.Angle(b0, bB.localRotation));
-                                maxPos = Mathf.Max(maxPos, Vector3.Distance(p0, bB.localPosition));
+                                for (int bi = 0; bi < allBones.Length; bi++)
+                                {
+                                    maxDeg = Mathf.Max(maxDeg, Quaternion.Angle(r0[bi], allBones[bi].localRotation));
+                                    maxPos = Mathf.Max(maxPos, Vector3.Distance(p0[bi], allBones[bi].localPosition));
+                                    maxScale = Mathf.Max(maxScale, Vector3.Distance(s0[bi], allBones[bi].localScale));
+                                }
                             }
-                            if (maxDeg > 0.5f || maxPos > 0.005f) moving++;
+                            if (maxDeg > 0.5f || maxPos > 0.005f || maxScale > 0.005f) moving++;
                             details.Add($"{k.Replace("Placeholder_", "")}({maxDeg:0.0}deg)");
                         }
                     }

@@ -14,9 +14,10 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class MonsterAnimatorBridge : MonoBehaviour
 {
-    // ---- Cached Animator parameter hashes (exact 10 parameters of AC_Monster_Base) ----
+    // ---- Cached Animator parameter hashes (exact 11 parameters of AC_Monster_Base) ----
     public static readonly int HashSpeed = Animator.StringToHash("Speed");
     public static readonly int HashIsCombat = Animator.StringToHash("IsCombat");
+    public static readonly int HashIsGuarding = Animator.StringToHash("IsGuarding");
     public static readonly int HashAttack = Animator.StringToHash("Attack");
     public static readonly int HashAttackIndex = Animator.StringToHash("AttackIndex");
     public static readonly int HashSkill = Animator.StringToHash("Skill");
@@ -45,6 +46,7 @@ public class MonsterAnimatorBridge : MonoBehaviour
 
     public bool IsDead => _isDead;
     public bool IsCombat => _isCombat;
+    public bool IsGuarding => _isGuarding;
     public bool IsStunned => _isStunned;
     public bool IsCasting => _isCasting;
     public float CurrentSpeed => _smoothedSpeed;
@@ -73,8 +75,10 @@ public class MonsterAnimatorBridge : MonoBehaviour
     // ---- Runtime state ----
     private bool _isDead;
     private bool _isCombat;
+    private bool _isGuarding;
     private bool _isStunned;
     private bool _isCasting;
+    private bool _isEnragedGlow;
     private bool _superArmorOverride;
     private float _smoothedSpeed;
     private float _speedVelocity;
@@ -83,6 +87,7 @@ public class MonsterAnimatorBridge : MonoBehaviour
     private Vector3 _lastWorldPos;
     private bool _hasLastWorldPos;
     private bool _speedInjectedThisFrame;
+    private Color _enrageGlowColor = new Color(0.42f, 0.05f, 0.03f, 1f);
 
     private Transform _hipsBone;
     private Vector2 _hipsBaseLocalXZ;
@@ -150,6 +155,7 @@ public class MonsterAnimatorBridge : MonoBehaviour
 
         if (_hipsBone == null && visualRoot != null)
         {
+            Transform fallbackRoot = null;
             foreach (Transform t in visualRoot.GetComponentsInChildren<Transform>(true))
             {
                 string n = t.name;
@@ -169,6 +175,18 @@ public class MonsterAnimatorBridge : MonoBehaviour
                     _hasHipsBase = true;
                     break;
                 }
+                if (fallbackRoot == null &&
+                    (n.Equals("spine", System.StringComparison.Ordinal) ||
+                     n.Equals("Body", System.StringComparison.Ordinal)))
+                {
+                    fallbackRoot = t;
+                }
+            }
+            if (_hipsBone == null && fallbackRoot != null)
+            {
+                _hipsBone = fallbackRoot;
+                _hipsBaseLocalXZ = new Vector2(fallbackRoot.localPosition.x, fallbackRoot.localPosition.z);
+                _hasHipsBase = true;
             }
         }
     }
@@ -243,6 +261,36 @@ public class MonsterAnimatorBridge : MonoBehaviour
         _isCombat = inCombat;
         if (!EnsureAnimatorReady()) return;
         animator.SetBool(HashIsCombat, inCombat);
+    }
+
+    public void SetGuarding(bool guarding)
+    {
+        if (_isDead || _isStunned) guarding = false;
+        _isGuarding = guarding;
+        if (!EnsureAnimatorReady()) return;
+        if (guarding)
+        {
+            _smoothedSpeed = 0f;
+            _speedVelocity = 0f;
+            animator.SetFloat(HashSpeed, 0f);
+        }
+        animator.SetBool(HashIsGuarding, guarding);
+    }
+
+    public void SetSpeedScale(float speedMultiplier)
+    {
+        if (!EnsureAnimatorReady()) return;
+        animator.speed = Mathf.Clamp(speedMultiplier, 0.5f, 2.0f);
+    }
+
+    public void SetPersistentEnrageGlow(bool enraged)
+    {
+        _isEnragedGlow = enraged;
+        if (_flashRoutine == null)
+        {
+            if (enraged) ApplyEmissionOverride(_enrageGlowColor);
+            else ClearHitFlash();
+        }
     }
 
     public int PickNextAttackIndex()
@@ -335,10 +383,12 @@ public class MonsterAnimatorBridge : MonoBehaviour
         if (stunned)
         {
             _isCasting = false;
+            _isGuarding = false;
             _smoothedSpeed = 0f;
             _speedVelocity = 0f;
             animator.SetFloat(HashSpeed, 0f);
             animator.SetBool(HashIsCasting, false);
+            animator.SetBool(HashIsGuarding, false);
             animator.ResetTrigger(HashAttack);
             animator.ResetTrigger(HashSkill);
         }
@@ -354,19 +404,24 @@ public class MonsterAnimatorBridge : MonoBehaviour
         if (dead)
         {
             _isCombat = false;
+            _isGuarding = false;
             _isStunned = false;
             _isCasting = false;
+            _isEnragedGlow = false;
             _smoothedSpeed = 0f;
             _speedVelocity = 0f;
 
+            animator.speed = 1f;
             animator.SetFloat(HashSpeed, 0f);
             animator.SetBool(HashIsCombat, false);
+            animator.SetBool(HashIsGuarding, false);
             animator.SetBool(HashIsStunned, false);
             animator.SetBool(HashIsCasting, false);
             animator.ResetTrigger(HashAttack);
             animator.ResetTrigger(HashSkill);
             animator.ResetTrigger(HashHit);
             animator.SetBool(HashIsDead, true);
+            ClearHitFlash();
         }
         else
         {
@@ -378,8 +433,10 @@ public class MonsterAnimatorBridge : MonoBehaviour
     {
         _isDead = false;
         _isCombat = false;
+        _isGuarding = false;
         _isStunned = false;
         _isCasting = false;
+        _isEnragedGlow = false;
         _smoothedSpeed = 0f;
         _speedVelocity = 0f;
         _lastHitReactTime = -100f;
@@ -390,9 +447,11 @@ public class MonsterAnimatorBridge : MonoBehaviour
 
         if (!EnsureAnimatorReady()) return;
 
+        animator.speed = 1f;
         animator.applyRootMotion = false;
         animator.SetFloat(HashSpeed, 0f);
         animator.SetBool(HashIsCombat, false);
+        animator.SetBool(HashIsGuarding, false);
         animator.SetBool(HashIsCasting, false);
         animator.SetBool(HashIsStunned, false);
         animator.SetBool(HashIsDead, false);
@@ -434,7 +493,10 @@ public class MonsterAnimatorBridge : MonoBehaviour
         float dur = config != null ? config.hitFlashDuration : 0.11f;
         ApplyEmissionOverride(flashCol);
         yield return new WaitForSeconds(dur);
-        ClearHitFlash();
+        if (_isEnragedGlow && !_isDead)
+            ApplyEmissionOverride(_enrageGlowColor);
+        else
+            ClearHitFlash();
         _flashRoutine = null;
     }
 
