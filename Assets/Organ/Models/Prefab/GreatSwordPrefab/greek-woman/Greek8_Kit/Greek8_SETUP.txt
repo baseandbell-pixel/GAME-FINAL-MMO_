@@ -1,0 +1,77 @@
+GREEK8 SETUP NOTES
+==================
+
+FILES
+-----
+Greek8.fbx
+  Greek5-based character, existing 137-bone skeleton, 15 original meshes,
+  plus a separate skinned mesh named Greek8_Subligaculum (ancient-style
+  burgundy undergarment with bronze trim). The undergarment is bound to the
+  existing Hips, Buttock, Spine and Leg bones. The FBX mesh model is connected
+  to the scene root so that it is present in the imported hierarchy.
+
+HumanF_CombatIdle2H01.fbx
+  The one animation FBX extracted from the supplied CombatIdle.unitypackage.
+  It is a separate Humanoid clip; it is not baked into Greek8.fbx.
+
+Greek8SecondaryMotion.cs
+  Runtime spring motion for Chest.L / Chest.R and the 30 Skirt_* bones.
+  It is attached to the Unity character root, not embedded in the FBX.
+
+IMPORT GREEK8
+-------------
+1. Put Greek8.fbx in a new folder in the Unity project. Keep Greek5 untouched.
+2. Select Greek8.fbx > Rig:
+     Animation Type = Humanoid
+     Avatar Definition = Create From This Model
+   Apply, then open Configure and confirm the required body mappings are valid.
+3. Expand the imported model hierarchy and confirm there is a separate mesh
+   object named Greek8_Subligaculum with a Skinned Mesh Renderer and materials.
+4. Test a crouch, roll, and Great Sword idle before replacing the old prefab.
+
+RETARGET THE SUPPLIED COMBAT IDLE
+---------------------------------
+1. Put HumanF_CombatIdle2H01.fbx into the Unity project.
+2. The supplied package's FBX is an animation-only Humanoid source rig. Its
+   original .meta uses Avatar Definition = Copy From Other Avatar and contains
+   source HumanDescription mapping for bones such as B-hips. If the package's
+   original source Avatar is already present in the project, keep that source
+   Avatar. Do NOT replace the animation source Avatar with Greek8's Avatar.
+   If the source Avatar is missing, use Create From This Model only if Unity
+   can generate a valid Humanoid mapping for that animation rig; inspect it in
+   Configure before applying.
+3. On the Greek8 character's Animator component, set Avatar to the Avatar
+   sub-asset created by Greek8.fbx. This is the TARGET Avatar that receives the
+   Humanoid-retargeted clip.
+4. In the Animator Controller, use HumanF@CombatIdle2H01 as the Motion for the
+   relevant state. Keep the controller; only replace the Motion where needed.
+5. If the pose still differs, open Greek8 Avatar > Configure > Pose and check
+   the T-Pose. Do not rename bones manually.
+
+The uploaded CombatIdle.unitypackage supplied one clip: HumanF@CombatIdle2H01
+(frames 0-40). Other animation files in the project must be checked/retargeted
+using their own source Avatar mapping and the Greek8 Avatar as the character's
+target Avatar.
+
+ADD SECONDARY MOTION
+--------------------
+1. Put Greek8SecondaryMotion.cs in Assets/Organ/Scripts (or another Scripts folder).
+2. Select the top-level character GameObject that contains both Animator and
+   the Armature hierarchy. Add Greek8SecondaryMotion.
+3. Enter Play Mode. Console should report:
+     Found 2 chest bones and 30 skirt bones
+4. Start with the script defaults. Tune in Inspector if needed:
+     chestInfluence / chestStiffness / chestDamping
+     skirtInfluence / skirtStiffness / skirtDamping
+5. The script uses lightweight bone spring motion. It is not a full cloth solver:
+   it does not perform cloth-to-body or cloth-to-armor collision, and it does not
+   prevent self-intersection. The custom Chest.* and Skirt_* bones are restored
+   to their bind local rotations every frame, so leave that option enabled unless
+   your clips intentionally animate those custom bones.
+
+IMPORTANT LIMITS
+----------------
+The FBX structure, object references, bone count and skin cluster references were
+validated in this workspace. It has NOT been opened in Unity here. Unity import,
+Humanoid Configure, the actual animation pose, material appearance and runtime
+spring behaviour still need to be tested in the project before replacing Greek5.
