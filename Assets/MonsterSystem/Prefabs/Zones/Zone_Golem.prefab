@@ -44,7 +44,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d7bc2df6d93512f448492379e116bbb8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MonsterSpawnZone
-  monsterPrefab: {fileID: 3516791922071774547, guid: 8e3a845bb40c35542a36356634cb0d0f, type: 3}
+  monsterPrefab: {fileID: 6583656784174340436, guid: dadf2642c8e17a146932fc4ff4b1d664, type: 3}
   spawnCount: 2
   customSpawnPoints: []
   slotSpacing: 15
