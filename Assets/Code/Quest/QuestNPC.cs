@@ -272,7 +272,10 @@ public class QuestNPC : MonoBehaviour
         switch (prog.status)
         {
             case QuestStatus.NotStarted:
-                _overheadMarker.text = $"<color=#FFD166>!</color>\n<size=45%>{npcName}</size>";
+                // ถ้ากำลังติดเควสต์อื่นอยู่ ให้เครื่องหมาย ! เป็นสีเทาเพื่อบอกว่ายังรับซ้อนไม่ได้
+                bool busyWithOther = QuestSystemManager.Instance.HasActiveQuest(out _);
+                string bangColor = busyWithOther ? "#8892A0" : "#FFD166";
+                _overheadMarker.text = $"<color={bangColor}>!</color>\n<size=45%>{npcName}</size>";
                 break;
             case QuestStatus.InProgress:
                 _overheadMarker.text = $"<color=#A0AAB8>?</color>\n<size=45%>{npcName}</size>";
@@ -417,7 +420,6 @@ public class QuestSystemManager : MonoBehaviour
         RegisterQuest(config);
         var prog = _progressById[config.questId];
 
-        // หากเปิด Is Repeatable ไว้ แต่สถานะเดิมในเซฟ/Firestore เป็น Completed ให้รีเซ็ตกลับเป็น NotStarted เพื่อรับซ้ำได้ทันที
         if (prog.status == QuestStatus.Completed && config.isRepeatable)
         {
             prog.status = QuestStatus.NotStarted;
@@ -428,19 +430,52 @@ public class QuestSystemManager : MonoBehaviour
         return prog;
     }
 
-    public void AcceptQuest(NpcQuestConfig config)
+    /// <summary>ตรวจสอบว่าผู้เล่นมีเควสต์ที่กำลังทำหรือรอส่งค้างอยู่หรือไม่ (จำกัดได้สูงสุด 1 เควสต์)</summary>
+    public bool HasActiveQuest(out NpcQuestConfig activeConfig)
     {
-        if (config == null) return;
-        var prog = GetProgress(config);
+        activeConfig = null;
+        foreach (var kv in _progressById)
+        {
+            var prog = kv.Value;
+            if (prog.status == QuestStatus.InProgress || prog.status == QuestStatus.ReadyToTurnIn)
+            {
+                _questConfigById.TryGetValue(kv.Key, out activeConfig);
+                return true;
+            }
+        }
+        return false;
+    }
 
+    public bool TryAcceptQuest(NpcQuestConfig config, out string failReason)
+    {
+        failReason = "";
+        if (config == null)
+        {
+            failReason = "ไม่พบข้อมูลเควสต์";
+            return false;
+        }
+
+        // บังคับรับเควสต์ได้ทีละ 1 เควสต์เท่านั้น
+        if (HasActiveQuest(out var existingQuest))
+        {
+            string existingTitle = existingQuest != null ? existingQuest.questTitle : "ภารกิจอื่น";
+            failReason = $"คุณรับเควสต์ได้ทีละ 1 เควสต์ (กำลังทำ: {existingTitle})";
+            return false;
+        }
+
+        var prog = GetProgress(config);
         if (prog.status != QuestStatus.NotStarted && !(prog.status == QuestStatus.Completed && config.isRepeatable))
-            return;
+        {
+            failReason = "ไม่สามารถรับเควสต์นี้ได้ในขณะนี้";
+            return false;
+        }
 
         prog.status = QuestStatus.InProgress;
         prog.currentKills = 0;
 
         QuestStateChanged?.Invoke();
         _ = SaveQuestToFirestoreAsync(prog);
+        return true;
     }
 
     public bool TryTurnInQuest(NpcQuestConfig config, out string failReason)
@@ -566,11 +601,21 @@ public class QuestSystemManager : MonoBehaviour
                 var rec = doc.ConvertTo<FirestoreQuestRecord>();
                 if (rec == null || string.IsNullOrEmpty(rec.questId)) continue;
 
+                var loadedStatus = (QuestStatus)Mathf.Clamp(rec.status, 0, 3);
+                int loadedKills = Mathf.Max(0, rec.currentKills);
+
+                if (_questConfigById.TryGetValue(rec.questId, out var cfg) && cfg != null &&
+                    cfg.isRepeatable && loadedStatus == QuestStatus.Completed)
+                {
+                    loadedStatus = QuestStatus.NotStarted;
+                    loadedKills = 0;
+                }
+
                 _progressById[rec.questId] = new QuestProgress
                 {
                     questId = rec.questId,
-                    status = (QuestStatus)Mathf.Clamp(rec.status, 0, 3),
-                    currentKills = Mathf.Max(0, rec.currentKills),
+                    status = loadedStatus,
+                    currentKills = loadedKills,
                     completedCount = Mathf.Max(0, rec.completedCount)
                 };
             }
@@ -801,6 +846,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
 
         if (!isLastLine)
         {
+            _primaryBtn.interactable = true;
             _primaryBtnText.text = "ถัดไป [E]";
             _primaryBtnBg.color = UITheme.BrushedGoldDark;
             _closeBtnText.text = "ปิด [Esc]";
@@ -810,18 +856,35 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
             switch (_dialogStageStatus)
             {
                 case QuestStatus.NotStarted:
-                    _primaryBtnText.text = "รับเควสต์ [E]";
-                    _primaryBtnBg.color = UITheme.JadeButton;
-                    _closeBtnText.text = "ปฏิเสธ [Esc]";
+                    if (QuestSystemManager.EnsureExists().HasActiveQuest(out var activeQuest))
+                    {
+                        string activeName = activeQuest != null ? activeQuest.questTitle : "ภารกิจอื่น";
+                        _primaryBtn.interactable = false;
+                        _primaryBtnText.text = "ติดเควสต์อื่นอยู่";
+                        _primaryBtnBg.color = UITheme.ObsidianSlotEmpty;
+                        _closeBtnText.text = "ปิด [Esc]";
+                        if (_errorNoticeText)
+                            _errorNoticeText.text = $"รับได้ทีละ 1 เควสต์ (กำลังทำ: {activeName})";
+                    }
+                    else
+                    {
+                        _primaryBtn.interactable = true;
+                        _primaryBtnText.text = "รับเควสต์ [E]";
+                        _primaryBtnBg.color = UITheme.JadeButton;
+                        _closeBtnText.text = "ปฏิเสธ [Esc]";
+                        if (_errorNoticeText) _errorNoticeText.text = "";
+                    }
                     break;
 
                 case QuestStatus.ReadyToTurnIn:
+                    _primaryBtn.interactable = true;
                     _primaryBtnText.text = "รับรางวัล [E]";
                     _primaryBtnBg.color = UITheme.JadeButton;
                     _closeBtnText.text = "ไว้ทีหลัง [Esc]";
                     break;
 
                 default:
+                    _primaryBtn.interactable = true;
                     _primaryBtnText.text = "ตกลง [E]";
                     _primaryBtnBg.color = UITheme.BrushedGoldDark;
                     _closeBtnText.text = "ปิด [Esc]";
@@ -843,9 +906,15 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
 
         if (_dialogStageStatus == QuestStatus.NotStarted)
         {
-            QuestSystemManager.EnsureExists().AcceptQuest(_activeQuest);
-            _activeNpc.PlayNpcAnimation(_activeQuest.acceptAnimationTrigger);
-            CloseDialog();
+            if (QuestSystemManager.EnsureExists().TryAcceptQuest(_activeQuest, out string err))
+            {
+                _activeNpc.PlayNpcAnimation(_activeQuest.acceptAnimationTrigger);
+                CloseDialog();
+            }
+            else
+            {
+                if (_errorNoticeText) _errorNoticeText.text = err;
+            }
         }
         else if (_dialogStageStatus == QuestStatus.ReadyToTurnIn)
         {
@@ -882,10 +951,15 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
 
         if (show && closestNpc.quest != null)
         {
-            var prog = QuestSystemManager.EnsureExists().GetProgress(closestNpc.quest);
+            var qm = QuestSystemManager.EnsureExists();
+            var prog = qm.GetProgress(closestNpc.quest);
+            bool hasOtherActive = prog.status == QuestStatus.NotStarted && qm.HasActiveQuest(out _);
+
             string actionHint = prog.status switch
             {
-                QuestStatus.NotStarted => $"รับเควสต์จาก {closestNpc.npcName}",
+                QuestStatus.NotStarted => hasOtherActive
+                    ? $"คุยกับ {closestNpc.npcName} (ติดเควสต์อื่นอยู่)"
+                    : $"รับเควสต์จาก {closestNpc.npcName}",
                 QuestStatus.InProgress => $"คุยกับ {closestNpc.npcName}",
                 QuestStatus.ReadyToTurnIn => $"ส่งเควสต์กับ {closestNpc.npcName} (สำเร็จแล้ว!)",
                 _ => $"คุยกับ {closestNpc.npcName}"
@@ -955,7 +1029,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
         var rt = border.rectTransform;
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0f);
         rt.anchoredPosition = new Vector2(0f, 125f);
-        rt.sizeDelta = new Vector2(360f, 44f);
+        rt.sizeDelta = new Vector2(400f, 44f);
 
         var inner = MakeImage(rt, "NpcPromptInner", UITheme.ObsidianDeep);
         UITheme.ApplySlicedStyle(inner, UITheme.ObsidianDeep);
@@ -1005,7 +1079,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
         PlaceTopLeft(_rewardLabelText.rectTransform, 50f, 4f, 400f, 36f);
 
         _errorNoticeText = MakeText(inner.transform, "ErrorNotice", "", 15, FontStyle.Bold, TextAnchor.MiddleLeft, new Color(1f, 0.38f, 0.38f, 1f));
-        PlaceBottomLeft(_errorNoticeText.rectTransform, 24f, 18f, 460f, 34f);
+        PlaceBottomLeft(_errorNoticeText.rectTransform, 24f, 18f, 480f, 34f);
 
         var closeGo = new GameObject("CloseButton", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
         closeGo.transform.SetParent(inner.transform, false);
