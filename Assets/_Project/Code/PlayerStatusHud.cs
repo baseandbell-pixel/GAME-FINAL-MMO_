@@ -430,16 +430,22 @@ public class PlayerStatusHud : MonoBehaviour
             }
         }
 
-        // 4. อัปเดตแบนเนอร์นับถอยหลังเวลาบอสเกิดใหม่
+        // 4. อัปเดตแบนเนอร์นับถอยหลังเวลาบอสเกิดใหม่ (รองรับทั้ง SandboxWorldSpawner และ MonsterSpawnZone แบบอิสระ)
         var spawner = SandboxWorldSpawner.Instance;
         bool showBoss = spawner != null && spawner.ShouldShowBossRespawnBanner;
+        string bossBannerText = showBoss ? spawner.GetBossRespawnCountdownText() : null;
+        if (!showBoss && MonsterSpawnZone.TryGetNearbyRespawningBossBanner(_combat.transform.position, out string zoneBossBanner))
+        {
+            showBoss = true;
+            bossBannerText = zoneBossBanner;
+        }
         if (_bossBanner != null)
         {
             if (_bossBanner.activeSelf != showBoss)
                 _bossBanner.SetActive(showBoss);
 
-            if (showBoss && _bossBannerText != null)
-                _bossBannerText.text = spawner.GetBossRespawnCountdownText();
+            if (showBoss && _bossBannerText != null && !string.IsNullOrEmpty(bossBannerText))
+                _bossBannerText.text = bossBannerText;
         }
     }
 

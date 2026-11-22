@@ -463,6 +463,19 @@ public class MinimapUI : MonoBehaviour
             PlaceZoneOverlay(idx++, SandboxWorldSpawner.Instance.BossArenaCenter, SandboxWorldSpawner.Instance.BossArenaProximityRadius, focus, scale, new Color(0.92f, 0.14f, 0.18f, 0.18f));
         }
 
+        // วาดวงขอบเขตของแคมป์ที่ผู้เล่นวาง MonsterSpawnZone เองบน World Map (M)
+        for (int i = 0; i < MonsterSpawnZone.All.Count; i++)
+        {
+            var z = MonsterSpawnZone.All[i];
+            if (z == null || !z.isActiveAndEnabled || !z.ShowOnWorldMap) continue;
+            Color col = z.IsBossZone
+                ? new Color(0.92f, 0.14f, 0.18f, 0.18f)
+                : (z.ZoneMaxLevel <= 10
+                    ? new Color(0.98f, 0.64f, 0.18f, 0.14f)
+                    : new Color(0.95f, 0.30f, 0.22f, 0.15f));
+            PlaceZoneOverlay(idx++, z.transform.position, Mathf.Max(11f, z.TerritoryRadius), focus, scale, col);
+        }
+
         for (int i = idx; i < _zoneOverlayPool.Count; i++)
         {
             if (_zoneOverlayPool[i].gameObject.activeSelf) _zoneOverlayPool[i].gameObject.SetActive(false);

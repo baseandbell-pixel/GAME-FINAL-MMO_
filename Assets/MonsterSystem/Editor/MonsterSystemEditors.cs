@@ -215,35 +215,117 @@ public class MonsterAnimationConfigEditor : Editor
 }
 
 /// <summary>
-/// Custom Inspector ภาษาไทยทั้งหมดสำหรับ <see cref="MonsterSystemManager"/>
+/// Custom Inspector ภาษาไทยทั้งหมดสำหรับ <see cref="MonsterSystemManager"/> (Empty Hub รวมและคุมโซนทั้งหมดในฉาก)
 /// </summary>
 [CustomEditor(typeof(MonsterSystemManager))]
 public class MonsterSystemManagerEditor : Editor
 {
+    private static readonly string[] QuickAddRow1 = { "Orc", "Goblin", "Slime", "TurtleShell" };
+    private static readonly string[] QuickAddRow2 = { "Troll", "Golem", "BossOgre" };
+
     public override void OnInspectorGUI()
     {
         MonsterSystemManager mgr = (MonsterSystemManager)target;
         serializedObject.Update();
 
-        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-        EditorGUILayout.LabelField("ตัวคุมระบบมอนสเตอร์ประจำฉาก (MonsterSystem Manager)", EditorStyles.boldLabel);
-        int zoneCount = mgr.managedZones != null ? mgr.managedZones.Count : 0;
-        string statusText = mgr.enableAllZones ? "เปิดทำงานอยู่" : "หยุดชั่วคราว (ปิดทุกโซน)";
-        EditorGUILayout.LabelField($"สถานะระบบ: {statusText}  |  จำนวนโซนที่คุมอยู่: {zoneCount} โซน");
-
-        if (Application.isPlaying && mgr.managedZones != null)
+        // นับจำนวนโซนลูกจริงใน Hierarchy แบบสด
+        MonsterSpawnZone[] childZones = mgr.GetComponentsInChildren<MonsterSpawnZone>(includeInactive: true);
+        int totalSlots = 0;
+        int totalAlive = 0;
+        for (int i = 0; i < childZones.Length; i++)
         {
-            EditorGUILayout.Space(2);
-            for (int i = 0; i < mgr.managedZones.Count; i++)
-            {
-                MonsterSpawnZone z = mgr.managedZones[i];
-                if (z == null) continue;
-                string mobName = z.MonsterPrefab != null ? z.MonsterPrefab.name : "ยังไม่ใส่ Prefab";
-                EditorGUILayout.LabelField($"  • {z.name} ({mobName}): รอด {z.AliveCount}/{z.TotalSlotCount} ตัว  (กำลังรอเกิด {z.RespawningCount} ตัว)");
-            }
+            if (childZones[i] == null) continue;
+            totalSlots += childZones[i].TotalSlotCount;
+            if (Application.isPlaying) totalAlive += childZones[i].AliveCount;
+        }
+
+        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+        EditorGUILayout.LabelField("ศูนย์รวมและคุมโซนมอนสเตอร์ทั้งหมด (MonsterZones Hub)", EditorStyles.boldLabel);
+        string statusText = mgr.enableAllZones ? "เปิดทำงานอยู่" : "หยุดชั่วคราว (ปิดทุกโซน)";
+        EditorGUILayout.LabelField($"สถานะ: {statusText}  |  โซนภายใต้ตัวนี้: {childZones.Length} โซน ({totalSlots} ตัว)");
+
+        if (Application.isPlaying)
+        {
+            EditorGUILayout.LabelField($"มอนที่มีชีวิตอยู่ตอนนี้ทั้งหมด: {totalAlive}/{totalSlots} ตัว");
             Repaint();
         }
         EditorGUILayout.EndVertical();
+
+        // กล่องจัดการโซนด่วน (เพิ่มโซน / รวบโซน / เรียงเลข Camp)
+        bool isSceneObject = !EditorUtility.IsPersistent(mgr);
+        if (isSceneObject && !Application.isPlaying)
+        {
+            EditorGUILayout.Space(5);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("เพิ่มแคมป์มอนสเตอร์ใหม่ใต้ตัวคุมนี้ (คลิกวางได้หลายแคมป์)", EditorStyles.boldLabel);
+
+            EditorGUILayout.BeginHorizontal();
+            foreach (string sp in QuickAddRow1)
+            {
+                if (GUILayout.Button($"+ {sp}", GUILayout.Height(24)))
+                {
+                    MonsterAnimatorBuilder.AddZoneAsChildOfHub(mgr, sp);
+                    serializedObject.Update();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
+            foreach (string sp in QuickAddRow2)
+            {
+                if (GUILayout.Button($"+ {sp}", GUILayout.Height(24)))
+                {
+                    MonsterAnimatorBuilder.AddZoneAsChildOfHub(mgr, sp);
+                    serializedObject.Update();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(3);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("รวบโซนทั้งหมดในฉากมาไว้ใต้ตัวนี้", GUILayout.Height(25)))
+            {
+                MonsterAnimatorBuilder.GroupAllSceneZonesUnderHub(mgr);
+                serializedObject.Update();
+            }
+            if (GUILayout.Button("เรียงเลข Camp 1..N ตามลำดับลูก", GUILayout.Height(25)))
+            {
+                MonsterAnimatorBuilder.AutoNumberChildZones(mgr);
+                serializedObject.Update();
+            }
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+        }
+
+        // ตารางสรุปแคมป์ลูกทั้งหมดพร้อมปุ่มคลิกเลือก/ซูมดูทันที
+        if (childZones.Length > 0)
+        {
+            EditorGUILayout.Space(5);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField($"รายการแคมป์ที่คุมอยู่ ({childZones.Length} แคมป์)", EditorStyles.boldLabel);
+            for (int i = 0; i < childZones.Length; i++)
+            {
+                MonsterSpawnZone z = childZones[i];
+                if (z == null) continue;
+                EditorGUILayout.BeginHorizontal();
+                string info = Application.isPlaying
+                    ? $"• {z.GetMapMarkerLabel()}  [รอด {z.AliveCount}/{z.TotalSlotCount}]"
+                    : $"• {z.GetMapMarkerLabel()}  [{z.SpawnCount} ตัว]";
+                EditorGUILayout.LabelField(info);
+                if (isSceneObject && GUILayout.Button("เลือก", GUILayout.Width(46)))
+                {
+                    Selection.activeGameObject = z.gameObject;
+                }
+                if (isSceneObject && GUILayout.Button("ซูมดู", GUILayout.Width(48)))
+                {
+                    Selection.activeGameObject = z.gameObject;
+                    if (SceneView.lastActiveSceneView != null)
+                        SceneView.lastActiveSceneView.FrameSelected();
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+            EditorGUILayout.EndVertical();
+        }
 
         EditorGUILayout.Space(6);
 
@@ -262,9 +344,10 @@ public class MonsterSystemManagerEditor : Editor
         EditorGUILayout.Space(6);
 
         EditorGUILayout.LabelField("3. โซนมอนสเตอร์ที่อยู่ภายใต้ตัวคุมนี้", EditorStyles.boldLabel);
-        Prop("managedZones", "รายชื่อโซนทั้งหมด (Managed Zones)", "ถ้าเว้นว่าง ระบบจะดึงโซนลูกทั้งหมดใต้ตัวคุมนี้ให้อัตโนมัติ", includeChildren: true);
+        Prop("autoSyncChildZones", "ซิงก์โซนลูกอัตโนมัติ", "เปิดไว้เพื่อให้ลาก Zone_* เข้า/ออกใต้ Empty นี้แล้วอัปเดตรายชื่อเองทันที");
+        Prop("managedZones", "รายชื่อโซนทั้งหมด (Managed Zones)", "รายชื่อโซนที่ตัวคุมนี้ดูแลอยู่", includeChildren: true);
 
-        if (GUILayout.Button("ดึงรายชื่อโซนลูกทั้งหมดอัตโนมัติ", GUILayout.Height(26)))
+        if (GUILayout.Button("รีเฟรชรายชื่อโซนลูกทั้งหมด", GUILayout.Height(24)))
         {
             Undo.RecordObject(mgr, "Refresh Child Zones");
             mgr.RefreshChildZones();
@@ -274,7 +357,14 @@ public class MonsterSystemManagerEditor : Editor
 
         EditorGUILayout.Space(8);
 
-        EditorGUILayout.LabelField("4. ช่องเสียบ Event (เผื่อเชื่อมระบบเควส/รางวัลของเพื่อนทีหลัง)", EditorStyles.boldLabel);
+        EditorGUILayout.LabelField("4. โซนปลอดภัยสำรอง (ทำงานอัตโนมัติถ้าลบ SandboxWorldSpawner)", EditorStyles.boldLabel);
+        Prop("ensureFallbackSafeZoneIfMissing", "สร้าง SafeZone สำรองอัตโนมัติถ้าฉากยังไม่มี", "เปิดไว้เสมอถ้าลบ SandboxWorldSpawner ออก (มีวงสีเขียวให้ดูใน Scene View)");
+        Prop("fallbackSafeZoneCenter", "พิกัดศูนย์กลาง SafeZone สำรอง", "ค่าเริ่มต้น (0, 0, -60)");
+        Prop("fallbackSafeZoneRadius", "รัศมี SafeZone สำรอง (เมตร)", "ค่าเริ่มต้น 12 เมตร");
+
+        EditorGUILayout.Space(8);
+
+        EditorGUILayout.LabelField("5. ช่องเสียบ Event (เผื่อเชื่อมระบบเควส/รางวัลของเพื่อนทีหลัง)", EditorStyles.boldLabel);
         Prop("onAnyMonsterKilled", "เมื่อมีมอนสเตอร์ตาย (On Any Monster Killed)", "ลากสคริปต์ระบบเควส/รางวัลของเพื่อนมาเสียบที่นี่ได้");
         Prop("onAnyMonsterSpawned", "เมื่อมีมอนสเตอร์เกิด (On Any Monster Spawned)", "แจ้งเตือนทุกครั้งที่มีมอนเกิดใหม่");
 
@@ -302,7 +392,7 @@ public class MonsterSpawnZoneEditor : Editor
 
         EditorGUILayout.BeginVertical(EditorStyles.helpBox);
         string mobName = zone.MonsterPrefab != null ? zone.MonsterPrefab.name : "ยังไม่ใส่พรีแฟบมอนสเตอร์";
-        EditorGUILayout.LabelField($"โซนเกิดมอนสเตอร์: {zone.name} ({mobName})", EditorStyles.boldLabel);
+        EditorGUILayout.LabelField($"แคมป์มอนสเตอร์: {zone.GetMapMarkerLabel()}  ({mobName})", EditorStyles.boldLabel);
         if (Application.isPlaying)
         {
             EditorGUILayout.LabelField($"สถานะสด → รอดอยู่: {zone.AliveCount}/{zone.TotalSlotCount} ตัว  |  กำลังรอเกิดใหม่: {zone.RespawningCount} ตัว");
@@ -310,7 +400,7 @@ public class MonsterSpawnZoneEditor : Editor
         }
         else
         {
-            EditorGUILayout.LabelField($"จำนวนมอนในโซนนี้: {zone.SpawnCount} ตัว (เห็นวงขอบเขตเฉพาะใน Scene View)");
+            EditorGUILayout.LabelField($"จำนวนมอนในโซนนี้: {zone.SpawnCount} ตัว  |  โชว์บน World Map: {(zone.ShowOnWorldMap ? "เปิด" : "ปิด")}");
         }
         EditorGUILayout.EndVertical();
 
@@ -321,7 +411,7 @@ public class MonsterSpawnZoneEditor : Editor
         Prop("spawnCount", "จำนวนมอนสเตอร์สูงสุด", "จำนวนตัวที่จะเกิดในโซนนี้");
         Prop("customSpawnPoints", "จุดเกิดแบบกำหนดเอง (ไม่บังคับ)", "ถ้าเว้นว่าง ระบบจะกระจายจุดเกิดรอบโซนอัตโนมัติ", includeChildren: true);
         Prop("slotSpacing", "ระยะห่างระหว่างแต่ละตัว (เมตร)", "แนะนำ 10-14 เมตร เพื่อให้ผู้เล่นลากตีทีละตัวง่าย");
-        Prop("territoryRadius", "รัศมีวงเขตใน Scene View (เมตร)", "เส้นสีเขียวบอกเขตในหน้า Editor เท่านั้น (ในเกมจริงไม่เห็น)");
+        Prop("territoryRadius", "รัศมีวงเขตโซน (Scene View & World Map / เมตร)", "ใช้แสดงทั้งใน Scene View และวงเขตบน World Map (M)");
 
         EditorGUILayout.Space(6);
 
@@ -334,6 +424,16 @@ public class MonsterSpawnZoneEditor : Editor
         Prop("respawnMaxSeconds", "เวลาเกิดใหม่สูงสุด (วินาที)", "ค่าแนะนำ 35-50 วินาที");
         Prop("antiPopInPlayerRadius", "ระยะกันเกิดทับหัวผู้เล่น (เมตร)", "ถ้าผู้เล่นยืนใกล้จุดเกิดกว่านี้จะรอจนผู้เล่นเดินออกห่างก่อน");
         Prop("antiPopInRetryDelay", "ระยะเวลารอเช็กซ้ำ (วินาที)", "เช็กซ้ำทุกกี่วินาทีตอนผู้เล่นยืนขวางจุดเกิด");
+
+        EditorGUILayout.Space(6);
+
+        EditorGUILayout.LabelField("2.5 แผนที่ (World Map) & กล่องสมบัติเมื่อเคลียร์แคมป์", EditorStyles.boldLabel);
+        Prop("campNumber", "หมายเลขแคมป์บนแผนที่ (0 = รันเลขอัตโนมัติ)", "ใส่ 0 เพื่อรันเลขต่อจากแคมป์ที่มีอยู่อัตโนมัติ (ถ้าลบ SandboxWorldSpawner จะเริ่มที่ Camp 1 เอง) หรือพิมพ์เลขที่ต้องการได้เลย");
+        Prop("campDisplayName", "ชื่อแคมป์ที่กำหนดเอง (เว้นว่าง = ใช้ชื่อมอน)", "พิมพ์ได้ทั้งชื่ออย่างเดียว (เช่น ป่าสไลม์ → แสดง 'Camp 5 ป่าสไลม์') หรือพิมพ์เต็ม (เช่น 'Camp 9 ลานบอสยักษ์' / 'แคมป์ 1 ลานฝึก')");
+        EditorGUILayout.HelpBox($"ตัวอย่างป้ายที่จะโชว์บน World Map [M]:  {zone.GetMapMarkerLabel()}", MessageType.None);
+        Prop("showOnWorldMap", "แสดงหมุดแคมป์และวงเขตบน World Map (M)", "เปิดไว้เพื่อให้ผู้เล่นเปิดแมพ [M] เห็นแคมป์นี้และเวลานับถอยหลังเกิดใหม่");
+        Prop("spawnRewardChestOnZoneClear", "เสกกล่องสมบัติ (LootChest) เมื่อเคลียร์แคมป์", "เมื่อฆ่ามอนครบทุกตัวในโซนจะเสกหีบสมบัติของเพื่อนตรงกลางโซน + ขึ้นไอคอนบนแผนที่ (แนะนำให้ใช้โหมด CampClearWave)");
+        Prop("awardClearGold", "แจกโบนัส Gold เมื่อเคลียร์แคมป์", "แจกเงินรางวัลตามเลเวลโซนเมื่อเคลียร์ครบทุกตัว");
 
         EditorGUILayout.Space(6);
 
@@ -414,6 +514,7 @@ public class MonsterEnemyNPCEditor : Editor
         Prop("guardDuration", "ระยะเวลายกการ์ด (วินาที)", "ยืนยกการ์ดอยู่นานกี่วินาที");
         Prop("guardCooldown", "คูลดาวน์ก่อนยกการ์ดรอบใหม่ (วินาที)", "กันไม่ให้มอนยกการ์ดรัวเกินไป");
         Prop("reactiveGuardChanceOnCooldown", "โอกาสยกการ์ดดักตอนผู้เล่นง้างตี (0-1)", "เช่น 0.28 = มีโอกาส 28% ยกการ์ดดัก");
+        Prop("allowLowHpEmergencyGuard", "ยกการ์ดฉุกเฉินเมื่อเลือด < 55%", "เปิดไว้สำหรับมอนสายแทงก์/บอส | ปิดสำหรับ Slime/Goblin จะได้ไม่ยกการ์ดรัวตอนฟาร์ม");
         Prop("guardBonusDefense", "พลังป้องกันเพิ่มขณะยกการ์ด", "ลดดาเมจประมาณ 75% ขณะตั้งการ์ด");
         Prop("counterDamageMultiplier", "ตัวคูณดาเมจท่าฟันสวน (COUNTER!)", "เมื่อผู้เล่นสแปมตีใส่การ์ดจะโดนสวนแรงขึ้น");
         Prop("guardBreakStunDuration", "ระยะเวลาติดมึนเมื่อการ์ดแตก (วินาที)", "โดน Heavy / Stealth / Combo 3 แตกการ์ดจะติด Stun เปิดช่องตีฟรี");
@@ -594,6 +695,12 @@ public class SandboxWorldSpawnerEditor : Editor
             {
                 serializedObject.ApplyModifiedProperties();
                 MonsterAnimatorBuilder.AssignOrcToCamp1InActiveScene(saveScene: false, removeExistingManager: false);
+                serializedObject.Update();
+            }
+            if (GUILayout.Button("★ จัดวางมอนสเตอร์ครบทั้ง 7 ตัวลงฉากนี้ (4 แคมป์หลัก + Slime & Turtle + BossOgre)", GUILayout.Height(28)))
+            {
+                serializedObject.ApplyModifiedProperties();
+                MonsterAnimatorBuilder.AssignAllCampsAndBossToSpawnerInActiveScene(saveScene: true);
                 serializedObject.Update();
             }
             EditorGUILayout.EndVertical();

@@ -405,6 +405,19 @@ public class MapManager : MonoBehaviour
             });
         }
 
+        // แสดงแคมป์ที่ผู้เล่นวางโซน MonsterSpawnZone เองในแมป (รันเลข Camp 5, 6, 7... อัตโนมัติหรือตามเลขที่ตั้งเอง + ติดตามตำแหน่งบอสจริง)
+        for (int i = 0; i < MonsterSpawnZone.All.Count; i++)
+        {
+            var z = MonsterSpawnZone.All[i];
+            if (z == null || !z.isActiveAndEnabled || !z.ShowOnWorldMap) continue;
+            into.Add(new MapMarker
+            {
+                position = z.GetMapMarkerPosition(),
+                kind = z.IsBossZone ? MarkerKind.Boss : MarkerKind.EnemyCamp,
+                label = z.GetMapMarkerLabel()
+            });
+        }
+
         for (int i = 0; i < EnemyNPC.All.Count; i++)
         {
             var e = EnemyNPC.All[i];

@@ -44,16 +44,25 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d7bc2df6d93512f448492379e116bbb8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MonsterSpawnZone
-  monsterPrefab: {fileID: 7151963957018697117, guid: af5a16d07b7ece047a98bb1148a316d1, type: 3}
+  monsterPrefab: {fileID: 1875072287017637930, guid: fdb8aa711466c9d4abcc43a8edfdbfcb, type: 3}
   spawnCount: 4
   customSpawnPoints: []
   slotSpacing: 12
   territoryRadius: 15
-  respawnMode: 0
+  useFixedZoneLevel: 1
+  zoneMinLevel: 1
+  zoneMaxLevel: 2
+  respawnMode: 1
   respawnMinSeconds: 35
   respawnMaxSeconds: 50
   antiPopInPlayerRadius: 6
   antiPopInRetryDelay: 2
+  campNumber: 0
+  campDisplayName: 
+  showOnWorldMap: 1
+  spawnRewardChestOnZoneClear: 1
+  awardClearGold: 1
   gizmoTerritoryColor: {r: 0.35, g: 0.85, b: 0.35, a: 0.75}
   gizmoAnchorColor: {r: 1, g: 0.55, b: 0.15, a: 0.85}
+  allowNonMasterFallbackSpawn: 0
   verboseLogs: 0

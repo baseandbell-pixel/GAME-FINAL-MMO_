@@ -26,10 +26,17 @@ public class MonsterClipImportProcessor : AssetPostprocessor
     {
         "combat_idle",
         "combatidle",
+        "fighting_stance",
+        "fightingstance",
+        "idlebattle",
+        "idlenormal",
         "skill_cast",
         "skillcast",
         "evade_run",
         "evaderun",
+        "defend",
+        "block",
+        "dizzy",
         "walking",
         "walk",
         "idle",
@@ -43,14 +50,30 @@ public class MonsterClipImportProcessor : AssetPostprocessor
         "skillrelease",
         "hit_react",
         "hitreact",
+        "get_hit",
+        "gethit",
+        "defendgethit",
+        "defendhit",
+        "take_damage",
+        "damage",
+        "hurt",
+        "flinch",
         "knockdown",
+        "idle_to_walk",
         "attack_01",
         "attack_02",
         "attack_03",
         "attack01",
         "attack02",
         "attack03",
+        "attack1",
+        "attack2",
+        "attack3",
         "attack",
+        "atack_3",
+        "atack_2",
+        "atack",
+        "dodge",
         "spawn",
         "death",
         "die",
@@ -165,7 +188,7 @@ public class MonsterClipImportProcessor : AssetPostprocessor
         {
             importer.textureType = TextureImporterType.NormalMap;
         }
-        else if (lower.Contains("roughness") || lower.Contains("metalness") || lower.Contains("metallic") || lower.EndsWith("_ao") || lower.Contains("_ao_"))
+        else if (lower.Contains("roughness") || lower.Contains("metalness") || lower.Contains("metallic") || lower.Contains("occlusion") || lower.EndsWith("_ao") || lower.Contains("_ao_"))
         {
             importer.sRGBTexture = false;
         }

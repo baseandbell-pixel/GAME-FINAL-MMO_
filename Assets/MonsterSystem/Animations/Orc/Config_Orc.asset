@@ -18,8 +18,8 @@ MonoBehaviour:
   healthMultiplier: 1.35
   damageMultiplier: 1.38
   defenseBonus: 1
-  attackRange: 2.5
-  attackImpactDelay: 0.4
+  attackRange: 2.25
+  attackImpactDelay: 0.42
   counterImpactDelay: 0.36
   lootRollMode: 0
   maxDropsPerKill: 0

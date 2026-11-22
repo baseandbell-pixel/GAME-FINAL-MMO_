@@ -38,17 +38,43 @@ public class MonsterSystemManager : MonoBehaviour
     [Tooltip("ตัวคูณเรทดรอปของทั้งฉาก (เช่น 2.0 = อีเวนต์คูณดรอป 2 เท่า | 0 = ปิดดรอป)")]
     [Range(0f, 5f)] public float globalDropRateMultiplier = 1.0f;
 
-    [Header("3. รายชื่อโซนที่คุมอยู่ (ถ้าเว้นว่างจะดึงโซนลูกให้อัตโนมัติ)")]
+    [Header("3. รายชื่อโซนที่คุมอยู่ (รวบอัตโนมัติจากลูกใต้ตัวนี้)")]
+    [Tooltip("เปิดไว้ (แนะนำ): อัปเดตรายชื่อโซนลูกอัตโนมัติทุกครั้งที่ลากโซนเข้า/ออกใต้ตัวคุมนี้")]
+    public bool autoSyncChildZones = true;
     public List<MonsterSpawnZone> managedZones = new List<MonsterSpawnZone>();
 
-    [Header("4. ช่องเสียบ Event เผื่อเชื่อมระบบเควส/รางวัลของเพื่อนในอนาคต")]
+    [Header("4. โซนปลอดภัยสำรอง (ทำงานอัตโนมัติทันทีถ้าลบ SandboxWorldSpawner ออก)")]
+    [Tooltip("เปิดไว้ (แนะนำ): ถ้าฉากไม่มี SandboxWorldSpawner หรือ SafeZone อยู่ ระบบจะสร้าง Comfort Safe Zone ให้อัตโนมัติ")]
+    public bool ensureFallbackSafeZoneIfMissing = true;
+    public Vector3 fallbackSafeZoneCenter = new Vector3(0f, 0f, -60f);
+    [Min(3f)] public float fallbackSafeZoneRadius = 12f;
+
+    [Header("5. ช่องเสียบ Event เผื่อเชื่อมระบบเควส/รางวัลของเพื่อนในอนาคต")]
     public UnityEvent<MonsterEnemyNPC, PlayerCombat> onAnyMonsterKilled;
     public UnityEvent<MonsterEnemyNPC> onAnyMonsterSpawned;
 
     private void Awake()
     {
         Active = this;
-        CollectChildZonesIfEmpty();
+        PlayerSaveManager.EnsureExists();
+        if (autoSyncChildZones)
+            RefreshChildZones();
+        else
+            CollectChildZonesIfEmpty();
+    }
+
+    private void Start()
+    {
+        if (ensureFallbackSafeZoneIfMissing && SafeZone.Instance == null)
+        {
+            SafeZone.EnsureAt(fallbackSafeZoneCenter, fallbackSafeZoneRadius);
+        }
+    }
+
+    private void OnTransformChildrenChanged()
+    {
+        if (autoSyncChildZones)
+            RefreshChildZones();
     }
 
     private void OnEnable()
@@ -59,6 +85,21 @@ public class MonsterSystemManager : MonoBehaviour
     private void OnDisable()
     {
         if (Active == this) Active = null;
+    }
+
+    private void OnDrawGizmosSelected()
+    {
+        if (!ensureFallbackSafeZoneIfMissing) return;
+        Gizmos.color = new Color(0.22f, 0.92f, 0.64f, 0.75f);
+        const int segs = 36;
+        Vector3 prev = fallbackSafeZoneCenter + new Vector3(fallbackSafeZoneRadius, 0.15f, 0f);
+        for (int i = 1; i <= segs; i++)
+        {
+            float a = (i / (float)segs) * Mathf.PI * 2f;
+            Vector3 next = fallbackSafeZoneCenter + new Vector3(Mathf.Cos(a) * fallbackSafeZoneRadius, 0.15f, Mathf.Sin(a) * fallbackSafeZoneRadius);
+            Gizmos.DrawLine(prev, next);
+            prev = next;
+        }
     }
 
     /// <summary>Scans child objects for <see cref="MonsterSpawnZone"/> components if the list is empty.</summary>

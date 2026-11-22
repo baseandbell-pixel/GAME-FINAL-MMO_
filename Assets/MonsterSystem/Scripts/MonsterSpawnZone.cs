@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using Fusion;
 using UnityEngine;
 
@@ -25,6 +27,13 @@ public enum MonsterZoneRespawnMode
 /// </summary>
 public class MonsterSpawnZone : MonoBehaviour
 {
+    /// <summary>All active MonsterSpawnZones currently loaded in the scene (read by MapManager & MinimapUI).</summary>
+    public static readonly List<MonsterSpawnZone> All = new List<MonsterSpawnZone>();
+
+    /// <summary>Authoritative per-zone damage ledgers keyed by ZoneSignature (for participation-locked LootChest &amp; zero-freeloading Gold).</summary>
+    private static readonly Dictionary<int, Dictionary<PlayerRef, float>> s_zoneDamageLedgers =
+        new Dictionary<int, Dictionary<PlayerRef, float>>();
+
     private class SpawnSlotState
     {
         public int SlotIndex;
@@ -43,7 +52,7 @@ public class MonsterSpawnZone : MonoBehaviour
     [SerializeField] private Transform[] customSpawnPoints = null;
     [Tooltip("ระยะห่างระหว่างแต่ละตัว (เมตร) — ค่ากว้างจะช่วยให้ลากตีทีละตัวได้ง่าย")]
     [Min(4f)] [SerializeField] private float slotSpacing = 12f;
-    [Tooltip("รัศมีเขตโซนที่แสดงเป็นวงสีเขียวใน Scene View (มองไม่เห็นในเกมจริง)")]
+    [Tooltip("รัศมีเขตโซนที่แสดงเป็นวงสีเขียวใน Scene View และวงเขตบน World Map (เมตร)")]
     [Min(4f)] [SerializeField] private float territoryRadius = 15f;
 
     [Header("2. กติกาการเกิดใหม่ & เลเวลประจำโซน (MMO Respawn)")]
@@ -51,8 +60,8 @@ public class MonsterSpawnZone : MonoBehaviour
     [SerializeField] private bool useFixedZoneLevel = true;
     [Min(1)] [SerializeField] private int zoneMinLevel = 1;
     [Min(1)] [SerializeField] private int zoneMaxLevel = 2;
-    [Tooltip("IndividualStaggered = ตายตัวไหนเกิดใหม่ตัวนั้น | CampClearWave = รอตายยกแก๊งแล้วเกิดใหม่พร้อมกัน")]
-    [SerializeField] private MonsterZoneRespawnMode respawnMode = MonsterZoneRespawnMode.IndividualStaggered;
+    [Tooltip("CampClearWave = ตายยกแคมป์ -> ดรอปกล่องสมบัติ -> เกิดใหม่พร้อมกันทั้งแคมป์ (แนะนำ) | IndividualStaggered = ตายตัวไหนเกิดตัวนั้น")]
+    [SerializeField] private MonsterZoneRespawnMode respawnMode = MonsterZoneRespawnMode.CampClearWave;
     [Tooltip("เวลาเกิดใหม่ต่ำสุด (วินาที)")]
     [Min(5f)] [SerializeField] private float respawnMinSeconds = 35f;
     [Tooltip("เวลาเกิดใหม่สูงสุด (วินาที)")]
@@ -61,9 +70,23 @@ public class MonsterSpawnZone : MonoBehaviour
     [Min(1f)] [SerializeField] private float antiPopInPlayerRadius = 6.0f;
     [Min(0.5f)] [SerializeField] private float antiPopInRetryDelay = 2.0f;
 
+    [Header("2.5 แผนที่ (World Map) & กล่องสมบัติเมื่อเคลียร์แคมป์")]
+    [Tooltip("หมายเลขแคมป์ที่จะโชว์บนแผนที่ (0 = รันเลขต่อจากแคมป์ที่มีให้อัตโนมัติ เช่น Camp 5, Camp 6, Camp 7...)")]
+    [Min(0)] [SerializeField] private int campNumber = 0;
+    [Tooltip("ชื่อแคมป์ที่โชว์บนแผนที่ (ถ้าเว้นว่างจะใช้ชื่อมอนสเตอร์อัตโนมัติ เช่น Slime, TurtleShell)")]
+    [SerializeField] private string campDisplayName = "";
+    [Tooltip("แสดงหมุด Camp + วงกลมขอบเขต + เวลานับถอยหลังเกิดใหม่บนหน้าต่าง World Map (M)")]
+    [SerializeField] private bool showOnWorldMap = true;
+    [Tooltip("เสกกล่องสมบัติ (LootChest) ตรงกลางโซนทันทีเมื่อเคลียร์มอนครบทุกตัวในโซนนี้ (พร้อมขึ้นไอคอนหีบบนแผนที่)")]
+    [SerializeField] private bool spawnRewardChestOnZoneClear = true;
+    [Tooltip("แจกโบนัส Gold เมื่อเคลียร์โซนนี้ครบทุกตัว (สเกลตามเลเวลของโซน)")]
+    [SerializeField] private bool awardClearGold = true;
+
     [Header("3. สีเส้นเขตใน Scene View & Log")]
     [SerializeField] private Color gizmoTerritoryColor = new Color(0.35f, 0.85f, 0.35f, 0.75f);
     [SerializeField] private Color gizmoAnchorColor = new Color(1.0f, 0.55f, 0.15f, 0.85f);
+    [Tooltip("ปิดไว้ (แนะนำสำหรับ Multiplayer): ให้เฉพาะ MasterClient เสกมอน เพื่อกันไม่ให้เพื่อนที่เข้าห้องตอนแคมป์เพิ่งถูกเคลียร์เสกมอนเบิ้ลซ้อนกัน")]
+    [SerializeField] private bool allowNonMasterFallbackSpawn = false;
     [Tooltip("ติ๊กเมื่ออยากดูข้อความแจ้งเตือน Spawn/Respawn ใน Console")]
     [SerializeField] private bool verboseLogs = false;
 
@@ -75,11 +98,197 @@ public class MonsterSpawnZone : MonoBehaviour
     private bool _initialSpawnDone;
     private bool _campWaveWaiting;
     private float _campWaveRespawnAt;
+    private float _nonMasterWaitStart = -1f;
+    private bool _actingAsFallbackSpawner;
+    private bool _everSawLivingMonster;
+    private bool _zoneClearRewarded;
+    private float _authoritativeClearAt = -10f;
+    private float _zeroLivingDetectedAt = -1f;
+    private float _clientEstimatedRespawnAt = -1f;
+    private LootChest _activeRewardChest;
     private MonsterSystemManager _parentManager;
 
     public EnemyNPC MonsterPrefab => monsterPrefab;
     public int SpawnCount => spawnCount;
     public int TotalSlotCount => _slots.Count > 0 ? _slots.Count : spawnCount;
+    public float TerritoryRadius => territoryRadius;
+    public int ZoneMinLevel => Mathf.Max(1, Mathf.Min(zoneMinLevel, zoneMaxLevel));
+    public int ZoneMaxLevel => Mathf.Max(ZoneMinLevel, Mathf.Max(zoneMinLevel, zoneMaxLevel));
+    public bool ShowOnWorldMap => showOnWorldMap;
+    public bool IsBossZone => monsterPrefab is MonsterEnemyNPC mNpc && mNpc.IsConfiguredAsBoss;
+    public bool IsZoneCleared => _everSawLivingMonster && GetNetworkLivingCount() == 0;
+
+    /// <summary>
+    /// Deterministic Camp number resolution: uses explicit <see cref="campNumber"/> if > 0;
+    /// otherwise sorts all auto-numbered zones deterministically by (X, Z, Name) so Host &amp; Clients always match 100%,
+    /// starting right after <see cref="SandboxWorldSpawner"/>'s camps (or from Camp 1 if SandboxWorldSpawner is removed!).
+    /// </summary>
+    public int ResolvedCampNumber
+    {
+        get
+        {
+            if (campNumber > 0) return campNumber;
+            int baseCount = (SandboxWorldSpawner.Instance != null && SandboxWorldSpawner.Instance.Camps != null)
+                ? SandboxWorldSpawner.Instance.Camps.Count
+                : 0;
+
+            int rankBeforeMe = 0;
+            for (int i = 0; i < All.Count; i++)
+            {
+                MonsterSpawnZone other = All[i];
+                if (other == null || other == this || other.campNumber != 0) continue;
+                if (CompareZoneOrder(other, this) < 0)
+                    rankBeforeMe++;
+            }
+
+            int candidate = baseCount + 1 + rankBeforeMe;
+            bool collision = true;
+            while (collision)
+            {
+                collision = false;
+                for (int i = 0; i < All.Count; i++)
+                {
+                    if (All[i] != null && All[i] != this && All[i].campNumber == candidate)
+                    {
+                        candidate++;
+                        collision = true;
+                        break;
+                    }
+                }
+            }
+            return candidate;
+        }
+    }
+
+    private static int CompareZoneOrder(MonsterSpawnZone a, MonsterSpawnZone b)
+    {
+        int cmpX = Mathf.RoundToInt(a.transform.position.x * 10f).CompareTo(Mathf.RoundToInt(b.transform.position.x * 10f));
+        if (cmpX != 0) return cmpX;
+        int cmpZ = Mathf.RoundToInt(a.transform.position.z * 10f).CompareTo(Mathf.RoundToInt(b.transform.position.z * 10f));
+        if (cmpZ != 0) return cmpZ;
+        return string.CompareOrdinal(a.gameObject.name, b.gameObject.name);
+    }
+
+    public string ResolvedDisplayName
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(campDisplayName))
+                return campDisplayName.Trim();
+            if (monsterPrefab != null)
+            {
+                string n = monsterPrefab.name;
+                if (n.StartsWith("Enemy_")) n = n.Substring(6);
+                return n;
+            }
+            string zn = gameObject.name;
+            if (zn.StartsWith("Zone_")) zn = zn.Substring(5);
+            return zn;
+        }
+    }
+
+    public float NextRespawnRemainingSeconds
+    {
+        get
+        {
+            float now = Time.time;
+            if (respawnMode == MonsterZoneRespawnMode.CampClearWave && _campWaveWaiting)
+                return Mathf.Max(0f, _campWaveRespawnAt - now);
+
+            float shortest = float.MaxValue;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                if (_slots[i].WaitingRespawn)
+                {
+                    float rem = Mathf.Max(0f, _slots[i].RespawnAt - now);
+                    if (rem < shortest) shortest = rem;
+                }
+            }
+            if (shortest < float.MaxValue) return shortest;
+
+            // Non-Master client live countdown estimate when the zone is cleared!
+            if (IsZoneCleared && _clientEstimatedRespawnAt > now)
+                return Mathf.Max(0f, _clientEstimatedRespawnAt - now);
+
+            return 0f;
+        }
+    }
+
+    public string GetFormattedRespawnTime()
+    {
+        int totalSec = Mathf.CeilToInt(Mathf.Max(0f, NextRespawnRemainingSeconds));
+        int mins = totalSec / 60;
+        int secs = totalSec % 60;
+        return $"{mins:00}:{secs:00}";
+    }
+
+    /// <summary>
+    /// Returns the world position for the World Map / Minimap marker.
+    /// For Boss zones with a living boss, tracks the boss's real live position (matching SandboxWorldSpawner);
+    /// otherwise returns the zone center.
+    /// </summary>
+    public Vector3 GetMapMarkerPosition()
+    {
+        if (IsBossZone && _zoneSignature != 0)
+        {
+            for (int i = 0; i < EnemyNPC.All.Count; i++)
+            {
+                MonsterEnemyNPC m = EnemyNPC.All[i] as MonsterEnemyNPC;
+                if (m != null && m.IsSpawned && m.IsAlive && m.ZoneSignature == _zoneSignature)
+                    return m.transform.position;
+            }
+        }
+        return transform.position;
+    }
+
+    public string GetMapMarkerLabel()
+    {
+        int num = ResolvedCampNumber;
+        string custom = !string.IsNullOrWhiteSpace(campDisplayName) ? campDisplayName.Trim() : string.Empty;
+        string mob = ResolvedDisplayName;
+        bool customHasPrefix = !string.IsNullOrEmpty(custom) &&
+                               (custom.StartsWith("Camp", System.StringComparison.OrdinalIgnoreCase) ||
+                                custom.StartsWith("Boss", System.StringComparison.OrdinalIgnoreCase) ||
+                                custom.StartsWith("แคมป์") ||
+                                custom.StartsWith("บอส"));
+
+        string title = customHasPrefix
+            ? custom
+            : (IsBossZone ? $"Boss {mob}" : $"Camp {num} {mob}");
+
+        if (IsZoneCleared && NextRespawnRemainingSeconds > 0.5f)
+            return customHasPrefix
+                ? $"{custom} ({GetFormattedRespawnTime()})"
+                : (IsBossZone ? $"Boss {mob} ({GetFormattedRespawnTime()})" : $"Camp {num} ({GetFormattedRespawnTime()})");
+
+        string lvlTag = ZoneMinLevel == ZoneMaxLevel ? $"Lv.{ZoneMinLevel}" : $"Lv.{ZoneMinLevel}-{ZoneMaxLevel}";
+        return $"{title} ({lvlTag})";
+    }
+
+    /// <summary>
+    /// Allows <see cref="PlayerStatusHud"/> to display the Boss Respawn Countdown Banner even when
+    /// <see cref="SandboxWorldSpawner"/> is deleted from the scene and Bosses are spawned via <c>Zone_Boss*</c>!
+    /// </summary>
+    public static bool TryGetNearbyRespawningBossBanner(Vector3 playerPos, out string bannerText)
+    {
+        for (int i = 0; i < All.Count; i++)
+        {
+            MonsterSpawnZone z = All[i];
+            if (z == null || !z.isActiveAndEnabled || !z.IsBossZone) continue;
+            if (!z.IsZoneCleared || z.NextRespawnRemainingSeconds <= 0.5f) continue;
+
+            float dist = Vector2.Distance(
+                new Vector2(playerPos.x, playerPos.z),
+                new Vector2(z.transform.position.x, z.transform.position.z));
+            if (dist <= Mathf.Max(24f, z.TerritoryRadius + 8f))
+            {
+                bannerText = $"Boss {z.ResolvedDisplayName} respawns in {z.GetFormattedRespawnTime()}";
+                return true;
+            }
+        }
+        bannerText = string.Empty;
+        return false;
+    }
 
     public int AliveCount
     {
@@ -106,11 +315,38 @@ public class MonsterSpawnZone : MonoBehaviour
         }
     }
 
+    private void OnEnable()
+    {
+        if (!All.Contains(this)) All.Add(this);
+    }
+
+    private void OnDisable()
+    {
+        All.Remove(this);
+        if (_zoneSignature != 0)
+            s_zoneDamageLedgers.Remove(_zoneSignature);
+    }
+
     private void Awake()
     {
+        // Standalone drop-in guarantee: ensure PlayerSaveManager exists even if SandboxWorldSpawner is removed!
+        PlayerSaveManager.EnsureExists();
         _parentManager = GetComponentInParent<MonsterSystemManager>();
         _zoneSignature = ComputeZoneSignature();
         BuildSlots();
+    }
+
+    private void Start()
+    {
+        // Standalone drop-in guarantee: if user deleted SandboxWorldSpawner from Dev_Kulpat (or a custom map) and no SafeZone exists,
+        // automatically create the Comfort Safe Zone at (0, 0, -60) so player respawn/safe haven/map work 100% identically!
+        if (SandboxWorldSpawner.Instance == null && SafeZone.Instance == null)
+        {
+            MonsterSystemManager mgr = _parentManager != null ? _parentManager : MonsterSystemManager.Active;
+            Vector3 center = mgr != null ? mgr.fallbackSafeZoneCenter : new Vector3(0f, 0f, -60f);
+            float radius = mgr != null ? mgr.fallbackSafeZoneRadius : 12f;
+            SafeZone.EnsureAt(center, radius);
+        }
     }
 
     private int ComputeZoneSignature()
@@ -225,7 +461,39 @@ public class MonsterSpawnZone : MonoBehaviour
             return;
 
         NetworkRunner runner = local.Runner;
-        if (runner == null || !runner.IsRunning || !runner.IsSharedModeMasterClient) return;
+        if (runner == null || !runner.IsRunning) return;
+
+        // Track living monsters & trigger Zone Clear Reward Chest + Gold across all peers!
+        TickZoneClearRewardTracker(local, mgr);
+
+        bool isMaster = runner.IsSharedModeMasterClient;
+        if (!isMaster)
+        {
+            if (!allowNonMasterFallbackSpawn) return;
+
+            if (!_actingAsFallbackSpawner)
+            {
+                if (_nonMasterWaitStart < 0f)
+                    _nonMasterWaitStart = Time.time;
+
+                if (Time.time - _nonMasterWaitStart < 2.5f)
+                    return;
+
+                if (AdoptExistingZoneMonsters() > 0)
+                {
+                    _initialSpawnDone = true;
+                    return;
+                }
+
+                _actingAsFallbackSpawner = true;
+                if (verboseLogs) Debug.Log($"[MonsterSpawnZone] '{name}' non-Master fallback enabled (no monsters spawned by Master after 2.5s).");
+            }
+        }
+        else
+        {
+            _actingAsFallbackSpawner = false;
+            _nonMasterWaitStart = -1f;
+        }
 
         if (!_initialSpawnDone)
         {
@@ -253,6 +521,203 @@ public class MonsterSpawnZone : MonoBehaviour
             TickIndividualRespawns(runner);
         else
             TickCampWaveRespawn(runner);
+    }
+
+    private int GetNetworkLivingCount()
+    {
+        int living = 0;
+        for (int i = 0; i < EnemyNPC.All.Count; i++)
+        {
+            MonsterEnemyNPC m = EnemyNPC.All[i] as MonsterEnemyNPC;
+            if (m == null || !m.IsSpawned || !m.IsAlive) continue;
+            if (m.ZoneSignature == _zoneSignature)
+                living++;
+        }
+        return living;
+    }
+
+    public static void RecordZoneDamageFromAuthority(int zoneSignature, PlayerRef attacker, float damageAmount)
+    {
+        if (zoneSignature == 0 || attacker == PlayerRef.None || damageAmount <= 0f) return;
+        if (!s_zoneDamageLedgers.TryGetValue(zoneSignature, out var ledger))
+        {
+            ledger = new Dictionary<PlayerRef, float>();
+            s_zoneDamageLedgers[zoneSignature] = ledger;
+        }
+        if (ledger.TryGetValue(attacker, out float prev))
+            ledger[attacker] = prev + damageAmount;
+        else
+            ledger[attacker] = damageAmount;
+    }
+
+    public static void ClearZoneDamageLedger(int zoneSignature)
+    {
+        if (zoneSignature != 0 && s_zoneDamageLedgers.TryGetValue(zoneSignature, out var ledger))
+            ledger.Clear();
+    }
+
+    public static string BuildZoneContributorPayload(int zoneSignature)
+    {
+        if (zoneSignature == 0 || !s_zoneDamageLedgers.TryGetValue(zoneSignature, out var ledger) || ledger.Count == 0)
+            return string.Empty;
+
+        LootDropSystem.AnalyzeDamageContribution(
+            ledger,
+            PlayerRef.None,
+            out float totalDamage,
+            out PlayerRef topDps,
+            out List<PlayerRef> participants);
+
+        if (participants.Count == 0 || totalDamage <= 0f) return string.Empty;
+
+        participants.Sort((a, b) =>
+        {
+            float da = ledger.TryGetValue(a, out float va) ? va : 0f;
+            float db = ledger.TryGetValue(b, out float vb) ? vb : 0f;
+            return db.CompareTo(da);
+        });
+
+        var sb = new StringBuilder(64);
+        for (int i = 0; i < participants.Count; i++)
+        {
+            PlayerRef p = participants[i];
+            if (!ledger.TryGetValue(p, out float dealt) || dealt <= 0f) continue;
+
+            float share = Mathf.Clamp01(dealt / totalDamage);
+            int topFlag = p == topDps ? 1 : 0;
+            string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{share.ToString("0.##", CultureInfo.InvariantCulture)}:{topFlag}";
+            int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
+            if (sb.Length + needed > 62) break;
+
+            if (sb.Length > 0) sb.Append(';');
+            sb.Append(token);
+        }
+        return sb.ToString();
+    }
+
+    public static void HandleAuthoritativeZoneCleared(int zoneSignature, string contributorPayload)
+    {
+        if (zoneSignature == 0) return;
+        for (int i = 0; i < All.Count; i++)
+        {
+            MonsterSpawnZone z = All[i];
+            if (z != null && z.isActiveAndEnabled && z._zoneSignature == zoneSignature)
+            {
+                z.HandleZoneClearedInternal(contributorPayload);
+                break;
+            }
+        }
+    }
+
+    private void TickZoneClearRewardTracker(PlayerCombat localPlayer, MonsterSystemManager mgr)
+    {
+        int living = GetNetworkLivingCount();
+        if (living > 0)
+        {
+            // Keep a short 2.5s sync grace period right after an authoritative clear RPC so lag never destroys the freshly spawned chest
+            if (!_zoneClearRewarded || (Time.unscaledTime - _authoritativeClearAt >= 2.5f))
+            {
+                _everSawLivingMonster = true;
+                if (_zoneClearRewarded)
+                {
+                    _zoneClearRewarded = false;
+                    _zeroLivingDetectedAt = -1f;
+                    _clientEstimatedRespawnAt = -1f;
+                    ClearZoneDamageLedger(_zoneSignature);
+
+                    // Destroy any leftover unopened reward chest when the camp respawns!
+                    if (_activeRewardChest != null)
+                    {
+                        Destroy(_activeRewardChest.gameObject);
+                        _activeRewardChest = null;
+                    }
+                }
+            }
+            return;
+        }
+
+        if (!_everSawLivingMonster || _zoneClearRewarded) return;
+
+        // Wait briefly (0.65s) for RPC_NotifyMonsterZoneCleared from StateAuthority before using strict fallback
+        if (_zeroLivingDetectedAt < 0f)
+        {
+            _zeroLivingDetectedAt = Time.unscaledTime;
+            return;
+        }
+        if (Time.unscaledTime - _zeroLivingDetectedAt < 0.65f)
+            return;
+
+        NetworkRunner runner = localPlayer != null ? localPlayer.Runner : null;
+        bool isMaster = runner != null && runner.IsRunning && runner.IsSharedModeMasterClient;
+        string fallbackPayload = isMaster ? BuildZoneContributorPayload(_zoneSignature) : string.Empty;
+        HandleZoneClearedInternal(fallbackPayload);
+    }
+
+    private void HandleZoneClearedInternal(string contributorPayload)
+    {
+        if (_zoneClearRewarded) return;
+        _zoneClearRewarded = true;
+        _authoritativeClearAt = Time.unscaledTime;
+        _zeroLivingDetectedAt = -1f;
+
+        float avgRespawn = ((Mathf.Min(respawnMinSeconds, respawnMaxSeconds) + Mathf.Max(respawnMinSeconds, respawnMaxSeconds)) * 0.5f) / GetRespawnSpeedMultiplier();
+        _clientEstimatedRespawnAt = Time.time + Mathf.Max(2f, avgRespawn);
+
+        var contributors = SandboxWorldSpawner.ParseContributorPayload(contributorPayload);
+
+        PlayerCombat localPlayer = PlayerCombat.Local;
+        PlayerRef localRef = PlayerRef.None;
+        if (localPlayer != null && localPlayer.IsSpawned)
+        {
+            if (localPlayer.Object != null && localPlayer.Object.IsValid && localPlayer.Object.StateAuthority != PlayerRef.None)
+                localRef = localPlayer.Object.StateAuthority;
+            else if (localPlayer.Runner != null && localPlayer.Runner.IsRunning)
+                localRef = localPlayer.Runner.LocalPlayer;
+        }
+
+        bool localParticipated = localRef != PlayerRef.None &&
+                                 contributors.TryGetValue(localRef.RawEncoded, out var localContrib) &&
+                                 localContrib.damageShare > 0f;
+
+        int campNum = ResolvedCampNumber;
+        bool isBoss = IsBossZone;
+        MonsterSystemManager mgr = _parentManager != null ? _parentManager : MonsterSystemManager.Active;
+
+        // 1. Spawn teammate's LootChest at zone center & configure real participant permissions (unlocks for fighters, locks out freeloaders!)
+        if (spawnRewardChestOnZoneClear)
+        {
+            Vector3 groundedCenter = ProjectPointOntoGround(transform.position);
+            float groundY = groundedCenter.y - 1.2f;
+            WorldItem itemPrefab = mgr != null ? mgr.sharedWorldItemPrefab : null;
+            // Use unique per-zone key derived from _zoneSignature (never collides with SandboxWorldSpawner Camps 1-4/99 or duplicate campNumbers!)
+            int chestCampKey = 100000 + (_zoneSignature & 0x0FFFFFFF);
+            _activeRewardChest = LootChest.SpawnAt(new Vector3(transform.position.x, groundY, transform.position.z), chestCampKey, itemPrefab, isBossChest: isBoss, replaceExisting: true);
+            if (_activeRewardChest != null)
+            {
+                _activeRewardChest.transform.position = new Vector3(transform.position.x, groundY, transform.position.z);
+                _activeRewardChest.ConfigureParticipation(contributors);
+            }
+        }
+
+        // 2. Award Camp Clear Gold bonus & floating celebration popup ONLY to real battle participants (Zero-Freeloading!)
+        if (localParticipated && localPlayer != null && localPlayer.IsSpawned && !localPlayer.IsDead)
+        {
+            if (awardClearGold)
+            {
+                int avgLvl = Mathf.Max(1, (ZoneMinLevel + ZoneMaxLevel) / 2);
+                float scale = 1f + (avgLvl - 1) * 0.15f;
+                int minGold = isBoss ? Mathf.RoundToInt(250 * scale) : Mathf.RoundToInt(40 * scale);
+                int maxGold = isBoss ? Mathf.RoundToInt(450 * scale) : Mathf.RoundToInt(85 * scale);
+                int goldReward = Random.Range(minGold, maxGold + 1);
+                localPlayer.AddGold(goldReward, $"Camp {campNum} ({ResolvedDisplayName})");
+            }
+
+            string banner = isBoss ? $"BOSS {ResolvedDisplayName.ToUpper()} CLEARED!" : $"CAMP {campNum} CLEARED!";
+            FloatingDamagePopup.SpawnWarning(localPlayer.transform.position + Vector3.up * 2.4f, banner, new Color(1.0f, 0.85f, 0.20f, 1f));
+        }
+
+        if (verboseLogs)
+            Debug.Log($"[MonsterSpawnZone] Camp {campNum} ({ResolvedDisplayName}) CLEARED! EligibleContributors={contributors.Count}, LocalParticipated={localParticipated}.");
     }
 
     private int AdoptExistingZoneMonsters()
@@ -391,19 +856,23 @@ public class MonsterSpawnZone : MonoBehaviour
 
         EnemyNPC spawned = runner.Spawn(monsterPrefab, spawnPos, rot, null, (r, obj) =>
         {
+            var monsterNpc = obj.GetComponent<MonsterEnemyNPC>();
+            bool configuredBoss = monsterNpc != null && monsterNpc.IsConfiguredAsBoss;
+
             var npc = obj.GetComponent<EnemyNPC>();
             if (npc != null)
             {
                 npc.CampId = 0; // Individual solo-pull zone (no shared camp aggro)
-                npc.IsBoss = false;
+                npc.IsBoss = configuredBoss;
                 npc.ScaledLevel = scaleLvl;
                 npc.ApplyZoneLevel(scaleLvl);
             }
-            var monsterNpc = obj.GetComponent<MonsterEnemyNPC>();
             if (monsterNpc != null)
             {
                 monsterNpc.ZoneSignature = sig;
                 monsterNpc.ZoneSlotIndex = slotIdx;
+                if (configuredBoss)
+                    monsterNpc.SuppressBaseBossPrimitives();
             }
         });
 

@@ -1,0 +1,63 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &3669197342844007611
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 6842855318140456014}
+  - component: {fileID: 5295807524084857498}
+  m_Layer: 0
+  m_Name: MonsterZones_Hub
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &6842855318140456014
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3669197342844007611}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &5295807524084857498
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3669197342844007611}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f18dbdd378bf01d4bbfadf113cc6a2f1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MonsterSystemManager
+  enableAllZones: 1
+  sharedWorldItemPrefab: {fileID: 6507998983499857821, guid: 1f3dda27c4c498b4fb91d3d916ec6506, type: 3}
+  globalHealthMultiplier: 1
+  globalDamageMultiplier: 1
+  globalRespawnSpeedMultiplier: 1
+  globalDropRateMultiplier: 1
+  autoSyncChildZones: 1
+  managedZones: []
+  ensureFallbackSafeZoneIfMissing: 1
+  fallbackSafeZoneCenter: {x: 0, y: 0, z: -60}
+  fallbackSafeZoneRadius: 12
+  onAnyMonsterKilled:
+    m_PersistentCalls:
+      m_Calls: []
+  onAnyMonsterSpawned:
+    m_PersistentCalls:
+      m_Calls: []

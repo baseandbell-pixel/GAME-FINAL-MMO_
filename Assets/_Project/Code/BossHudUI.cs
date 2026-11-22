@@ -370,37 +370,40 @@ public class BossHudUI : MonoBehaviour
 
     /// <summary>
     /// ค้นหาบอสที่ยังมีชีวิตอยู่และตรวจสอบว่าผู้เล่นอยู่ในลานบอสหรือกำลังปะทะกับบอสหรือไม่
+    /// (รองรับการวางโซนบอสหลายจุดพร้อมกัน โดยเลือกบอสที่อยู่ใกล้ผู้เล่นที่สุดในระยะ 26 เมตร)
     /// </summary>
     private EnemyNPC ResolveVisibleBoss()
     {
-        EnemyNPC boss = SandboxWorldSpawner.Instance != null ? SandboxWorldSpawner.Instance.ActiveBoss : null;
-        if (boss == null || !boss.IsSpawned || !boss.IsAlive)
+        // 1. หากผู้เล่นอยู่ใน Boss Arena ของ SandboxWorldSpawner และบอสหลักยังมีชีวิต ให้แสดงบอสหลักทันที
+        if (SandboxWorldSpawner.Instance != null && SandboxWorldSpawner.Instance.IsLocalPlayerInBossArena)
         {
-            boss = null;
-            for (int i = 0; i < EnemyNPC.All.Count; i++)
+            EnemyNPC arenaBoss = SandboxWorldSpawner.Instance.ActiveBoss;
+            if (arenaBoss != null && arenaBoss.IsSpawned && arenaBoss.IsAlive)
+                return arenaBoss;
+        }
+
+        // 2. ค้นหาบอสที่ยังมีชีวิตอยู่และอยู่ใกล้ผู้เล่นที่สุดภายในระยะ 26 เมตร (รองรับ Zone_BossOgre หลายจุด!)
+        Vector3 playerPos = _localPlayer.transform.position;
+        playerPos.y = 0f;
+
+        EnemyNPC nearestBoss = null;
+        float nearestDist = 26f;
+        for (int i = 0; i < EnemyNPC.All.Count; i++)
+        {
+            var e = EnemyNPC.All[i];
+            if (e == null || !e.IsSpawned || !e.IsBoss || !e.IsAlive) continue;
+
+            Vector3 bPos = e.transform.position;
+            bPos.y = 0f;
+            float dist = Vector3.Distance(playerPos, bPos);
+            if (dist <= nearestDist)
             {
-                var e = EnemyNPC.All[i];
-                if (e != null && e.IsSpawned && e.IsBoss && e.IsAlive)
-                {
-                    boss = e;
-                    break;
-                }
+                nearestDist = dist;
+                nearestBoss = e;
             }
         }
 
-        if (boss == null) return null;
-
-        bool inArenaZone = SandboxWorldSpawner.Instance != null && SandboxWorldSpawner.Instance.IsLocalPlayerInBossArena;
-        if (inArenaZone) return boss;
-
-        // แสดงเช่นกันหากผู้เล่นอยู่ห่างจากตัวบอสไม่เกิน 26 เมตร (เผื่อบอสเดินไล่ใกล้ขอบลาน)
-        Vector3 a = _localPlayer.transform.position;
-        Vector3 b = boss.transform.position;
-        a.y = 0f;
-        b.y = 0f;
-        if (Vector3.Distance(a, b) <= 26f) return boss;
-
-        return null;
+        return nearestBoss;
     }
 
     private void RefreshBossHeaderAndHp(EnemyNPC boss)
@@ -428,7 +431,7 @@ public class BossHudUI : MonoBehaviour
                 ? new Color(0.42f, 0.96f, 0.62f, 1f)
                 : (coopMult > 1 ? new Color(1f, 0.58f, 0.30f, 1f) : new Color(0.95f, 0.78f, 0.42f, 1f)));
 
-        _bossNameText.text = "Sovereign Golem";
+        _bossNameText.text = FormatBossDisplayName(boss);
         _hpValueText.text = $"{curHp:N0} / {maxHp:N0}";
         _rightBadgeText.text = boss.IsBossRegenerating
             ? "Regenerating (+25%/3s)"
@@ -546,5 +549,38 @@ public class BossHudUI : MonoBehaviour
         rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(1f, 1f);
         rt.anchoredPosition = new Vector2(-xFromRight, -y);
         rt.sizeDelta = new Vector2(w, h);
+    }
+
+    private static string FormatBossDisplayName(EnemyNPC boss)
+    {
+        if (boss == null) return "World Boss";
+
+        string raw = null;
+        var bridge = boss.GetComponent<MonsterAnimatorBridge>();
+        if (bridge != null && bridge.Config != null && !string.IsNullOrWhiteSpace(bridge.Config.monsterName))
+            raw = bridge.Config.monsterName;
+        else
+            raw = boss.name;
+
+        if (string.IsNullOrWhiteSpace(raw)) return "World Boss";
+
+        raw = raw.Replace("(Clone)", string.Empty).Trim();
+        if (raw.StartsWith("Enemy_", System.StringComparison.OrdinalIgnoreCase))
+            raw = raw.Substring(6);
+        else if (raw.StartsWith("Boss_", System.StringComparison.OrdinalIgnoreCase))
+            raw = raw.Substring(5);
+        raw = raw.Replace('_', ' ').Trim();
+        if (string.IsNullOrEmpty(raw)) return "World Boss";
+
+        // Split PascalCase cleanly (e.g. "BossOgre" -> "Boss Ogre", "SovereignGolem" -> "Sovereign Golem")
+        var sb = new System.Text.StringBuilder(raw.Length + 6);
+        for (int i = 0; i < raw.Length; i++)
+        {
+            char c = raw[i];
+            if (i > 0 && char.IsUpper(c) && raw[i - 1] != ' ' && !char.IsUpper(raw[i - 1]))
+                sb.Append(' ');
+            sb.Append(c);
+        }
+        return sb.ToString();
     }
 }

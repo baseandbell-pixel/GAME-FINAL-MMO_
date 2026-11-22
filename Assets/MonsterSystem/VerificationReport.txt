@@ -1,18 +1,62 @@
 === MONSTER SYSTEM ZERO-CONFLICT PACKAGE VERIFICATION ===
-Timestamp: 2569-11-21 19:27:33
+Timestamp: 2569-11-23 04:03:11
 [VERIFY PASS] 1.1 Base Controller Exists -> Assets/MonsterSystem/Animations/AC_Monster_Base.controller
-[VERIFY PASS] 1.2 Base Controller Has All 10 Parameters -> Found 10/10
+[VERIFY PASS] 1.2 Base Controller Has All 11 Parameters -> Found 11/11
 [VERIFY PASS] 1.3 UpperBody Override Layer (Weight=0) -> Layers=2
-[VERIFY PASS] 1.4 AnyState CanTransitionToSelf=False -> AnyStateTransitions=3
+[VERIFY PASS] 1.4 AnyState CanTransitionToSelf=False (Guard/Hit/Stun/Death) -> AnyStateTransitions=4
 [VERIFY PASS] 1.5 Death State Has Zero Outgoing Transitions -> DeathTransitions=0
 [VERIFY PASS] 2.1 All Orc FBX Generic + NoAvatar -> 9 models checked
 [VERIFY PASS] 2.2 All Orc Clips LoopTime & In-Place -> All clip loop/in-place flags verified
-[VERIFY PASS] 3.1 AOC_Orc All 13 Override Slots Non-Null -> Mapped 13/13
+[VERIFY PASS] 3.1 AOC_Orc All 14 Override Slots Non-Null -> Mapped 14/14
 [VERIFY PASS] 4.1 Enemy_Orc.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_Orc.prefab
 [VERIFY PASS] 4.2 Enemy_Orc Uses MonsterEnemyNPC + NetworkObject + Bridge -> MonsterEnemyNPC=True, NetObj=True, CapsuleDisabled=True, Renderers=21
 [VERIFY PASS] 4.3 Enemy_Orc Feet Seated Flush On Ground (y=0) -> feetWorldY=0.030m
 [VERIFY PASS] 4.4 Enemy_Orc Real Bone Motion (Zero T-Pose) -> 7/7: Idle(7.1deg), Walk(11.8deg), Run(31.3deg), Attack_01(112.3deg), Attack_02(101.0deg), Hit_React(37.3deg), Death(55.2deg)
+[VERIFY PASS] 4.5 Enemy_Orc Textured URP Materials (Non-Gray) -> TexturedRenderers=21/21
 [VERIFY PASS] 5.1 Plug-and-Play Zone_Orc.prefab Wired -> Prefab=Enemy_Orc, Count=4
-[VERIFY PASS] 5.2 Scene Hub MonsterSystem_Manager.prefab Wired -> Zones=1, WorldItem=WorldItem
+[VERIFY PASS] 5.2 Scene Hub MonsterSystem_Manager.prefab Wired -> Zones=7, WorldItem=WorldItem
 [VERIFY PASS] 6.1 Friend Enemy.prefab 100% Untouched Capsule -> Zero modifications to friend's prefab
-TOTAL: 15 | PASSED: 15 | FAILED: 0
+[VERIFY PASS] 7.1 AOC_Golem All 14 Override Slots Non-Null -> Mapped 14/14
+[VERIFY PASS] 7.2 Enemy_Golem.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_Golem.prefab
+[VERIFY PASS] 7.3 Enemy_Golem Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=24, Config=Config_Golem
+[VERIFY PASS] 7.4 Enemy_Golem Feet Seated Flush On Ground (y=0) -> feetWorldY=0.015m
+[VERIFY PASS] 7.5 Enemy_Golem Real Bone Motion (Zero T-Pose) -> 6/6: Idle(28.3deg), Walk(150.6deg), Run(150.6deg), Attack_01(142.3deg), Hit_React(74.7deg), Death(92.4deg)
+[VERIFY PASS] 7.7 Enemy_Golem Textured URP Materials (Non-Gray) -> TexturedRenderers=24/24
+[VERIFY PASS] 7.6 Plug-and-Play Zone_Golem.prefab Wired -> Prefab=Enemy_Golem, Count=2
+[VERIFY PASS] 8.1 AOC_Troll All 14 Override Slots Non-Null -> Mapped 14/14
+[VERIFY PASS] 8.2 Enemy_Troll.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_Troll.prefab
+[VERIFY PASS] 8.3 Enemy_Troll Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=7, Config=Config_Troll
+[VERIFY PASS] 8.4 Enemy_Troll Feet Seated Flush On Ground (y=0) -> feetWorldY=0.000m
+[VERIFY PASS] 8.5 Enemy_Troll Real Bone Motion (Zero T-Pose) -> 6/6: Idle(9.5deg), Walk(51.8deg), Run(126.4deg), Attack_01(87.3deg), Hit_React(31.6deg), Death(151.7deg)
+[VERIFY PASS] 8.7 Enemy_Troll Textured URP Materials (Non-Gray) -> TexturedRenderers=7/7
+[VERIFY PASS] 8.6 Plug-and-Play Zone_Troll.prefab Wired -> Prefab=Enemy_Troll, Count=3
+[VERIFY PASS] 9.1 AOC_Slime All 14 Override Slots Non-Null -> Mapped 14/14
+[VERIFY PASS] 9.2 Enemy_Slime.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_Slime.prefab
+[VERIFY PASS] 9.3 Enemy_Slime Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=1, Config=Config_Slime
+[VERIFY PASS] 9.4 Enemy_Slime Feet Seated Flush On Ground (y=0) -> feetWorldY=0.000m
+[VERIFY PASS] 9.5 Enemy_Slime Real Bone Motion (Zero T-Pose) -> 6/6: Idle(11.7deg), Walk(30.3deg), Run(17.3deg), Attack_01(28.6deg), Hit_React(42.4deg), Death(48.3deg)
+[VERIFY PASS] 9.7 Enemy_Slime Textured URP Materials (Non-Gray) -> TexturedRenderers=1/1
+[VERIFY PASS] 9.6 Plug-and-Play Zone_Slime.prefab Wired -> Prefab=Enemy_Slime, Count=4
+[VERIFY PASS] 10.1 AOC_TurtleShell All 14 Override Slots Non-Null -> Mapped 14/14
+[VERIFY PASS] 10.2 Enemy_TurtleShell.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_TurtleShell.prefab
+[VERIFY PASS] 10.3 Enemy_TurtleShell Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=1, Config=Config_TurtleShell
+[VERIFY PASS] 10.4 Enemy_TurtleShell Feet Seated Flush On Ground (y=0) -> feetWorldY=0.001m
+[VERIFY PASS] 10.5 Enemy_TurtleShell Real Bone Motion (Zero T-Pose) -> 6/6: Idle(10.3deg), Walk(13.2deg), Run(34.7deg), Attack_01(53.8deg), Hit_React(40.8deg), Death(169.5deg)
+[VERIFY PASS] 10.7 Enemy_TurtleShell Textured URP Materials (Non-Gray) -> TexturedRenderers=1/1
+[VERIFY PASS] 10.6 Plug-and-Play Zone_TurtleShell.prefab Wired -> Prefab=Enemy_TurtleShell, Count=4
+[VERIFY PASS] 11.1 AOC_BossOgre All 14 Override Slots Non-Null -> Mapped 14/14
+[VERIFY PASS] 11.2 Enemy_BossOgre.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_BossOgre.prefab
+[VERIFY PASS] 11.3 Enemy_BossOgre Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=2, Config=Config_BossOgre
+[VERIFY PASS] 11.4 Enemy_BossOgre Feet Seated Flush On Ground (y=0) -> feetWorldY=0.069m
+[VERIFY PASS] 11.5 Enemy_BossOgre Real Bone Motion (Zero T-Pose) -> 6/6: Idle(40.7deg), Walk(83.4deg), Run(118.1deg), Attack_01(103.4deg), Hit_React(34.8deg), Death(65.6deg)
+[VERIFY PASS] 11.7 Enemy_BossOgre Textured URP Materials (Non-Gray) -> TexturedRenderers=2/2
+[VERIFY PASS] 11.6 Plug-and-Play Zone_BossOgre.prefab Wired -> Prefab=Enemy_BossOgre, Count=1
+[VERIFY PASS] 12.1 AOC_Goblin All 14 Override Slots Non-Null -> Mapped 14/14
+[VERIFY PASS] 12.2 Enemy_Goblin.prefab Exists -> Assets/MonsterSystem/Prefabs/Monsters/Enemy_Goblin.prefab
+[VERIFY PASS] 12.3 Enemy_Goblin Uses MonsterEnemyNPC + NetworkObject + Bridge -> Renderers=5, Config=Config_Goblin
+[VERIFY PASS] 12.4 Enemy_Goblin Feet Seated Flush On Ground (y=0) -> feetWorldY=0.035m
+[VERIFY PASS] 12.5 Enemy_Goblin Real Bone Motion (Zero T-Pose) -> 6/6: Idle(34.6deg), Walk(74.9deg), Run(93.6deg), Attack_01(70.6deg), Hit_React(41.2deg), Death(90.2deg)
+[VERIFY PASS] 12.7 Enemy_Goblin Textured URP Materials (Non-Gray) -> TexturedRenderers=5/5
+[VERIFY PASS] 12.6 Plug-and-Play Zone_Goblin.prefab Wired -> Prefab=Enemy_Goblin, Count=4
+[VERIFY PASS] 13.1 All 7 Species Combat & Guard Audit (Master-Only Spawn + Participation Chest Audit) -> 7/7: Orc(R=2.25m,D=0.42s,G=Orc@Combat_Idle), Golem(R=2.45m,D=0.48s,G=root|Idle), Troll(R=2.38m,D=0.46s,G=idle_break), Slime(R=1.85m,D=0.40s,G=SenseSomethingRPT), TurtleShell(R=1.95m,D=0.42s,G=Defend), BossOgre(R=2.85m,D=0.46s,G=Monster_anim|Block), Goblin(R=2.05m,D=0.40s,G=Anim Full|Crouch Idle)
+TOTAL: 59 | PASSED: 59 | FAILED: 0
