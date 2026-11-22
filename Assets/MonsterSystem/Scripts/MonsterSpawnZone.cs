@@ -60,6 +60,8 @@ public class MonsterSpawnZone : MonoBehaviour
     [Header("3. สีเส้นเขตใน Scene View & Log")]
     [SerializeField] private Color gizmoTerritoryColor = new Color(0.35f, 0.85f, 0.35f, 0.75f);
     [SerializeField] private Color gizmoAnchorColor = new Color(1.0f, 0.55f, 0.15f, 0.85f);
+    [Tooltip("เปิดไว้ (แนะนำ): ถ้าเข้าห้อง Shared เดียวกับเพื่อนที่ไม่มีโซนนี้ในฉาก จะช่วยเกิดมอนให้หลังรอ 2.5 วิโดยไม่เกิดซ้ำ")]
+    [SerializeField] private bool allowNonMasterFallbackSpawn = true;
     [Tooltip("ติ๊กเมื่ออยากดูข้อความแจ้งเตือน Spawn/Respawn ใน Console")]
     [SerializeField] private bool verboseLogs = false;
 
@@ -71,6 +73,8 @@ public class MonsterSpawnZone : MonoBehaviour
     private bool _initialSpawnDone;
     private bool _campWaveWaiting;
     private float _campWaveRespawnAt;
+    private float _nonMasterWaitStart = -1f;
+    private bool _actingAsFallbackSpawner;
     private MonsterSystemManager _parentManager;
 
     public EnemyNPC MonsterPrefab => monsterPrefab;
@@ -221,7 +225,37 @@ public class MonsterSpawnZone : MonoBehaviour
             return;
 
         NetworkRunner runner = local.Runner;
-        if (runner == null || !runner.IsRunning || !runner.IsSharedModeMasterClient) return;
+        if (runner == null || !runner.IsRunning) return;
+
+        bool isMaster = runner.IsSharedModeMasterClient;
+        if (!isMaster)
+        {
+            if (!allowNonMasterFallbackSpawn) return;
+
+            if (!_actingAsFallbackSpawner)
+            {
+                if (_nonMasterWaitStart < 0f)
+                    _nonMasterWaitStart = Time.time;
+
+                if (Time.time - _nonMasterWaitStart < 2.5f)
+                    return;
+
+                // If Master Client already spawned monsters for this zone, do nothing (zero duplicates).
+                if (AdoptExistingZoneMonsters() > 0)
+                {
+                    _initialSpawnDone = true;
+                    return;
+                }
+
+                _actingAsFallbackSpawner = true;
+                if (verboseLogs) Debug.Log($"[MonsterSpawnZone] '{name}' non-Master fallback enabled (no monsters spawned by Master after 2.5s).");
+            }
+        }
+        else
+        {
+            _actingAsFallbackSpawner = false;
+            _nonMasterWaitStart = -1f;
+        }
 
         if (!_initialSpawnDone)
         {

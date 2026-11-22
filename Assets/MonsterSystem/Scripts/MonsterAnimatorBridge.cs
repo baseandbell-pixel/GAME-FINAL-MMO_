@@ -158,6 +158,8 @@ public class MonsterAnimatorBridge : MonoBehaviour
                     n.Equals("Hips", System.StringComparison.OrdinalIgnoreCase) ||
                     n.Equals("Pelvis", System.StringComparison.OrdinalIgnoreCase) ||
                     n.EndsWith("Pelvis", System.StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("root.x", System.StringComparison.OrdinalIgnoreCase) ||
+                    n.Equals("cave_troll_Hub001", System.StringComparison.OrdinalIgnoreCase) ||
                     n.Equals("COG", System.StringComparison.OrdinalIgnoreCase) ||
                     n.Equals("DEF-hips", System.StringComparison.OrdinalIgnoreCase) ||
                     n.Equals("Root_M", System.StringComparison.OrdinalIgnoreCase))

@@ -41,6 +41,14 @@ public static class MonsterAnimatorBuilder
     public const string OrcPrefabPath = MonsterPrefabsRoot + "/Enemy_Orc.prefab";
     public const string OrcZonePrefabPath = ZonePrefabsRoot + "/Zone_Orc.prefab";
 
+    public const string GolemSourceFolder = ModelsRoot + "/Golem";
+    public const string GolemPrefabPath = MonsterPrefabsRoot + "/Enemy_Golem.prefab";
+    public const string GolemZonePrefabPath = ZonePrefabsRoot + "/Zone_Golem.prefab";
+
+    public const string TrollSourceFolder = ModelsRoot + "/Troll";
+    public const string TrollPrefabPath = MonsterPrefabsRoot + "/Enemy_Troll.prefab";
+    public const string TrollZonePrefabPath = ZonePrefabsRoot + "/Zone_Troll.prefab";
+
     // Canonical placeholder clip keys embedded inside AC_Monster_Base.controller
     private const string KeySpawn = "Placeholder_Spawn";
     private const string KeyIdle = "Placeholder_Idle";
@@ -71,10 +79,12 @@ public static class MonsterAnimatorBuilder
                              !File.Exists(OrcPrefabPath) ||
                              !File.Exists(OrcZonePrefabPath) ||
                              !File.Exists(ManagerPrefabPath) ||
-                             !File.Exists(VerificationReportPath);
-            if (needBuild && Directory.Exists(OrcSourceFolder))
+                             !File.Exists(VerificationReportPath) ||
+                             (Directory.Exists(GolemSourceFolder) && (!File.Exists(GolemPrefabPath) || !File.Exists(GolemZonePrefabPath))) ||
+                             (Directory.Exists(TrollSourceFolder) && (!File.Exists(TrollPrefabPath) || !File.Exists(TrollZonePrefabPath)));
+            if (needBuild && Directory.Exists(ModelsRoot))
             {
-                BuildOrcPackageAndVerify();
+                BuildAllMonstersInModelsFolder();
             }
         };
     }
@@ -154,17 +164,24 @@ public static class MonsterAnimatorBuilder
                 }
 
                 bool isBoss = monsterName.IndexOf("boss", StringComparison.OrdinalIgnoreCase) >= 0;
-                float height = isBoss ? 3.2f : 2.15f;
+                float height = ResolveDefaultWorldHeight(monsterName, isBoss);
+                int defaultCount = ResolveDefaultSpawnCount(monsterName, isBoss);
+                float defaultSpacing = monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 15f
+                                     : (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 14f : 12f);
+                float defaultRadius = defaultSpacing + 3f;
+                float respawnMin = isBoss ? 180f : (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase) ? 50f : (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase) ? 40f : 35f));
+                float respawnMax = respawnMin + 15f;
+
                 string prefabPath = $"{MonsterPrefabsRoot}/Enemy_{monsterName}.prefab";
                 string zonePath = $"{ZonePrefabsRoot}/Zone_{monsterName}.prefab";
 
                 BuildMonsterFromFolder(folderAssetPath, monsterName, isBoss, height);
                 BuildZonePrefab(monsterName, prefabPath, zonePath,
-                    spawnCount: isBoss ? 1 : 4,
-                    slotSpacing: 12f,
-                    territoryRadius: 15f,
-                    respawnMin: isBoss ? 180f : 35f,
-                    respawnMax: isBoss ? 240f : 50f);
+                    spawnCount: defaultCount,
+                    slotSpacing: defaultSpacing,
+                    territoryRadius: defaultRadius,
+                    respawnMin: respawnMin,
+                    respawnMax: respawnMax);
                 builtCount++;
             }
 
@@ -214,6 +231,22 @@ public static class MonsterAnimatorBuilder
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
         Debug.Log($"[MonsterSystem] Rebuilt '{monsterName}' cleanly (Config & Loot Table preserved!).");
+    }
+
+    private static float ResolveDefaultWorldHeight(string monsterName, bool isBoss)
+    {
+        if (isBoss) return 3.2f;
+        if (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase)) return 3.00f;
+        if (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase)) return 2.70f;
+        return 2.15f;
+    }
+
+    private static int ResolveDefaultSpawnCount(string monsterName, bool isBoss)
+    {
+        if (isBoss) return 1;
+        if (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase)) return 2;
+        if (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase)) return 3;
+        return 4;
     }
 
     [MenuItem("Tools/Monster System/3. Place MonsterSystem_Manager in Active Scene")]
@@ -689,7 +722,27 @@ public static class MonsterAnimatorBuilder
             config.isBoss = isBoss;
             config.canFlinch = !isBoss;
             config.targetWorldHeight = targetWorldHeight;
-            config.attackRange = Mathf.Clamp(targetWorldHeight * 1.15f, 1.8f, 3.8f);
+
+            // Species-tuned defaults (user can customize anytime in Config_<Name>.asset!)
+            if (monsterName.Equals("Golem", StringComparison.OrdinalIgnoreCase))
+            {
+                config.healthMultiplier = 2.65f; // ~318 HP at Lv.1
+                config.damageMultiplier = 2.20f; // 22 ATK at Lv.1
+                config.defenseBonus = 4;
+                config.attackRange = 3.10f;
+            }
+            else if (monsterName.Equals("Troll", StringComparison.OrdinalIgnoreCase))
+            {
+                config.healthMultiplier = 2.15f; // ~258 HP at Lv.1
+                config.damageMultiplier = 1.80f; // 18 ATK at Lv.1
+                config.defenseBonus = 2;
+                config.attackRange = 2.85f;
+            }
+            else
+            {
+                config.attackRange = Mathf.Clamp(targetWorldHeight * 1.15f, 1.8f, 3.8f);
+            }
+
             if (atk1Clip != null && atk1Clip.length > 0.1f)
             {
                 // Estimate melee impact timing (~38% of attack_01 clip length adjusted for 1.45x Animator speed)
@@ -982,7 +1035,7 @@ public static class MonsterAnimatorBuilder
             if (Directory.Exists(ZonePrefabsRoot))
             {
                 string[] zoneGuids = AssetDatabase.FindAssets("t:Prefab", new[] { ZonePrefabsRoot });
-                int addedIdx = 0;
+                int nextSlotIdx = root.transform.childCount;
                 for (int i = 0; i < zoneGuids.Length; i++)
                 {
                     string zPath = AssetDatabase.GUIDToAssetPath(zoneGuids[i]);
@@ -995,8 +1048,8 @@ public static class MonsterAnimatorBuilder
                     {
                         GameObject zInst = (GameObject)PrefabUtility.InstantiatePrefab(zPrefab, root.transform);
                         zInst.name = zName;
-                        zInst.transform.localPosition = new Vector3(addedIdx * 34f, 0f, -26f);
-                        addedIdx++;
+                        zInst.transform.localPosition = new Vector3(nextSlotIdx * 36f, 0f, -26f);
+                        nextSlotIdx++;
                     }
                 }
             }
@@ -1103,15 +1156,21 @@ public static class MonsterAnimatorBuilder
 
                 string suffix = keySource.Trim().ToLowerInvariant().Replace(" ", "_").Replace("-", "_");
 
+                // Skip transition helper clips (e.g. Golem's "Idle_To_Walk") so they never overwrite primary Idle/Walk!
+                if (suffix.Contains("_to_"))
+                    continue;
+
                 if (suffix.Contains("combat_idle") || suffix.Contains("combatidle") || suffix.Contains("block_idle") || suffix.Contains("guard"))
                     result["combat_idle"] = clip;
+                else if (suffix == "idle" || (suffix.Contains("idle") && !suffix.Contains("break")))
+                    result["idle"] = clip;
                 else if (suffix.Contains("idle") || suffix.Contains("stand") || suffix.Contains("breathe"))
                 {
                     if (!result.ContainsKey("idle")) result["idle"] = clip;
                 }
-                else if (suffix.Contains("walk"))
+                else if (suffix == "walk" || suffix.Contains("walk"))
                     result["walk"] = clip;
-                else if (suffix.Contains("run") || suffix.Contains("sprint") || suffix.Contains("chase"))
+                else if (suffix == "run" || suffix.Contains("run") || suffix.Contains("sprint") || suffix.Contains("chase"))
                     result["run"] = clip;
                 else if (suffix.Contains("attack_01") || suffix.Contains("attack01") || suffix.Contains("attack_1") || suffix == "attack1")
                 {
@@ -1143,8 +1202,12 @@ public static class MonsterAnimatorBuilder
                     result["hit_react"] = clip;
                 else if (suffix.Contains("stun") || suffix.Contains("dizzy"))
                     result["stun"] = clip;
-                else if (suffix.Contains("death") || suffix.Contains("die") || suffix.Contains("dead"))
+                else if (suffix == "death" || suffix == "die")
                     result["death"] = clip;
+                else if (suffix.Contains("death") || suffix.Contains("die") || suffix.Contains("dead"))
+                {
+                    if (!result.ContainsKey("death")) result["death"] = clip;
+                }
                 else if (suffix.Contains("spawn") || suffix.Contains("appear"))
                     result["spawn"] = clip;
             }
@@ -1170,6 +1233,51 @@ public static class MonsterAnimatorBuilder
         EnsureFolder(matDir);
 
         Shader urpLit = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+
+        // Priority A: If sourceFolder already contains standalone ready-made .mat files (e.g. Golem's G2.mat, Troll's Body/Tanga/Hair/Weapon.mat),
+        // clone ONLY standalone .mat assets (NEVER embedded blank materials inside .fbx files!) with _EMISSION enabled for PBR Hit/Block Flash!
+        string[] existingMatGuids = AssetDatabase.FindAssets("t:Material", new[] { sourceFolder });
+        if (existingMatGuids != null && existingMatGuids.Length > 0)
+        {
+            for (int i = 0; i < existingMatGuids.Length; i++)
+            {
+                string srcPath = AssetDatabase.GUIDToAssetPath(existingMatGuids[i]);
+                if (string.IsNullOrEmpty(srcPath) || !srcPath.EndsWith(".mat", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                Material srcMat = AssetDatabase.LoadAssetAtPath<Material>(srcPath);
+                if (srcMat == null) continue;
+
+                string partKey = Path.GetFileNameWithoutExtension(srcPath);
+                string dstPath = $"{matDir}/Mat_{monsterName}_{partKey}.mat";
+                Material dstMat = AssetDatabase.LoadAssetAtPath<Material>(dstPath);
+                if (dstMat == null)
+                {
+                    dstMat = new Material(srcMat);
+                    if (dstMat.shader == null || !dstMat.shader.name.Contains("Universal Render Pipeline"))
+                        dstMat.shader = urpLit;
+                    AssetDatabase.CreateAsset(dstMat, dstPath);
+                }
+                else
+                {
+                    dstMat.CopyPropertiesFromMaterial(srcMat);
+                    if (dstMat.shader == null || !dstMat.shader.name.Contains("Universal Render Pipeline"))
+                        dstMat.shader = urpLit;
+                }
+
+                dstMat.EnableKeyword("_EMISSION");
+                dstMat.SetColor("_EmissionColor", Color.black);
+                dstMat.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+                EditorUtility.SetDirty(dstMat);
+                materials[partKey] = dstMat;
+            }
+
+            if (materials.Count > 0)
+            {
+                AssetDatabase.SaveAssets();
+                return materials;
+            }
+        }
 
         string[] texGuids = AssetDatabase.FindAssets("t:Texture2D", new[] { sourceFolder });
         var partTextures = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
@@ -1467,6 +1575,46 @@ public static class MonsterAnimatorBuilder
                 return;
             }
 
+            // Tier 1b: Blender Auto-Rig Pro bones (Golem: toes_01.l/r, foot.l/r, head.x)
+            Transform arpToeL = FindDeepChild(temp.transform, "toes_01.l");
+            Transform arpToeR = FindDeepChild(temp.transform, "toes_01.r");
+            Transform arpFootL = FindDeepChild(temp.transform, "foot.l");
+            Transform arpFootR = FindDeepChild(temp.transform, "foot.r");
+            Transform arpHead = FindDeepChild(temp.transform, "head.x") ?? FindDeepChild(temp.transform, "head");
+            if ((arpToeL != null || arpFootL != null) && arpHead != null)
+            {
+                float fMin = float.MaxValue;
+                if (arpToeL != null) fMin = Mathf.Min(fMin, arpToeL.position.y);
+                if (arpToeR != null) fMin = Mathf.Min(fMin, arpToeR.position.y);
+                if (fMin == float.MaxValue)
+                {
+                    if (arpFootL != null) fMin = Mathf.Min(fMin, arpFootL.position.y - 0.10f);
+                    if (arpFootR != null) fMin = Mathf.Min(fMin, arpFootR.position.y - 0.10f);
+                }
+                else
+                {
+                    fMin -= 0.05f;
+                }
+                feetY = fMin;
+                height = Mathf.Max(0.5f, (arpHead.position.y + 0.25f) - feetY);
+                return;
+            }
+
+            // Tier 1c: 3ds Max CAT Rig bones (Troll: cave_troll_LLegPlatform/RLegPlatform + cave_troll_Hub003_dnu)
+            Transform catFootL = FindDeepChild(temp.transform, "cave_troll_LLegPlatform");
+            Transform catFootR = FindDeepChild(temp.transform, "cave_troll_RLegPlatform");
+            Transform catHead = FindDeepChild(temp.transform, "cave_troll_Hub003_dnu") ?? FindDeepChild(temp.transform, "cave_troll_Hub002");
+            if ((catFootL != null || catFootR != null) && catHead != null)
+            {
+                float cMin = float.MaxValue;
+                if (catFootL != null) cMin = Mathf.Min(cMin, catFootL.position.y);
+                if (catFootR != null) cMin = Mathf.Min(cMin, catFootR.position.y);
+                feetY = cMin;
+                // Account for Troll's hunched head crest above Hub003_dnu
+                height = Mathf.Max(0.8f, (catHead.position.y * 1.18f) - feetY);
+                return;
+            }
+
             // Tier 2: Generic SkinnedMeshRenderer world bounds (works for Blender, Rigify, Quadrupeds, Dragons, Slimes!)
             SkinnedMeshRenderer[] smrs = temp.GetComponentsInChildren<SkinnedMeshRenderer>(true);
             float smrMinY = float.MaxValue;
@@ -1678,6 +1826,20 @@ public static class MonsterAnimatorBuilder
                         }
                     }
                     Check("4.4 Enemy_Orc Real Bone Motion (Zero T-Pose)", moving == keys.Length, $"{moving}/{keys.Length}: {string.Join(", ", details)}");
+
+                    int texturedCount = 0;
+                    var orcRenderers = bridge != null && bridge.VisualRoot != null
+                        ? bridge.VisualRoot.GetComponentsInChildren<Renderer>(true)
+                        : Array.Empty<Renderer>();
+                    for (int r = 0; r < orcRenderers.Length; r++)
+                    {
+                        Material m = orcRenderers[r].sharedMaterial;
+                        if (m != null && ((m.HasProperty("_BaseMap") && m.GetTexture("_BaseMap") != null) ||
+                                          (m.HasProperty("_MainTex") && m.GetTexture("_MainTex") != null)))
+                            texturedCount++;
+                    }
+                    Check("4.5 Enemy_Orc Textured URP Materials (Non-Gray)", texturedCount > 0 && texturedCount == orcRenderers.Length,
+                        $"TexturedRenderers={texturedCount}/{orcRenderers.Length}");
                 }
             }
             finally
@@ -1708,10 +1870,128 @@ public static class MonsterAnimatorBuilder
                            friendEnemy.GetComponent<MonsterEnemyNPC>() == null;
         Check("6.1 Friend Enemy.prefab 100% Untouched Capsule", friendClean, "Zero modifications to friend's prefab");
 
+        // 7. Golem & Troll Checks (when present in Models/)
+        VerifyAdditionalMonster("7", "Golem", GolemSourceFolder, GolemPrefabPath, GolemZonePrefabPath,
+            footBoneA: "toes_01.l", footBoneB: "toes_01.r", moveBoneA: "arm_stretch.r", moveBoneB: "root.x", Check);
+        VerifyAdditionalMonster("8", "Troll", TrollSourceFolder, TrollPrefabPath, TrollZonePrefabPath,
+            footBoneA: "cave_troll_LLegPlatform", footBoneB: "cave_troll_RLegPlatform", moveBoneA: "cave_troll_Spine2", moveBoneB: "cave_troll_Hub001", Check);
+
         sb.AppendLine($"TOTAL: {pass + fail} | PASSED: {pass} | FAILED: {fail}");
         File.WriteAllText(VerificationReportPath, sb.ToString(), new UTF8Encoding(false));
         AssetDatabase.ImportAsset(VerificationReportPath, ImportAssetOptions.ForceUpdate);
         Debug.Log($"[MonsterSystem] Verification finished: {pass}/{pass + fail} passed.");
+    }
+
+    private static void VerifyAdditionalMonster(
+        string sectionPrefix,
+        string monsterName,
+        string sourceFolder,
+        string prefabPath,
+        string zonePath,
+        string footBoneA,
+        string footBoneB,
+        string moveBoneA,
+        string moveBoneB,
+        Action<string, bool, string> check)
+    {
+        if (!Directory.Exists(sourceFolder)) return;
+
+        string aocPath = $"{AnimRoot}/{monsterName}/AOC_{monsterName}.overrideController";
+        AnimatorOverrideController aoc = AssetDatabase.LoadAssetAtPath<AnimatorOverrideController>(aocPath);
+        int mapped = 0;
+        bool allFilled = aoc != null;
+        if (aoc != null)
+        {
+            var ov = new List<KeyValuePair<AnimationClip, AnimationClip>>();
+            aoc.GetOverrides(ov);
+            foreach (var kv in ov)
+            {
+                if (kv.Value == null) allFilled = false;
+                else mapped++;
+            }
+        }
+        check($"{sectionPrefix}.1 AOC_{monsterName} All 13 Override Slots Non-Null", allFilled && mapped == 13, $"Mapped {mapped}/13");
+
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        check($"{sectionPrefix}.2 Enemy_{monsterName}.prefab Exists", prefab != null, prefabPath);
+        if (prefab != null)
+        {
+            GameObject inst = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+            try
+            {
+                var mNpc = inst.GetComponent<MonsterEnemyNPC>();
+                var bridge = inst.GetComponent<MonsterAnimatorBridge>();
+                var netObj = inst.GetComponent<NetworkObject>();
+                check($"{sectionPrefix}.3 Enemy_{monsterName} Uses MonsterEnemyNPC + NetworkObject + Bridge",
+                    mNpc != null && bridge != null && bridge.Animator != null && !bridge.Animator.applyRootMotion && netObj != null && bridge.VisualRenderers != null && bridge.VisualRenderers.Length > 0,
+                    $"Renderers={bridge?.VisualRenderers?.Length ?? 0}, Config={bridge?.Config?.name}");
+
+                CapsuleCollider cap = inst.GetComponent<CapsuleCollider>();
+                float pivotH = cap != null ? (cap.height * 0.5f - cap.center.y) * inst.transform.localScale.y : 1.5f;
+                inst.transform.position = new Vector3(0f, pivotH, 0f);
+                if (aoc != null && bridge != null && bridge.VisualRoot != null)
+                {
+                    AnimationClip idleClip = aoc[KeyIdle];
+                    if (idleClip != null) idleClip.SampleAnimation(bridge.VisualRoot.gameObject, 0f);
+                    Transform fA = FindDeepChild(bridge.VisualRoot, footBoneA);
+                    Transform fB = FindDeepChild(bridge.VisualRoot, footBoneB);
+                    float feetY = (fA != null && fB != null) ? Mathf.Min(fA.position.y, fB.position.y) : 99f;
+                    check($"{sectionPrefix}.4 Enemy_{monsterName} Feet Seated Flush On Ground (y=0)", feetY >= -0.10f && feetY <= 0.18f, $"feetWorldY={feetY:0.000}m");
+
+                    Transform bA = FindDeepChild(bridge.VisualRoot, moveBoneA);
+                    Transform bB = FindDeepChild(bridge.VisualRoot, moveBoneB);
+                    string[] keys = { KeyIdle, KeyWalk, KeyRun, KeyAttack01, KeyHitReact, KeyDeath };
+                    int moving = 0;
+                    var details = new List<string>();
+                    if (bA != null && bB != null)
+                    {
+                        foreach (string k in keys)
+                        {
+                            AnimationClip c = aoc[k];
+                            if (c == null) continue;
+                            c.SampleAnimation(bridge.VisualRoot.gameObject, 0f);
+                            Quaternion a0 = bA.localRotation;
+                            Quaternion b0 = bB.localRotation;
+                            Vector3 p0 = bB.localPosition;
+                            float maxDeg = 0f, maxPos = 0f;
+                            foreach (float f in new[] { 0.25f, 0.5f, 0.75f, 0.9f })
+                            {
+                                c.SampleAnimation(bridge.VisualRoot.gameObject, c.length * f);
+                                maxDeg = Mathf.Max(maxDeg, Quaternion.Angle(a0, bA.localRotation), Quaternion.Angle(b0, bB.localRotation));
+                                maxPos = Mathf.Max(maxPos, Vector3.Distance(p0, bB.localPosition));
+                            }
+                            if (maxDeg > 0.5f || maxPos > 0.005f) moving++;
+                            details.Add($"{k.Replace("Placeholder_", "")}({maxDeg:0.0}deg)");
+                        }
+                    }
+                    check($"{sectionPrefix}.5 Enemy_{monsterName} Real Bone Motion (Zero T-Pose)", moving == keys.Length, $"{moving}/{keys.Length}: {string.Join(", ", details)}");
+
+                    int texturedCount = 0;
+                    var visRenderers = bridge != null && bridge.VisualRoot != null
+                        ? bridge.VisualRoot.GetComponentsInChildren<Renderer>(true)
+                        : Array.Empty<Renderer>();
+                    for (int r = 0; r < visRenderers.Length; r++)
+                    {
+                        Material m = visRenderers[r].sharedMaterial;
+                        if (m != null && ((m.HasProperty("_BaseMap") && m.GetTexture("_BaseMap") != null) ||
+                                          (m.HasProperty("_MainTex") && m.GetTexture("_MainTex") != null)))
+                            texturedCount++;
+                    }
+                    check($"{sectionPrefix}.7 Enemy_{monsterName} Textured URP Materials (Non-Gray)", texturedCount > 0 && texturedCount == visRenderers.Length,
+                        $"TexturedRenderers={texturedCount}/{visRenderers.Length}");
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(inst);
+            }
+        }
+
+        GameObject zPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(zonePath);
+        MonsterSpawnZone zComp = zPrefab != null ? zPrefab.GetComponent<MonsterSpawnZone>() : null;
+        check($"{sectionPrefix}.6 Plug-and-Play Zone_{monsterName}.prefab Wired",
+            zComp != null && zComp.MonsterPrefab != null && zComp.MonsterPrefab.GetComponent<MonsterEnemyNPC>() != null,
+            $"Prefab={zComp?.MonsterPrefab?.name}, Count={zComp?.SpawnCount ?? 0}");
     }
 
     private static Transform FindDeepChild(Transform parent, string name)
