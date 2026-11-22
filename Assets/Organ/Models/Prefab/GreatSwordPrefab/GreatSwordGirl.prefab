@@ -664,6 +664,12 @@ MonoBehaviour:
   windOpacity: 0.68
   leftFootBoneName: Bip001 L Foot
   rightFootBoneName: Bip001 R Foot
+  isWindActive: 0
+  isPlayingRunAnimation: 0
+  isShiftHeld: 0
+  currentBlendTreeMagnitude: 0
+  currentHorizontalSpeed: 0
+  activeTriggerSource: Idle
 --- !u!114 &6819204718293041553
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -683,7 +689,15 @@ MonoBehaviour:
   absorbImpactColor: {r: 0.82, g: 0.97, b: 1, a: 1}
   shieldDeploySpeed: 24
   shieldPulseFrequency: 4.2
+  guardVfxMount: {fileID: 0}
+  guardShieldDomeTransform: {fileID: 0}
+  guardShieldDomeRenderer: {fileID: 0}
+  guardShieldGlowTransform: {fileID: 0}
+  guardShieldGlowRenderer: {fileID: 0}
   showDebugHUD: 0
+  isGuarding: 0
+  currentShieldScaleFactor: 0
+  totalBlockedHits: 0
 --- !u!114 &7918273645192837465
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -701,9 +715,26 @@ MonoBehaviour:
   primaryRollKey: 99
   secondaryRollKey: 306
   syncWithCharacterRollAndDash: 1
+  rollStateNames:
+  - Roll
+  - Great Sword Roll
+  - Dodge
+  - Dash
+  - Evade
+  - Tumble
+  - Slide
   rollDuration: 0.42
   minTriggerInterval: 0.35
+  smokeVfxRoot: {fileID: 0}
+  l1LaunchSmokeBurst: {fileID: 0}
+  l2RollingSmokeTrail: {fileID: 0}
+  l3WindSpeedStreaks: {fileID: 0}
+  l4RecoverySmokeRing: {fileID: 0}
   showDebugHUD: 0
+  isRollingSmokeActive: 0
+  totalSmokeRollsTriggered: 0
+  lastTriggerReason: "\u0E1E\u0E23\u0E49\u0E2D\u0E21\u0E43\u0E0A\u0E49\u0E07\u0E32\u0E19
+    (Ready)"
 --- !u!4 &2103095982623179365 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -9114496787053588016, guid: 4ff1e51a98132a34abdecaea0a3501a6, type: 3}
