@@ -79,6 +79,16 @@ public class GreatSwordLeftHandIK : MonoBehaviour
     [Header("Debug")]
     public bool drawGizmos = true;
 
+    [Header("Debug Readout (read-only, ดูตอน Play)")]
+    [Tooltip("true = Unity เรียก OnAnimatorIK แล้ว. ถ้าเป็น false ตลอด แปลว่า IK Pass ไม่ได้ติ๊กที่ Layer นี้")]
+    public bool debugOnAnimatorIKCalled;
+    [Tooltip("สาเหตุที่ target weight เป็น 0 (หรือ OK ถ้าเปิด IK ปกติ)")]
+    public string debugReason = "";
+    [Tooltip("ค่า target weight ที่คำนวณได้ในเฟรมล่าสุด")]
+    public float debugTargetWeight;
+    [Tooltip("ค่า movement magnitude ที่เอาไปเทียบกับ Disable Speed Threshold")]
+    public float debugMoveMagnitude;
+
     Animator animator;
     bool parametersCached;
 
@@ -183,6 +193,8 @@ public class GreatSwordLeftHandIK : MonoBehaviour
         if (layerIndex != animatorLayerIndex) return;
         if (animator == null) return;
 
+        debugOnAnimatorIKCalled = true;
+
         if (!animator.isHuman)
         {
             if (!warnedNonHuman)
@@ -190,6 +202,7 @@ public class GreatSwordLeftHandIK : MonoBehaviour
                 Debug.LogWarning("[GreatSwordLeftHandIK] Animator must use a Humanoid Avatar for OnAnimatorIK.", this);
                 warnedNonHuman = true;
             }
+            debugReason = "Animator ไม่ใช่ Humanoid";
             return;
         }
 
@@ -199,6 +212,7 @@ public class GreatSwordLeftHandIK : MonoBehaviour
 
         float dt = animator.updateMode == AnimatorUpdateMode.Fixed ? Time.fixedDeltaTime : Time.deltaTime;
         float targetWeight = EvaluateTargetWeight();
+        debugTargetWeight = targetWeight;
         float speed = targetWeight >= currentWeight ? blendInSpeed : blendOutSpeed;
         currentWeight = Mathf.MoveTowards(currentWeight, targetWeight, speed * dt);
 
@@ -231,11 +245,25 @@ public class GreatSwordLeftHandIK : MonoBehaviour
 
     float EvaluateTargetWeight()
     {
-        if (!masterEnabled || leftHandGrip == null)
+        debugMoveMagnitude = 0f;
+
+        if (!masterEnabled)
+        {
+            debugReason = "Master Enabled = false";
             return 0f;
+        }
+
+        if (leftHandGrip == null)
+        {
+            debugReason = "Left Hand Grip ว่าง";
+            return 0f;
+        }
 
         if (requireGripActiveInHierarchy && !leftHandGrip.gameObject.activeInHierarchy)
+        {
+            debugReason = "LeftHandGrip/ดาบ ถูกปิด (inactive) ใน Hierarchy";
             return 0f;
+        }
 
         AnimatorStateInfo currentState = animator.GetCurrentAnimatorStateInfo(animatorLayerIndex);
 
@@ -243,34 +271,52 @@ public class GreatSwordLeftHandIK : MonoBehaviour
             eventDisabledForState = false;
 
         if (eventDisabledForState)
+        {
+            debugReason = "ถูกปิดด้วย DisableIKForCurrentState()";
             return 0f;
+        }
 
         AnimatorStateInfo activeState = animator.IsInTransition(animatorLayerIndex)
             ? animator.GetNextAnimatorStateInfo(animatorLayerIndex)
             : currentState;
 
         bool ignoreSpeedCutoff = MatchesAnyTag(activeState, ignoreSpeedCutoffTags);
+
+        // คำนวณ magnitude ไว้โชว์ใน Debug ทุกเฟรม แม้ยังไม่ถึงจุดตัด
+        if (hasSpeedParam)
+        {
+            float d1 = animator.GetFloat(speedParamHash);
+            if (hasSecondSpeedParam)
+            {
+                float d2 = animator.GetFloat(secondSpeedParamHash);
+                debugMoveMagnitude = Mathf.Sqrt(d1 * d1 + d2 * d2);
+            }
+            else
+            {
+                debugMoveMagnitude = Mathf.Abs(d1);
+            }
+        }
+
         if (!ignoreSpeedCutoff)
         {
             if (hasDisableBoolParam && animator.GetBool(disableBoolParamHash))
+            {
+                debugReason = "Disable Bool Parameter เป็น true";
                 return 0f;
+            }
 
             if (disableOnLocomotionSpeed && hasSpeedParam)
             {
-                float v1 = animator.GetFloat(speedParamHash);
-                float moveMagnitude;
-                if (hasSecondSpeedParam)
+                if (debugMoveMagnitude > disableSpeedThreshold)
                 {
-                    float v2 = animator.GetFloat(secondSpeedParamHash);
-                    moveMagnitude = Mathf.Sqrt(v1 * v1 + v2 * v2);
-                }
-                else
-                {
-                    moveMagnitude = Mathf.Abs(v1);
-                }
-
-                if (moveMagnitude > disableSpeedThreshold)
+                    debugReason = "Speed " + debugMoveMagnitude.ToString("F2") + " > Disable Speed Threshold " + disableSpeedThreshold.ToString("F2");
                     return 0f;
+                }
+            }
+            else if (disableOnLocomotionSpeed && !hasSpeedParam && !string.IsNullOrEmpty(speedParameter))
+            {
+                // ไม่ตัด แต่แจ้งให้รู้ว่าชื่อ parameter ไม่ตรง
+                debugReason = "(เตือน) ไม่พบ Float Parameter ชื่อ '" + speedParameter + "' ใน Animator";
             }
         }
 
@@ -279,26 +325,59 @@ public class GreatSwordLeftHandIK : MonoBehaviour
         switch (activationMode)
         {
             case ActivationMode.AlwaysExceptDisabledTags:
-                result = MatchesAnyTag(activeState, disableTags) ? 0f : 1f;
+                if (MatchesAnyTag(activeState, disableTags))
+                {
+                    debugReason = "State ปัจจุบันมี Tag ที่ตรงกับ Disable Tags";
+                    result = 0f;
+                }
+                else
+                {
+                    result = 1f;
+                }
                 break;
 
             case ActivationMode.OnlyOnEnabledTags:
                 if (MatchesAnyTag(activeState, disableTags))
+                {
+                    debugReason = "State ปัจจุบันมี Tag ที่ตรงกับ Disable Tags";
                     result = 0f;
+                }
+                else if (MatchesAnyTag(activeState, enableTags))
+                {
+                    result = 1f;
+                }
                 else
-                    result = MatchesAnyTag(activeState, enableTags) ? 1f : 0f;
+                {
+                    debugReason = "State ปัจจุบันไม่มี Tag ตรงกับ Enable Tags (โหมด OnlyOnEnabledTags)";
+                    result = 0f;
+                }
                 break;
 
             case ActivationMode.ByFloatParameter:
                 if (hasIkWeightParam)
+                {
                     result = Mathf.Clamp01(animator.GetFloat(ikWeightParamHash));
+                    if (result <= 0.0001f)
+                        debugReason = "Float '" + ikWeightParameter + "' = 0 (curve ไม่ได้ป้อนค่า หรือค่าเป็น 0)";
+                }
                 else
+                {
+                    debugReason = "ไม่พบ Float Parameter ชื่อ '" + ikWeightParameter + "' ใน Animator";
                     result = 0f;
+                }
                 break;
         }
 
         if (useParameterAsMultiplier && activationMode != ActivationMode.ByFloatParameter && hasIkWeightParam)
-            result *= Mathf.Clamp01(animator.GetFloat(ikWeightParamHash));
+        {
+            float mul = Mathf.Clamp01(animator.GetFloat(ikWeightParamHash));
+            result *= mul;
+            if (mul <= 0.0001f)
+                debugReason = "Use Parameter As Multiplier: Float '" + ikWeightParameter + "' = 0";
+        }
+
+        if (result > 0.0001f)
+            debugReason = "OK (IK เปิด) น้ำหนัก = " + result.ToString("F2");
 
         return result;
     }

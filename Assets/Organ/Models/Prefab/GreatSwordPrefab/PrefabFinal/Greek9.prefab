@@ -28,13 +28,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 4596513690271241976}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.0018010131, y: -0.015774779, z: -0.11341549, w: 0.99342084}
-  m_LocalPosition: {x: -0.0019836754, y: 0.15301523, z: -3.5999422}
+  m_LocalRotation: {x: -0.083325006, y: -0.7298588, z: -0.07696213, w: 0.6741217}
+  m_LocalPosition: {x: -0.03600054, y: 0.06300016, z: -3.181999}
   m_LocalScale: {x: 0.14263, y: 0.14263, z: 0.14263}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 7186316497893972487}
-  m_LocalEulerAnglesHint: {x: -0.41, y: -1.773, z: -13.02}
+  m_LocalEulerAnglesHint: {x: -12.984, y: -94.666, z: 1.051}
 --- !u!33 &7246778378480734582
 MeshFilter:
   m_ObjectHideFlags: 0
@@ -272,7 +272,7 @@ Transform:
   m_GameObject: {fileID: 5429487723624392178}
   serializedVersion: 2
   m_LocalRotation: {x: 0.13834731, y: 0.27801648, z: -0.6995605, w: 0.6435697}
-  m_LocalPosition: {x: -0.057, y: 0.013, z: -0.032}
+  m_LocalPosition: {x: -0.07, y: 0.021, z: -0.094}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -976,7 +976,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GreatSwordLeftHandIK
   leftHandGrip: {fileID: 5318808729858238445}
-  leftElbowHint: {fileID: 7468864187511794649}
+  leftElbowHint: {fileID: 0}
   animatorLayerIndex: 0
   activationMode: 0
   requireGripActiveInHierarchy: 1
@@ -1006,6 +1006,10 @@ MonoBehaviour:
   localPositionOffset: {x: 0, y: 0, z: 0}
   localRotationOffset: {x: 0, y: 0, z: 0}
   drawGizmos: 1
+  debugOnAnimatorIKCalled: 1
+  debugReason: 
+  debugTargetWeight: 0
+  debugMoveMagnitude: 0
 --- !u!4 &8782628096375460683 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: -7466448270209438675, guid: c9ec54b8b0404734c8554ee8bc7d42ba, type: 3}
@@ -1038,31 +1042,31 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -0.371
+      value: -0.37100026
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.078
+      value: 0.07800007
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 0.418
+      value: 0.41799998
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalRotation.w
-      value: -0.94403374
+      value: -0.93388015
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalRotation.x
-      value: -0.012934814
+      value: -0.044516996
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.32445803
+      value: 0.3216498
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalRotation.z
-      value: 0.057964996
+      value: 0.14975867
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -1074,7 +1078,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_LocalEulerAnglesHint.z
-      value: -186.768
+      value: -197.962
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 2ef72756028601c408d8f3abbc13427a, type: 3}
       propertyPath: m_ConstrainProportionsScale
