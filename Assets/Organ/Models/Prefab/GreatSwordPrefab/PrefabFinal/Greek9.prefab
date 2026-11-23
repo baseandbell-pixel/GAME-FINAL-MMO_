@@ -788,8 +788,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerController
   runKey: 51
-  rollKey: 1
-  jumpKey: 20
+  rollKey: 55
+  jumpKey: 1
   lockOn: 0
   walkSpeed: 3
   runSpeed: 5
