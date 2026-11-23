@@ -15,8 +15,8 @@ MonoBehaviour:
   monsterName: TurtleShell
   archetype: 0
   isBoss: 0
-  healthMultiplier: 1.25
-  damageMultiplier: 1.05
+  healthMultiplier: 1.1
+  damageMultiplier: 0.95
   defenseBonus: 3
   attackRange: 1.95
   attackImpactDelay: 0.42
@@ -24,9 +24,9 @@ MonoBehaviour:
   lootRollMode: 0
   maxDropsPerKill: 0
   lootDrops: []
-  goldDropChancePercent: 0
-  minGold: 5
-  maxGold: 15
+  goldDropChancePercent: 35
+  minGold: 22
+  maxGold: 38
   canFlinch: 1
   hitReactCooldown: 0.25
   attackVariantCount: 2

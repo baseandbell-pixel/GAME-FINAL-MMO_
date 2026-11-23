@@ -91,7 +91,6 @@ public class MonsterSpawnZone : MonoBehaviour
     [SerializeField] private bool verboseLogs = false;
 
     private readonly List<SpawnSlotState> _slots = new List<SpawnSlotState>();
-    private static readonly RaycastHit[] s_groundCastBuf = new RaycastHit[16];
 
     private int _zoneSignature;
     private bool _initialized;
@@ -280,7 +279,8 @@ public class MonsterSpawnZone : MonoBehaviour
             float dist = Vector2.Distance(
                 new Vector2(playerPos.x, playerPos.z),
                 new Vector2(z.transform.position.x, z.transform.position.z));
-            if (dist <= Mathf.Max(24f, z.TerritoryRadius + 8f))
+            // ขยายระยะตรวจจับแบนเนอร์นับถอยหลังบอสให้ครอบคลุมลานบอสขนาดใหญ่บนแผนที่ FinalTestv1
+            if (dist <= Mathf.Max(60f, z.TerritoryRadius + 10f))
             {
                 bannerText = $"Boss {z.ResolvedDisplayName} respawns in {z.GetFormattedRespawnTime()}";
                 return true;
@@ -345,7 +345,9 @@ public class MonsterSpawnZone : MonoBehaviour
             MonsterSystemManager mgr = _parentManager != null ? _parentManager : MonsterSystemManager.Active;
             Vector3 center = mgr != null ? mgr.fallbackSafeZoneCenter : new Vector3(0f, 0f, -60f);
             float radius = mgr != null ? mgr.fallbackSafeZoneRadius : 12f;
-            SafeZone.EnsureAt(center, radius);
+            Vector3? reconnectOffset = mgr != null ? mgr.fallbackSafeZoneReconnectOffset : (Vector3?)null;
+            bool showVisuals = mgr != null && mgr.showProceduralSafeZoneVisuals;
+            SafeZone.EnsureAt(center, radius, reconnectOffset, showVisuals);
         }
     }
 
@@ -391,31 +393,14 @@ public class MonsterSpawnZone : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// แนบจุดเกิดของมอนสเตอร์เข้ากับระดับพื้นผิวจริงที่ใกล้ rawPos.y ที่สุดผ่าน SandboxWorldSpawner.SampleGroundY
+    /// ป้องกันมอนสเตอร์ไปเกิดบนยอดต้นไม้ หลังคาเต็นท์ หรือผิวน้ำบนแผนที่ภูมิประเทศขนาดใหญ่ (FinalTestv1)
+    /// </summary>
     private static Vector3 ProjectPointOntoGround(Vector3 rawPos)
     {
-        Vector3 origin = new Vector3(rawPos.x, rawPos.y + 45f, rawPos.z);
-        int count = Physics.RaycastNonAlloc(origin, Vector3.down, s_groundCastBuf, 120f, ~0, QueryTriggerInteraction.Ignore);
-        float bestY = float.MinValue;
-        bool found = false;
-
-        for (int i = 0; i < count; i++)
-        {
-            RaycastHit h = s_groundCastBuf[i];
-            if (h.collider == null || h.normal.y < 0.45f) continue;
-            if (h.collider.GetComponentInParent<EnemyNPC>() != null) continue;
-            if (h.collider.GetComponentInParent<PlayerCombat>() != null) continue;
-
-            if (h.point.y > bestY)
-            {
-                bestY = h.point.y;
-                found = true;
-            }
-        }
-
-        if (found)
-            return new Vector3(rawPos.x, bestY + 1.2f, rawPos.z);
-
-        return new Vector3(rawPos.x, rawPos.y + 1.2f, rawPos.z);
+        float groundY = SandboxWorldSpawner.SampleGroundY(rawPos, rawPos.y);
+        return new Vector3(rawPos.x, groundY + 1.2f, rawPos.z);
     }
 
     private static Vector3[] GenerateSpacedPositions(Vector3 center, int count, float spacing)
@@ -556,7 +541,7 @@ public class MonsterSpawnZone : MonoBehaviour
             ledger.Clear();
     }
 
-    public static string BuildZoneContributorPayload(int zoneSignature)
+    public static string BuildZoneContributorPayload(int zoneSignature, bool isBoss = false)
     {
         if (zoneSignature == 0 || !s_zoneDamageLedgers.TryGetValue(zoneSignature, out var ledger) || ledger.Count == 0)
             return string.Empty;
@@ -564,6 +549,7 @@ public class MonsterSpawnZone : MonoBehaviour
         LootDropSystem.AnalyzeDamageContribution(
             ledger,
             PlayerRef.None,
+            isBoss,
             out float totalDamage,
             out PlayerRef topDps,
             out List<PlayerRef> participants);
@@ -577,7 +563,8 @@ public class MonsterSpawnZone : MonoBehaviour
             return db.CompareTo(da);
         });
 
-        var sb = new StringBuilder(64);
+        // รองรับผู้เล่นช่วยตีพร้อมกันสูงสุด 10 คนภายใน NetworkString<_128> (ไม่เกินขีดจำกัด 512 ไบต์ของ Photon Fusion)
+        var sb = new StringBuilder(128);
         for (int i = 0; i < participants.Count; i++)
         {
             PlayerRef p = participants[i];
@@ -587,7 +574,7 @@ public class MonsterSpawnZone : MonoBehaviour
             int topFlag = p == topDps ? 1 : 0;
             string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{share.ToString("0.##", CultureInfo.InvariantCulture)}:{topFlag}";
             int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
-            if (sb.Length + needed > 62) break;
+            if (sb.Length + needed > 124) break;
 
             if (sb.Length > 0) sb.Append(';');
             sb.Append(token);
@@ -649,7 +636,7 @@ public class MonsterSpawnZone : MonoBehaviour
 
         NetworkRunner runner = localPlayer != null ? localPlayer.Runner : null;
         bool isMaster = runner != null && runner.IsRunning && runner.IsSharedModeMasterClient;
-        string fallbackPayload = isMaster ? BuildZoneContributorPayload(_zoneSignature) : string.Empty;
+        string fallbackPayload = isMaster ? BuildZoneContributorPayload(_zoneSignature, IsBossZone) : string.Empty;
         HandleZoneClearedInternal(fallbackPayload);
     }
 
@@ -704,10 +691,22 @@ public class MonsterSpawnZone : MonoBehaviour
         {
             if (awardClearGold)
             {
+                // ปรับสมดุลโบนัส Gold เคลียร์แคมป์ให้สัมพันธ์กับราคาตีบวกและอัป Stat ใหม่ (Camp 1 ~90G, Camp 4 ~205G, Camp 6 ~330G, Boss 900..1,400G)
                 int avgLvl = Mathf.Max(1, (ZoneMinLevel + ZoneMaxLevel) / 2);
-                float scale = 1f + (avgLvl - 1) * 0.15f;
-                int minGold = isBoss ? Mathf.RoundToInt(250 * scale) : Mathf.RoundToInt(40 * scale);
-                int maxGold = isBoss ? Mathf.RoundToInt(450 * scale) : Mathf.RoundToInt(85 * scale);
+                int minGold;
+                int maxGold;
+                if (isBoss)
+                {
+                    float bossScale = 1f + Mathf.Max(0, avgLvl - 20) * 0.08f;
+                    minGold = Mathf.RoundToInt(900f * bossScale);
+                    maxGold = Mathf.RoundToInt(1400f * bossScale);
+                }
+                else
+                {
+                    float scale = 1f + (avgLvl - 1) * 0.18f;
+                    minGold = Mathf.RoundToInt(55f * scale);
+                    maxGold = Mathf.RoundToInt(100f * scale);
+                }
                 int goldReward = Random.Range(minGold, maxGold + 1);
                 localPlayer.AddGold(goldReward, $"Camp {campNum} ({ResolvedDisplayName})");
             }

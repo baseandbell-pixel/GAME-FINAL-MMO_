@@ -12,8 +12,29 @@ using UnityEngine.InputSystem;
 ///      - เมื่อผู้เล่นกดทิ้งไอเทมลงพื้น (IsPlayerDropped = true) จะเริ่มนับถอยหลัง 30 วินาที
 ///      - ในช่วง 5 วินาทีสุดท้าย ไอเทมจะกะพริบเตือนก่อนสลายหายไปจากฉากอัตโนมัติ
 /// </summary>
-public class WorldItem : NetworkBehaviour
+public class WorldItem : NetworkBehaviour, IWorldInteractable
 {
+    public InteractionChannel Channel => InteractionChannel.PickupOrChest;
+    public int PriorityBias => 0;
+    public float InteractionRange => pickupRadius;
+    public Vector3 InteractionWorldPosition => transform.position;
+    public bool CanInteractNow(PlayerCombat player) => IsVisibleAndLootableByLocalPlayer();
+    public void ExecuteInteraction(PlayerCombat player) => RequestPickup();
+
+    public string GetPromptLabel(PlayerCombat player)
+    {
+        var data = Data;
+        string enhTag = EnhancementLevel > 0 ? $" +{EnhancementLevel}" : "";
+        string timerTag = IsPlayerDropped ? $"  ({Mathf.CeilToInt(_despawnTimerRemaining)}s)" : "";
+        string personalTag = AllowedLooter != PlayerRef.None ? " [Personal]" : "";
+        return $"Pick up  {(data != null ? data.displayName : ItemId.ToString())}{enhTag}  x{Quantity}{personalTag}{timerTag}";
+    }
+
+    public Color GetPromptAccentColor(PlayerCombat player)
+    {
+        var data = Data;
+        return data != null ? ItemData.GetTierColor(data.tier) : Color.white;
+    }
     // รายการไอเทมบนพื้นทั้งหมดที่กำลังทำงานอยู่ในฉาก
     public static readonly List<WorldItem> All = new List<WorldItem>();
 
@@ -151,6 +172,7 @@ public class WorldItem : NetworkBehaviour
     {
         IsSpawned = true;
         if (!All.Contains(this)) All.Add(this);
+        InteractionManager.Register(this);
         _despawnTimerRemaining = droppedDespawnSeconds;
 
         var data = Data;
@@ -170,6 +192,7 @@ public class WorldItem : NetworkBehaviour
     {
         IsSpawned = false;
         All.Remove(this);
+        InteractionManager.Unregister(this);
         if (s_promptItem == this) s_promptItem = null;
     }
 
@@ -313,15 +336,8 @@ public class WorldItem : NetworkBehaviour
             visual.Rotate(0f, spinSpeed * Time.deltaTime, 0f, Space.World);
         }
 
+        // การกดปุ่ม [E] ถูกรวมศูนย์ไว้ที่ InteractionManager แล้ว (ป้องกันเก็บของซ้อนเปิดกล่อง)
         RefreshPromptTarget();
-        if (s_promptItem != this) return;
-
-        // หากมีไอเทมส่วนตัว LocalPersonalLoot อยู่ใกล้กว่า ให้ไอเทมส่วนตัวเป็นตัวรับปุ่ม [E]
-        LocalPersonalLoot closestLocal = LocalPersonalLoot.GetClosestLocalLoot(out float localDist);
-        if (closestLocal != null && localDist <= s_promptDistance) return;
-
-        var kb = Keyboard.current;
-        if (kb != null && kb.eKey.wasPressedThisFrame) RequestPickup();
     }
 
     /// <summary>
@@ -428,40 +444,12 @@ public class WorldItem : NetworkBehaviour
 
         if (remainder > 0)
         {
-            inv.SpawnWorldItem(data, remainder, transform.position, enhancementLvl);
+            // คงสิทธิ์เจ้าของไอเทมส่วนตัว (AllowedLooter) และสถานะผู้เล่นโยนทิ้งไว้เสมอเมื่อมีเศษไอเทมเหลือเพราะกระเป๋าเต็ม
+            inv.SpawnWorldItem(data, remainder, transform.position, enhancementLvl, allowedLooter: AllowedLooter, isPlayerDropped: IsPlayerDropped);
         }
     }
 
-    // ------------------------------------------------------------------ ป้ายแจ้งเตือนกดเก็บ [E] บนหน้าจอ
-
-    private void OnGUI()
-    {
-        if (!IsSpawned || s_promptItem != this || Event.current.type != EventType.Repaint) return;
-        if (!IsVisibleAndLootableByLocalPlayer()) return;
-
-        LocalPersonalLoot closestLocal = LocalPersonalLoot.GetClosestLocalLoot(out float localDist);
-        if (closestLocal != null && localDist <= s_promptDistance) return;
-
-        var data = Data;
-        string enhTag = EnhancementLevel > 0 ? $" +{EnhancementLevel}" : "";
-        string timerTag = IsPlayerDropped ? $"  ({Mathf.CeilToInt(_despawnTimerRemaining)}s)" : "";
-        string personalTag = AllowedLooter != PlayerRef.None ? " [Personal Loot]" : "";
-        string text = $"[E] Pick up  {(data != null ? data.displayName : ItemId.ToString())}{enhTag}  x{Quantity}{personalTag}{timerTag}";
-
-        var rect = new Rect(Screen.width * 0.5f - 190f, Screen.height * 0.72f, 380f, 30f);
-        var prev = GUI.color;
-        GUI.color = new Color(0.04f, 0.05f, 0.08f, 0.84f);
-        GUI.DrawTexture(rect, Texture2D.whiteTexture);
-        GUI.color = data != null ? ItemData.GetTierColor(data.tier) : Color.white;
-        var style = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontSize = 14,
-            fontStyle = FontStyle.Bold
-        };
-        GUI.Label(rect, text, style);
-        GUI.color = prev;
-    }
+    // ป้ายแจ้งเตือน [E] ย้ายไปวาดรวมบน uGUI Canvas กลางที่ InteractionPromptUI แล้ว (รองรับ 2K/4K และแก้ไขหน้าตาใน Unity Prefab ได้)
 
     private static float Planar(Vector3 a, Vector3 b)
     {

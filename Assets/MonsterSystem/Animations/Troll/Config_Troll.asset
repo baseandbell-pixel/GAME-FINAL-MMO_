@@ -15,8 +15,8 @@ MonoBehaviour:
   monsterName: Troll
   archetype: 2
   isBoss: 0
-  healthMultiplier: 1.8
-  damageMultiplier: 1.55
+  healthMultiplier: 1.3
+  damageMultiplier: 1.15
   defenseBonus: 2
   attackRange: 2.38
   attackImpactDelay: 0.46
@@ -24,9 +24,9 @@ MonoBehaviour:
   lootRollMode: 0
   maxDropsPerKill: 0
   lootDrops: []
-  goldDropChancePercent: 0
-  minGold: 5
-  maxGold: 15
+  goldDropChancePercent: 45
+  minGold: 50
+  maxGold: 85
   canFlinch: 0
   hitReactCooldown: 0.25
   attackVariantCount: 2

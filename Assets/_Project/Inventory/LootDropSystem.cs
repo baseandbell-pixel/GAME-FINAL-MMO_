@@ -14,6 +14,26 @@ public static class LootDropSystem
     // โอกาสพื้นฐานที่มอนสเตอร์ทั่วไปจะดรอปไอเทม 1 ชิ้นเมื่อตาย (30% — อยู่ในช่วง 25%–35%)
     public const float NormalEnemyDropChance = 0.30f;
 
+    // เกณฑ์ขั้นต่ำการมีส่วนร่วมทำดาเมจในโหมด Co-op (ป้องกันช่องโหว่ 1-Damage Tagging ตอด 1 ดาเมจแล้วรอเปิดกล่องฟรี)
+    public const float NormalMinDamageShare = 0.10f;    // >= 10% ของดาเมจรวม (มอนทั่วไป)
+    public const float NormalMinAbsoluteDamage = 15f;   // หรือ >= 15 ดาเมจจริง
+    public const float BossMinDamageShare = 0.05f;      // >= 5% ของดาเมจรวม (บอส)
+    public const float BossMinAbsoluteDamage = 25f;     // หรือ >= 25 ดาเมจจริง
+
+    /// <summary>
+    /// ตรวจสอบว่าผู้เล่นทำดาเมจถึงเกณฑ์มีส่วนร่วมจริงหรือไม่ (เล่นคนเดียวได้สิทธิ์ 100% เสมอ, Co-op >= 2 คนต้องผ่านเกณฑ์ % หรือดาเมจขั้นต่ำ)
+    /// </summary>
+    public static bool IsEligibleDamageContributor(float dealtDamage, float rawTotalDamage, int rawAttackerCount, bool isBoss)
+    {
+        if (dealtDamage <= 0f || rawTotalDamage <= 0f) return false;
+        if (rawAttackerCount <= 1) return true;
+
+        float share = dealtDamage / rawTotalDamage;
+        float minShare = isBoss ? BossMinDamageShare : NormalMinDamageShare;
+        float minFlat = isBoss ? BossMinAbsoluteDamage : NormalMinAbsoluteDamage;
+        return share >= minShare || dealtDamage >= minFlat;
+    }
+
     /// <summary>
     /// โครงสร้างเก็บค่าโอกาสออกไอเทมแต่ละระดับ (0..1 รวมกันได้ 1.0) สำหรับผู้เล่นแต่ละคน
     /// </summary>
@@ -162,7 +182,7 @@ public static class LootDropSystem
     }
 
     /// <summary>
-    /// คำนวณผู้เล่นที่ทำดาเมจสูงสุด (Top DPS) และดาเมจรวมทั้งหมดจากตารางบันทึกดาเมจ
+    /// คำนวณผู้เล่นที่ทำดาเมจสูงสุด (Top DPS) และดาเมจรวมทั้งหมดจากตารางบันทึกดาเมจ (ใช้เกณฑ์มอนสเตอร์ทั่วไป)
     /// </summary>
     public static void AnalyzeDamageContribution(
         IReadOnlyDictionary<PlayerRef, float> damageMap,
@@ -171,16 +191,41 @@ public static class LootDropSystem
         out PlayerRef topDpsPlayer,
         out List<PlayerRef> participants)
     {
+        AnalyzeDamageContribution(damageMap, fallbackKiller, isBoss: false, out totalDamage, out topDpsPlayer, out participants);
+    }
+
+    /// <summary>
+    /// คำนวณผู้เล่นที่มีสิทธิ์รับรางวัลจริง (กรองพวกตอด 1 ดาเมจทิ้งด้วยเกณฑ์ขั้นต่ำของมอนทั่วไป/บอส)
+    /// </summary>
+    public static void AnalyzeDamageContribution(
+        IReadOnlyDictionary<PlayerRef, float> damageMap,
+        PlayerRef fallbackKiller,
+        bool isBoss,
+        out float totalDamage,
+        out PlayerRef topDpsPlayer,
+        out List<PlayerRef> participants)
+    {
         totalDamage = 0f;
-        topDpsPlayer = fallbackKiller;
+        topDpsPlayer = PlayerRef.None;
         float highest = -1f;
         participants = new List<PlayerRef>();
 
+        float rawTotal = 0f;
+        int rawCount = 0;
         if (damageMap != null)
         {
             foreach (var kv in damageMap)
             {
                 if (kv.Key == PlayerRef.None || kv.Value <= 0f) continue;
+                rawTotal += kv.Value;
+                rawCount++;
+            }
+
+            foreach (var kv in damageMap)
+            {
+                if (kv.Key == PlayerRef.None || kv.Value <= 0f) continue;
+                if (!IsEligibleDamageContributor(kv.Value, rawTotal, rawCount, isBoss)) continue;
+
                 totalDamage += kv.Value;
                 participants.Add(kv.Key);
                 if (kv.Value > highest)
@@ -188,6 +233,27 @@ public static class LootDropSystem
                     highest = kv.Value;
                     topDpsPlayer = kv.Key;
                 }
+            }
+        }
+
+        // กรณีผู้เล่นทุกคนทำดาเมจต่ำกว่าเกณฑ์ทั้งหมด (เช่น ตีกันหลายคนใส่มอนเลือดน้อยมาก) ให้คืนผู้ทำดาเมจสูงสุดไม่ให้รางวัลหาย
+        if (participants.Count == 0 && damageMap != null && rawTotal > 0f)
+        {
+            PlayerRef best = PlayerRef.None;
+            float bestDmg = -1f;
+            foreach (var kv in damageMap)
+            {
+                if (kv.Key != PlayerRef.None && kv.Value > bestDmg)
+                {
+                    bestDmg = kv.Value;
+                    best = kv.Key;
+                }
+            }
+            if (best != PlayerRef.None)
+            {
+                participants.Add(best);
+                totalDamage = bestDmg;
+                topDpsPlayer = best;
             }
         }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Fusion;
 using UnityEngine;
 using UnityEngine.Events;
 
@@ -48,10 +49,17 @@ public class MonsterSystemManager : MonoBehaviour
     public bool ensureFallbackSafeZoneIfMissing = true;
     public Vector3 fallbackSafeZoneCenter = new Vector3(0f, 0f, -60f);
     [Min(3f)] public float fallbackSafeZoneRadius = 12f;
+    // ระยะชดเชยจุดเกิดในเมืองปลอดภัยและตัวเลือกปิดโมเดลเสา Primitive บนแผนที่จริง
+    public Vector3 fallbackSafeZoneReconnectOffset = new Vector3(0f, 0.15f, 34f);
+    public bool showProceduralSafeZoneVisuals = false;
 
     [Header("5. ช่องเสียบ Event เผื่อเชื่อมระบบเควส/รางวัลของเพื่อนในอนาคต")]
     public UnityEvent<MonsterEnemyNPC, PlayerCombat> onAnyMonsterKilled;
     public UnityEvent<MonsterEnemyNPC> onAnyMonsterSpawned;
+
+    // ตัวแปรติดตามการรับตำแหน่ง SharedModeMasterClient แทน Host ที่หลุดออก เพื่อกู้คืน StateAuthority ของมอนทุกตัวทันที
+    private bool _wasSharedModeMasterClient;
+    private float _nextAuthoritySweepAt;
 
     private void Awake()
     {
@@ -67,8 +75,38 @@ public class MonsterSystemManager : MonoBehaviour
     {
         if (ensureFallbackSafeZoneIfMissing && SafeZone.Instance == null)
         {
-            SafeZone.EnsureAt(fallbackSafeZoneCenter, fallbackSafeZoneRadius);
+            SafeZone.EnsureAt(fallbackSafeZoneCenter, fallbackSafeZoneRadius, fallbackSafeZoneReconnectOffset, showProceduralSafeZoneVisuals);
         }
+    }
+
+    private void Update()
+    {
+        // กวาดกู้คืน StateAuthority ของมอนสเตอร์และบอสทุกตัวทันทีเมื่อ Host เดิมออกจากห้องและเครื่องนี้ได้เป็น MasterClient
+        // (ชดเชยส่วนที่เดิมอยู่ใน SandboxWorldSpawner เพื่อให้ Host-Leave Recovery ทำงาน 100% เมื่อใช้ MonsterSystem_Manager เป็นหลัก)
+        var local = PlayerCombat.Local;
+        NetworkRunner runner = local != null ? local.Runner : null;
+        if (runner == null || !runner.IsRunning) return;
+
+        bool isMaster = runner.IsSharedModeMasterClient;
+        bool promotedToMaster = isMaster && !_wasSharedModeMasterClient;
+        _wasSharedModeMasterClient = isMaster;
+
+        if (!promotedToMaster && Time.unscaledTime < _nextAuthoritySweepAt) return;
+        _nextAuthoritySweepAt = Time.unscaledTime + 0.5f;
+
+        if (!EnemyNPC.ShouldLocalClientTakeOverAuthority(runner)) return;
+
+        int recovered = 0;
+        for (int i = 0; i < EnemyNPC.All.Count; i++)
+        {
+            EnemyNPC enemy = EnemyNPC.All[i];
+            if (enemy == null || !enemy.IsSpawned) continue;
+            if (enemy.TryRecoverOrphanedAuthority(ignoreThrottle: promotedToMaster))
+                recovered++;
+        }
+
+        if (promotedToMaster && recovered > 0)
+            Debug.Log($"[MonsterSystemManager] Promoted to SharedModeMasterClient -> Recovered StateAuthority on {recovered} orphaned monster(s).");
     }
 
     private void OnTransformChildrenChanged()

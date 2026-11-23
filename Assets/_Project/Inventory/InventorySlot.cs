@@ -11,15 +11,18 @@ public class InventorySlot
     public ItemData item;
     public int quantity;
     public int enhancementLevel;
+    // แต้มสะสม Pity (Failstack) เมื่อตีบวกพลาดบนไอเทมชิ้นนี้ (รีเซ็ตเป็น 0 เมื่อตีติด)
+    public int enhanceFailStacks;
 
     public bool IsEmpty => item == null || quantity <= 0;
     public int FreeSpace => IsEmpty || enhancementLevel > 0 ? 0 : item.MaxStackSize - quantity;
 
-    public void Set(ItemData newItem, int newQty, int enhanceLevel = 0, string existingInstanceId = null)
+    public void Set(ItemData newItem, int newQty, int enhanceLevel = 0, string existingInstanceId = null, int failStacks = 0)
     {
         item = newItem;
         quantity = newQty;
         enhancementLevel = enhanceLevel < 0 ? 0 : enhanceLevel;
+        enhanceFailStacks = failStacks < 0 ? 0 : failStacks;
         instanceId = string.IsNullOrEmpty(existingInstanceId) ? Guid.NewGuid().ToString("N") : existingInstanceId;
     }
 
@@ -40,6 +43,7 @@ public class InventorySlot
         item = other.item;
         quantity = other.quantity;
         enhancementLevel = other.enhancementLevel;
+        enhanceFailStacks = other.enhanceFailStacks;
     }
 
     public void Clear()
@@ -48,5 +52,6 @@ public class InventorySlot
         item = null;
         quantity = 0;
         enhancementLevel = 0;
+        enhanceFailStacks = 0;
     }
 }

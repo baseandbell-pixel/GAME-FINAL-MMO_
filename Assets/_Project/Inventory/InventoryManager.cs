@@ -47,6 +47,8 @@ public class InventoryManager : MonoBehaviour
 
     // ความจุกระเป๋ามาตรฐานขยายเป็น 48 ช่อง (รองรับอุปกรณ์และยาจำนวนมากโดยไม่กระทบไฟล์เซฟเก่า)
     public const int DefaultBagCapacity = 48;
+    // จำนวนช่องอุปกรณ์สวมใส่หลัก (Sword, Shield, Armor, Pants) — สำรองช่องภายในแยกจาก 48 ช่องกระเป๋าเพื่อไม่ให้กินโควตากระเป๋า
+    public const int EquipmentSlotCount = 4;
 
     [Min(1)] [SerializeField] private int capacity = DefaultBagCapacity;
     [Tooltip("Prefab used when dropping items back into the world.")]
@@ -75,6 +77,23 @@ public class InventoryManager : MonoBehaviour
     public bool IsActivated => _activated;
     public IReadOnlyList<InventorySlot> Slots => _slots;
     public int Capacity => capacity;
+
+    /// <summary>จำนวนช่องไอเทมที่อยู่ในกระเป๋าจริง (ไม่นับรวมอุปกรณ์ที่สวมใส่อยู่ใน 4 ช่อง Equipment)</summary>
+    public int OccupiedBagSlotCount
+    {
+        get
+        {
+            int n = 0;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                if (!_slots[i].IsEmpty && !IsSlotEquipped(i)) n++;
+            }
+            return n;
+        }
+    }
+
+    /// <summary>จำนวนช่องว่างที่เหลือจริงในกระเป๋าหลัก (จากความจุเต็ม 48 ช่อง)</summary>
+    public int FreeBagSlotCount => Mathf.Max(0, capacity - OccupiedBagSlotCount);
     public int Experience => _combat != null && _combat.IsSpawned ? _combat.NetworkExperience : _localExpFallback;
     public int Level => _combat != null && _combat.IsSpawned ? _combat.NetworkLevel : 1;
     public int UnspentStatPoints => _combat != null && _combat.IsSpawned ? _combat.NetworkUnspentStatPoints : 0;
@@ -106,9 +125,11 @@ public class InventoryManager : MonoBehaviour
     private void Awake()
     {
         _combat = GetComponent<PlayerCombat>();
-        // บังคับความจุกระเป๋าขั้นต่ำเป็น 48 ช่องแม้ Prefab เก่าจะเคยบันทึกค่า 24 ไว้
+        // บังคับความจุกระเป๋าขั้นต่ำเป็น 48 ช่อง พร้อมสำรองช่องภายในอีก 4 ช่องสำหรับอุปกรณ์ที่สวมใส่อยู่ (รวม 52 ช่องภายใน)
+        // เพื่อให้อุปกรณ์ที่สวมใส่ 4 ชิ้นไม่กินโควตา 48 ช่องของกระเป๋าหลัก (แก้บั๊กแสดง 44/48 แต่ขึ้น Inventory Full)
         if (capacity < DefaultBagCapacity) capacity = DefaultBagCapacity;
-        for (int i = 0; i < capacity; i++) _slots.Add(new InventorySlot());
+        int totalInternalSlots = capacity + EquipmentSlotCount;
+        for (int i = 0; i < totalInternalSlots; i++) _slots.Add(new InventorySlot());
     }
 
     private void Update()
@@ -149,16 +170,29 @@ public class InventoryManager : MonoBehaviour
 
         int room = 0;
         int max = item.MaxStackSize;
-        foreach (var s in _slots)
+
+        if (item.stackable)
         {
-            if (s.IsEmpty) room += max;
-            else if (s.item == item && s.enhancementLevel == 0) room += s.FreeSpace;
-            if (room >= quantity) return true;
+            for (int i = 0; i < _slots.Count; i++)
+            {
+                var s = _slots[i];
+                if (s.IsEmpty || IsSlotEquipped(i)) continue;
+                if (s.item == item && s.enhancementLevel == 0) room += s.FreeSpace;
+                if (room >= quantity) return true;
+            }
         }
+
+        int emptyInternal = 0;
+        for (int i = 0; i < _slots.Count; i++)
+        {
+            if (_slots[i].IsEmpty) emptyInternal++;
+        }
+        int usableEmptySlots = Mathf.Min(FreeBagSlotCount, emptyInternal);
+        room += usableEmptySlots * max;
         return room >= quantity;
     }
 
-    /// <summary>Adds items to existing un-enhanced stacks or empty slots. Returns quantity that did NOT fit.</summary>
+    /// <summary>Adds items to existing un-enhanced stacks or empty slots (up to Capacity visible bag slots). Returns quantity that did NOT fit.</summary>
     public int AddItem(ItemData item, int quantity, int enhancementLevel = 0)
     {
         if (item == null || quantity <= 0)
@@ -172,23 +206,25 @@ public class InventoryManager : MonoBehaviour
 
         if (item.stackable && enhancementLevel == 0)
         {
-            foreach (var s in _slots)
+            for (int i = 0; i < _slots.Count && remaining > 0; i++)
             {
-                if (remaining <= 0) break;
-                if (s.IsEmpty || s.item != item || s.enhancementLevel != 0 || s.FreeSpace <= 0) continue;
+                var s = _slots[i];
+                if (s.IsEmpty || IsSlotEquipped(i) || s.item != item || s.enhancementLevel != 0 || s.FreeSpace <= 0) continue;
                 int add = Mathf.Min(s.FreeSpace, remaining);
                 s.quantity += add;
                 remaining -= add;
             }
         }
 
-        foreach (var s in _slots)
+        int allowedNewSlots = FreeBagSlotCount;
+        for (int i = 0; i < _slots.Count && remaining > 0 && allowedNewSlots > 0; i++)
         {
-            if (remaining <= 0) break;
+            var s = _slots[i];
             if (!s.IsEmpty) continue;
             int add = Mathf.Min(max, remaining);
             s.Set(item, add, enhancementLevel);
             remaining -= add;
+            allowedNewSlots--;
         }
 
         int added = quantity - remaining;
@@ -337,7 +373,9 @@ public class InventoryManager : MonoBehaviour
         {
             if (_combat.NetworkHealth < _combat.MaxHealth)
             {
-                _combat.HealSelf(item.healAmount);
+                // ปรับสมดุลยาฟื้นเลือดให้สเกลตาม MaxHP (ฮีลอย่างน้อย 28% ของ MaxHP หรือไม่ต่ำกว่า item.healAmount) เพื่อใช้ได้จริงจนถึง Lv.30
+                int effectiveHeal = Mathf.Max(item.healAmount, Mathf.RoundToInt(_combat.MaxHealth * 0.28f));
+                _combat.HealSelf(effectiveHeal);
                 appliedAny = true;
             }
             else if (item.staminaRestoreAmount <= 0 && item.attackBuffBonus <= 0)
@@ -394,6 +432,12 @@ public class InventoryManager : MonoBehaviour
 
         if (toggleOffIfAlreadyEquipped && eqRef.instanceId == s.instanceId)
         {
+            if (OccupiedBagSlotCount >= capacity)
+            {
+                Debug.LogWarning($"[Inventory] Cannot unequip {item.displayName}: bag is full ({OccupiedBagSlotCount}/{capacity}).");
+                PlayerStatusHud.Instance?.ShowToast($"Inventory Bag is full ({capacity}/{capacity})! Free a slot before unequipping.", new Color(1f, 0.35f, 0.25f));
+                return false;
+            }
             eqRef.Clear();
             Debug.Log($"[Inventory] Unequipped slot {slotIndex} ({item.displayName} +{s.enhancementLevel}).");
         }
@@ -427,6 +471,12 @@ public class InventoryManager : MonoBehaviour
     public bool UnequipSlot(EquipmentSlotType slotType)
     {
         if (!_equipped.TryGetValue(slotType, out EquippedGearRef eq) || eq.IsEmpty) return false;
+        if (OccupiedBagSlotCount >= capacity)
+        {
+            Debug.LogWarning($"[Inventory] Cannot unequip gear slot {slotType}: bag is full ({OccupiedBagSlotCount}/{capacity}).");
+            PlayerStatusHud.Instance?.ShowToast($"Inventory Bag is full ({capacity}/{capacity})! Free a slot before unequipping.", new Color(1f, 0.35f, 0.25f));
+            return false;
+        }
         eq.Clear();
         Debug.Log($"[Inventory] Unequipped gear slot {slotType}.");
         RecomputeBonus();
@@ -480,11 +530,18 @@ public class InventoryManager : MonoBehaviour
         return false;
     }
 
-    /// <summary>Drops strictly the exact slotIndex clicked (never searches from slot 0).</summary>
+    /// <summary>
+    /// ทิ้งไอเทมจากช่องที่เลือกอย่างปลอดภัย (ห้ามทิ้งไอเทมที่กำลังสวมใส่ ตัดของ + เซฟไฟล์ก่อนเสก WorldItem และวางบนผิวพื้นจริง)
+    /// </summary>
     public bool DropItem(int slotIndex)
     {
         var s = GetSlot(slotIndex);
         if (s == null || s.IsEmpty) return false;
+        if (IsSlotEquipped(slotIndex))
+        {
+            Debug.LogWarning($"[Inventory] Cannot drop equipped item at slot {slotIndex} ({s.item.displayName}). Unequip first.");
+            return false;
+        }
         if (!s.item.droppable)
         {
             Debug.LogWarning($"[Inventory] {s.item.displayName} cannot be dropped.");
@@ -492,19 +549,42 @@ public class InventoryManager : MonoBehaviour
         }
 
         Vector3 pos = transform.position + transform.forward * 1.5f;
-        pos.y = 0.4f;
+        pos.y = SandboxWorldSpawner.SampleGroundY(pos, transform.position.y) + 0.4f;
 
         var item = s.item;
         int qty = s.quantity;
         int enh = s.enhancementLevel;
-        if (SpawnWorldItem(item, qty, pos, enh, allowedLooter: default, isPlayerDropped: true) == null)
+        int failStacks = s.enhanceFailStacks;
+        string instId = s.instanceId;
+
+        // ป้องกันการปั๊มของใน Shared Mode (Anti-Dupe Policy): ผูกสิทธิ์ไอเทมที่โยนลงพื้นให้เก็บได้เฉพาะเจ้าของเดิม (Personal-Only)
+        PlayerRef ownerRef = default;
+        if (_combat != null && _combat.IsSpawned)
         {
-            Debug.LogWarning("[Inventory] Drop failed - item kept.");
+            if (_combat.Object != null && _combat.Object.IsValid && _combat.Object.StateAuthority != PlayerRef.None)
+                ownerRef = _combat.Object.StateAuthority;
+            else if (_combat.Runner != null && _combat.Runner.IsRunning)
+                ownerRef = _combat.Runner.LocalPlayer;
+        }
+
+        ConsumeSlotAtExactIndex(slotIndex, qty);
+
+        if (SpawnWorldItem(item, qty, pos, enh, allowedLooter: ownerRef, isPlayerDropped: true) == null)
+        {
+            var rollbackSlot = GetSlot(slotIndex);
+            if (rollbackSlot != null && rollbackSlot.IsEmpty)
+            {
+                rollbackSlot.Set(item, qty, enh, instId, failStacks);
+                RecomputeBonus();
+                Changed?.Invoke();
+                PlayerSaveManager.RequestAutoSave("DropItemRollback");
+            }
+            Debug.LogWarning("[Inventory] Drop failed - item restored safely to original slot.");
             return false;
         }
 
-        Debug.Log($"[Inventory] Dropped strictly slot {slotIndex}: {qty}x {item.displayName}.");
-        ConsumeSlotAtExactIndex(slotIndex, qty);
+        PlayerStatusHud.Instance?.ShowToast($"Dropped {qty}x {item.displayName} (Personal-Only — disappears in 30s)", new Color(0.95f, 0.78f, 0.36f), 2.5f);
+        Debug.Log($"[Inventory] Dropped strictly slot {slotIndex}: {qty}x {item.displayName} (Personal-Only owner={ownerRef}).");
         return true;
     }
 
@@ -550,14 +630,14 @@ public class InventoryManager : MonoBehaviour
             return new EnhanceResult { attempted = false, message = $"Need {spec.goldCost} Gold (have {_combat.NetworkGold})." };
         }
 
-        // Validate distinct fodder slots
+        // Validate distinct fodder slots (พร้อมป้องกันการใช้อุปกรณ์ที่กำลังสวมใส่อยู่มาเป็นวัตถุดิบย่อยตีบวก)
         var uniqueFodder = new List<int>();
         if (fodderSlotIndices != null)
         {
             for (int i = 0; i < fodderSlotIndices.Count; i++)
             {
                 int idx = fodderSlotIndices[i];
-                if (idx == targetInventorySlotIndex || uniqueFodder.Contains(idx)) continue;
+                if (idx == targetInventorySlotIndex || uniqueFodder.Contains(idx) || IsSlotEquipped(idx)) continue;
                 var fs = GetSlot(idx);
                 if (EnhancementSystem.IsEligibleFodder(targetSlot.item, targetSlot.instanceId, fs, spec.minFodderTier))
                     uniqueFodder.Add(idx);
@@ -581,7 +661,11 @@ public class InventoryManager : MonoBehaviour
             if (fs != null && fs.item != null)
                 fodderItems.Add(fs.item);
         }
-        float dynamicSuccessRate = EnhancementSystem.CalculateDynamicSuccessRate(targetSlot.item, targetSlot.enhancementLevel, fodderItems);
+        float dynamicSuccessRate = EnhancementSystem.CalculateDynamicSuccessRate(
+            targetSlot.item,
+            targetSlot.enhancementLevel,
+            fodderItems,
+            targetSlot.enhanceFailStacks);
 
         // Spend Gold & Consume Exact Fodder Slots
         if (!_combat.TrySpendGold(spec.goldCost))
@@ -602,6 +686,7 @@ public class InventoryManager : MonoBehaviour
         if (success)
         {
             targetSlot.enhancementLevel++;
+            targetSlot.enhanceFailStacks = 0; // รีเซ็ตแต้ม Pity เมื่อตีบวกสำเร็จ
             EquipmentSlotType slotType = targetSlot.item.GetEquipmentSlot();
             if (_equipped.TryGetValue(slotType, out var eq) && eq.instanceId == targetSlot.instanceId)
             {
@@ -609,14 +694,20 @@ public class InventoryManager : MonoBehaviour
             }
             RecomputeBonus();
         }
+        else
+        {
+            // สะสมแต้ม Pity Failstack (+6% ต่อครั้ง) เพื่อไม่ให้ผู้เล่นเกลือถาวร
+            targetSlot.enhanceFailStacks = Mathf.Min(15, targetSlot.enhanceFailStacks + 1);
+        }
 
         Changed?.Invoke();
         PlayerSaveManager.RequestAutoSave(success ? "EnhanceSuccess" : "EnhanceFail");
 
+        int nextPityPct = Mathf.RoundToInt(EnhancementSystem.GetFailstackBonus(targetSlot.enhanceFailStacks) * 100f);
         string msg = success
             ? $"SUCCESS! {targetSlot.item.displayName} enhanced +{prevLvl} -> +{targetSlot.enhancementLevel}!"
-            : $"FAILED! Fodder & {spec.goldCost} Gold consumed ({targetSlot.item.displayName} stays +{prevLvl}).";
-        Debug.Log($"[Enhancement] {msg} (rate={dynamicSuccessRate * 100f:0}%, roll={roll:0.00})");
+            : $"FAILED! Fodder & {spec.goldCost} Gold consumed ({targetSlot.item.displayName} stays +{prevLvl}, Pity +{nextPityPct}% next try!).";
+        Debug.Log($"[Enhancement] {msg} (rate={dynamicSuccessRate * 100f:0}%, roll={roll:0.00}, failStacks={targetSlot.enhanceFailStacks})");
 
         return new EnhanceResult
         {
@@ -673,7 +764,8 @@ public class InventoryManager : MonoBehaviour
                 instanceId = s.instanceId,
                 itemId = s.item.itemId,
                 quantity = s.quantity,
-                enhancementLevel = s.enhancementLevel
+                enhancementLevel = s.enhancementLevel,
+                enhanceFailStacks = s.enhanceFailStacks
             });
         }
 
@@ -728,7 +820,13 @@ public class InventoryManager : MonoBehaviour
                 if (saved == null || saved.slotIndex < 0 || saved.slotIndex >= _slots.Count) continue;
                 var item = ItemRegistry.Get(saved.itemId);
                 if (item == null || saved.quantity <= 0) continue;
-                _slots[saved.slotIndex].Set(item, saved.quantity, saved.enhancementLevel, saved.instanceId);
+                // บีบจำนวนไอเทมและระดับตีบวก (+0..+10) ให้อยู่ในขอบเขตที่ถูกต้องเสมอ
+                int clampedQty = Mathf.Clamp(saved.quantity, 1, item.MaxStackSize);
+                int clampedEnh = item.IsEquippable
+                    ? Mathf.Clamp(saved.enhancementLevel, 0, EnhancementSystem.MaxEnhancementLevel)
+                    : 0;
+                int clampedFailStacks = item.IsEquippable ? Mathf.Clamp(saved.enhanceFailStacks, 0, 20) : 0;
+                _slots[saved.slotIndex].Set(item, clampedQty, clampedEnh, saved.instanceId, clampedFailStacks);
             }
         }
 
@@ -740,12 +838,19 @@ public class InventoryManager : MonoBehaviour
                 var slotType = (EquipmentSlotType)savedEq.slotType;
                 if (!_equipped.TryGetValue(slotType, out var eqRef)) continue;
                 var item = ItemRegistry.Get(savedEq.itemId);
-                if (item == null) continue;
+                if (item == null || !item.IsEquippable || item.GetEquipmentSlot() != slotType) continue;
+
+                int clampedEnh = Mathf.Clamp(savedEq.enhancementLevel, 0, EnhancementSystem.MaxEnhancementLevel);
+                int matchingIdx = !string.IsNullOrEmpty(savedEq.instanceId) ? FindSlotIndexByInstanceId(savedEq.instanceId) : -1;
+                if (matchingIdx >= 0 && !_slots[matchingIdx].IsEmpty && _slots[matchingIdx].item == item)
+                {
+                    clampedEnh = _slots[matchingIdx].enhancementLevel;
+                }
 
                 eqRef.slotType = slotType;
                 eqRef.instanceId = savedEq.instanceId;
                 eqRef.itemId = savedEq.itemId;
-                eqRef.enhancementLevel = savedEq.enhancementLevel;
+                eqRef.enhancementLevel = clampedEnh;
             }
         }
 

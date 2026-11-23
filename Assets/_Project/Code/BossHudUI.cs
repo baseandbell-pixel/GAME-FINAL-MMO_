@@ -382,12 +382,12 @@ public class BossHudUI : MonoBehaviour
                 return arenaBoss;
         }
 
-        // 2. ค้นหาบอสที่ยังมีชีวิตอยู่และอยู่ใกล้ผู้เล่นที่สุดภายในระยะ 26 เมตร (รองรับ Zone_BossOgre หลายจุด!)
+        // 2. ค้นหาบอสที่ยังมีชีวิตอยู่และอยู่ใกล้ผู้เล่นที่สุดภายในระยะ 65 เมตร (ครอบคลุมลานบอสขนาดใหญ่เช่น Corrupted Altar บน FinalTestv1)
         Vector3 playerPos = _localPlayer.transform.position;
         playerPos.y = 0f;
 
         EnemyNPC nearestBoss = null;
-        float nearestDist = 26f;
+        float nearestDist = 65f;
         for (int i = 0; i < EnemyNPC.All.Count; i++)
         {
             var e = EnemyNPC.All[i];

@@ -15,8 +15,8 @@ MonoBehaviour:
   monsterName: Orc
   archetype: 0
   isBoss: 0
-  healthMultiplier: 1.35
-  damageMultiplier: 1.38
+  healthMultiplier: 1.15
+  damageMultiplier: 1.1
   defenseBonus: 1
   attackRange: 2.25
   attackImpactDelay: 0.42
@@ -24,9 +24,9 @@ MonoBehaviour:
   lootRollMode: 0
   maxDropsPerKill: 0
   lootDrops: []
-  goldDropChancePercent: 0
-  minGold: 5
-  maxGold: 15
+  goldDropChancePercent: 40
+  minGold: 32
+  maxGold: 55
   canFlinch: 1
   hitReactCooldown: 0.25
   attackVariantCount: 2

@@ -24,9 +24,9 @@ MonoBehaviour:
   lootRollMode: 0
   maxDropsPerKill: 0
   lootDrops: []
-  goldDropChancePercent: 0
-  minGold: 5
-  maxGold: 15
+  goldDropChancePercent: 35
+  minGold: 8
+  maxGold: 16
   canFlinch: 1
   hitReactCooldown: 0.25
   attackVariantCount: 2

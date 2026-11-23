@@ -14,8 +14,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: stamina_elixir
   displayName: Stamina Elixir
-  description: Instantly restores 40 Stamina for sustained combos, sprinting, and
-    dodging.
+  description: Instantly restores +60 Stamina for emergency dodges, blocks, and heavy
+    finishers.
   obtainAndUseGuide: Drops from Enemies & Treasure Chests. Use from Inventory or
     Hotbar [2-7] to recover 40 Stamina immediately.
   type: 0
@@ -27,7 +27,7 @@ MonoBehaviour:
   stackable: 1
   maxStack: 10
   healAmount: 0
-  staminaRestoreAmount: 40
+  staminaRestoreAmount: 60
   attackBuffBonus: 0
   attackBuffDuration: 0
   damageBonus: 0

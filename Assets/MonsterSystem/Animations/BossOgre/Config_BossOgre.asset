@@ -15,8 +15,8 @@ MonoBehaviour:
   monsterName: BossOgre
   archetype: 2
   isBoss: 1
-  healthMultiplier: 1
-  damageMultiplier: 1.15
+  healthMultiplier: 1.1
+  damageMultiplier: 1.1
   defenseBonus: 3
   attackRange: 2.85
   attackImpactDelay: 0.46
@@ -24,9 +24,9 @@ MonoBehaviour:
   lootRollMode: 0
   maxDropsPerKill: 0
   lootDrops: []
-  goldDropChancePercent: 0
-  minGold: 5
-  maxGold: 15
+  goldDropChancePercent: 100
+  minGold: 350
+  maxGold: 500
   canFlinch: 0
   hitReactCooldown: 0.25
   attackVariantCount: 3

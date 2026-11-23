@@ -12,8 +12,31 @@ using UnityEngine.InputSystem;
 ///     แล้วสร้างไอเทมตกแบบ Client-Local (LocalPersonalLoot) เฉพาะหน้าจอของคนเปิดเท่านั้น
 /// </summary>
 [DisallowMultipleComponent]
-public class LootChest : MonoBehaviour
+public class LootChest : MonoBehaviour, IWorldInteractable
 {
+    public InteractionChannel Channel => InteractionChannel.PickupOrChest;
+    public int PriorityBias => 1;
+    public float InteractionRange => interactRadius;
+    public Vector3 InteractionWorldPosition => transform.position;
+    public bool CanInteractNow(PlayerCombat player) => !IsOpened && player != null && player.IsSpawned && !player.IsDead;
+    public void ExecuteInteraction(PlayerCombat player) => OpenChest(player);
+
+    public string GetPromptLabel(PlayerCombat player)
+    {
+        bool eligible = IsLocalPlayerEligible(out ParticipantContribution contrib);
+        if (!eligible) return LockedWarningMessage;
+        string rankTag = contrib.isTopDps ? "TOP DPS" : $"{contrib.damageShare * 100f:0}% DMG";
+        return isBossChest
+            ? $"Open Boss Reward Chest ({rankTag})"
+            : $"Open Camp Reward Chest ({rankTag})";
+    }
+
+    public Color GetPromptAccentColor(PlayerCombat player)
+    {
+        return IsLocalPlayerEligible(out _)
+            ? new Color(1f, 0.85f, 0.25f, 1f)
+            : new Color(1f, 0.36f, 0.30f, 1f);
+    }
     /// <summary>
     /// โครงสร้างเก็บสัดส่วนการทำดาเมจของผู้เล่นที่มีสิทธิ์เปิดกล่องใบนี้
     /// </summary>
@@ -91,7 +114,9 @@ public class LootChest : MonoBehaviour
         }
 
         var go = new GameObject(isBossChest ? $"BossTreasureChest_{campId}" : $"CampTreasureChest_{campId}");
-        go.transform.position = new Vector3(position.x, 0f, position.z);
+        // วางกล่องสมบัติแนบพื้นผิวจริงของแผนที่ (Terrain / Mesh Collider) เพื่อไม่ให้จมใต้เนินหรือลอยกลางอากาศ
+        float groundY = SandboxWorldSpawner.SampleGroundY(position, position.y);
+        go.transform.position = new Vector3(position.x, groundY, position.z);
         if (isBossChest) go.transform.localScale = new Vector3(1.35f, 1.35f, 1.35f);
 
         var chest = go.AddComponent<LootChest>();
@@ -192,11 +217,13 @@ public class LootChest : MonoBehaviour
     private void OnEnable()
     {
         if (!All.Contains(this)) All.Add(this);
+        InteractionManager.Register(this);
     }
 
     private void OnDisable()
     {
         All.Remove(this);
+        InteractionManager.Unregister(this);
     }
 
     private void Awake()
@@ -336,20 +363,7 @@ public class LootChest : MonoBehaviour
         {
             _worldLabel.transform.rotation = cam.transform.rotation;
         }
-
-        if (IsOpened) return;
-
-        var player = PlayerCombat.Local;
-        if (player == null || !player.IsSpawned || player.IsDead || GameplayInput.IsBlocked) return;
-
-        if (IsPlayerInRange(player))
-        {
-            var kb = Keyboard.current;
-            if (kb != null && kb.eKey.wasPressedThisFrame)
-            {
-                OpenChest(player);
-            }
-        }
+        // การกดเปิดหีบสมบัติด้วยปุ่ม [E] ถูกรวมศูนย์ไว้ที่ InteractionManager แล้ว (ทำงานทีละ 1 เป้าหมายที่ใกล้ที่สุด)
     }
 
     public bool IsPlayerInRange(PlayerCombat player)
@@ -468,59 +482,16 @@ public class LootChest : MonoBehaviour
             Destroy(gameObject);
     }
 
+    // ป้ายแจ้งเตือน [E] ย้ายไปวาดรวมบน uGUI Canvas กลางที่ InteractionPromptUI แล้ว (ลดการใช้ OnGUI เก่าทั้งหมด)
     private void OnGUI()
     {
         if (Event.current.type != EventType.Repaint) return;
 
-        var player = PlayerCombat.Local;
-        if (!IsOpened && player != null && player.IsSpawned && !player.IsDead && IsPlayerInRange(player))
-        {
-            bool eligible = IsLocalPlayerEligible(out ParticipantContribution contrib);
-            var rect = new Rect(Screen.width * 0.5f - 215f, Screen.height * 0.67f, 430f, 34f);
-            var prev = GUI.color;
-            GUI.color = eligible ? new Color(0.06f, 0.05f, 0.02f, 0.86f) : new Color(0.14f, 0.02f, 0.02f, 0.90f);
-            GUI.DrawTexture(rect, Texture2D.whiteTexture);
-            GUI.color = eligible ? new Color(1f, 0.85f, 0.25f, 1f) : new Color(1f, 0.36f, 0.30f, 1f);
-            GUIStyle style = new GUIStyle(GUI.skin.label)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = 15,
-                fontStyle = FontStyle.Bold
-            };
-
-            string prompt;
-            if (!eligible)
-            {
-                prompt = LockedWarningMessage;
-            }
-            else
-            {
-                string rankTag = contrib.isTopDps ? "TOP DPS ★" : $"{contrib.damageShare * 100f:0}% DMG";
-                prompt = isBossChest
-                    ? $"[E] Open Boss Reward Chest ({rankTag})"
-                    : $"[E] Open Camp Reward Chest ({rankTag})";
-            }
-
-            GUI.Label(rect, prompt, style);
-            GUI.color = prev;
-        }
-
         if (Time.unscaledTime < _bannerUntil && !string.IsNullOrEmpty(_bannerText))
         {
-            float alpha = Mathf.Clamp01(_bannerUntil - Time.unscaledTime);
-            var rect = new Rect(Screen.width * 0.5f - 300f, 82f, 600f, 38f);
-            var prev = GUI.color;
-            GUI.color = new Color(0.05f, 0.05f, 0.08f, 0.88f * alpha);
-            GUI.DrawTexture(rect, Texture2D.whiteTexture);
-            GUI.color = new Color(_bannerColor.r, _bannerColor.g, _bannerColor.b, alpha);
-            GUIStyle style = new GUIStyle(GUI.skin.label)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = 16,
-                fontStyle = FontStyle.Bold
-            };
-            GUI.Label(rect, _bannerText, style);
-            GUI.color = prev;
+            // แปลงแบนเนอร์เก่าให้ไปโชว์ผ่าน PlayerStatusHud (uGUI) เพื่อความคมชัดบนจอ 2K/4K
+            PlayerStatusHud.Instance?.ShowToast(_bannerText, _bannerColor, Mathf.Clamp(_bannerUntil - Time.unscaledTime, 1.5f, 4f));
+            _bannerUntil = -1f;
         }
     }
 }

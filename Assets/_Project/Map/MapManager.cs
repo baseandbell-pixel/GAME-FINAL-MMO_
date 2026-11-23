@@ -14,7 +14,9 @@ public enum MarkerKind
     EnemyCamp,
     LootChest,
     Waypoint,
-    SafeZone
+    SafeZone,
+    WaystoneLocked,
+    WaystoneUnlocked
 }
 
 public struct MapMarker
@@ -46,7 +48,8 @@ public class MapManager : MonoBehaviour
     [Header("Waypoint")]
     [SerializeField] private float waypointAutoClearRadius = 2.5f;
 
-    public const float MinWorldZoom = 0.40f;
+    // รองรับการซูมละเอียดบนแผนที่ขนาดใหญ่ (FinalTestv1 3600x3600m) ตั้งแต่ 0.08x จนถึง 2.40x
+    public const float MinWorldZoom = 0.08f;
     public const float MaxWorldZoom = 2.40f;
 
     public bool IsWorldMapOpen { get; private set; }
@@ -90,7 +93,8 @@ public class MapManager : MonoBehaviour
         _cam.clearFlags = CameraClearFlags.SolidColor;
         _cam.backgroundColor = backgroundColor;
         _cam.nearClipPlane = 1f;
-        _cam.farClipPlane = cameraHeight + 100f;
+        // ขยายระยะ farClipPlane ให้มองเห็นภูมิประเทศที่มีความสูงต่ำทั่วแผนที่ FinalTestv1 โดยไม่ถูกตัดขาด
+        _cam.farClipPlane = cameraHeight + 600f;
         _cam.depth = -50f;
         _cam.targetTexture = _texture;
         _cam.allowHDR = false;
@@ -157,7 +161,9 @@ public class MapManager : MonoBehaviour
     /// <summary>Pins a world-space waypoint coordinate on the map and displays a 3D beacon.</summary>
     public void SetWaypoint(Vector3 worldPos)
     {
-        ActiveWaypointPosition = new Vector3(worldPos.x, 0f, worldPos.z);
+        // ยิง Raycast แนบเสา Waypoint 3D ลงพื้นผิวจริงของแผนที่ (ไม่จมใต้เนินหรือลอยกลางอากาศ)
+        float groundY = SandboxWorldSpawner.SampleGroundY(worldPos, worldPos.y);
+        ActiveWaypointPosition = new Vector3(worldPos.x, groundY, worldPos.z);
         HasActiveWaypoint = true;
         UpdateWorldWaypointBeacon(true);
         Debug.Log($"[MapManager] Waypoint pinned at {ActiveWaypointPosition} (distance={GetLocalPlayerDistanceToWaypoint():0.0}m).");
@@ -296,9 +302,11 @@ public class MapManager : MonoBehaviour
     /// </summary>
     public void PanWorldMap(Vector2 deltaWorldXZ)
     {
+        // ปรับขอบเขตการลากแผนที่ตามขนาด worldMapRadius จริง (รองรับแผนที่ขนาดใหญ่ FinalTestv1)
+        float panLimit = Mathf.Max(110f, worldMapRadius);
         Vector2 next = WorldMapPanOffset + deltaWorldXZ;
-        next.x = Mathf.Clamp(next.x, -110f, 110f);
-        next.y = Mathf.Clamp(next.y, -110f, 110f);
+        next.x = Mathf.Clamp(next.x, -panLimit, panLimit);
+        next.y = Mathf.Clamp(next.y, -panLimit, panLimit);
         WorldMapPanOffset = next;
         UpdateFocus();
         _nextRender = 0f;
@@ -468,6 +476,20 @@ public class MapManager : MonoBehaviour
                 position = w.transform.position,
                 kind = MarkerKind.Loot,
                 label = w.Data != null ? w.Data.displayName : "Loot"
+            });
+        }
+
+        // แสดงหมุดหินเทเลพอร์ต (Teleport Waystones) ทั้งที่ปลดล็อกแล้วและยังไม่ปลดล็อกบนแผนที่
+        for (int i = 0; i < TeleportWaystone.All.Count; i++)
+        {
+            var ws = TeleportWaystone.All[i];
+            if (ws == null || !ws.isActiveAndEnabled) continue;
+            bool unlocked = ws.IsUnlocked;
+            into.Add(new MapMarker
+            {
+                position = ws.transform.position,
+                kind = unlocked ? MarkerKind.WaystoneUnlocked : MarkerKind.WaystoneLocked,
+                label = unlocked ? $"{ws.DisplayName} [Warp]" : $"{ws.DisplayName} (Locked)"
             });
         }
 

@@ -15,18 +15,18 @@ MonoBehaviour:
   monsterName: Goblin
   archetype: 1
   isBoss: 0
-  healthMultiplier: 1.05
-  damageMultiplier: 1.15
-  defenseBonus: 1
+  healthMultiplier: 0.92
+  damageMultiplier: 1.05
+  defenseBonus: 0
   attackRange: 2.05
   attackImpactDelay: 0.4
   counterImpactDelay: 0.36
   lootRollMode: 0
   maxDropsPerKill: 0
   lootDrops: []
-  goldDropChancePercent: 0
-  minGold: 5
-  maxGold: 15
+  goldDropChancePercent: 35
+  minGold: 14
+  maxGold: 26
   canFlinch: 1
   hitReactCooldown: 0.25
   attackVariantCount: 3

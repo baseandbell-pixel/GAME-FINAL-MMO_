@@ -59,6 +59,12 @@ public class PlayerCapsule : NetworkBehaviour
     public bool rotateTowardsMovement = true;
     [Tooltip("When true and an action camera (MovementReference) is active, the character faces the camera yaw while moving.")]
     public bool strafeInActionCamera = true;
+    // โหมดควบคุมสไตล์ Souls-like / Action RPG:
+    // - ขณะเดินอิสระ (ไม่ล็อกเป้าและไม่ตั้งการ์ด) ตัวละครจะหันหน้าไปตามทิศทางการเดินจริง (กด S จะหันหลังวิ่งกลับมา ไม่เดินถอยหลังแข็งๆ)
+    // - ขณะล็อกเป้า (Target Lock) หรือตั้งการ์ด (กด F) จะล็อกหน้าหันเข้าหาศัตรู/กล้องและเดิน Strafe โดยลดความเร็วตอนถอยหลังให้สมจริง
+    [Header("Souls-Like Free-Look Rotation & Strafe (หันตามทิศเดินอิสระ + ลดความเร็วถอยหลังตอนล็อกเป้า)")]
+    public bool freeLookRotateToMove = true;
+    [Range(0.45f, 1.0f)] public float backwardSpeedMultiplier = 0.68f;
 
     // ---- ข้อมูลซิงก์ผ่าน Photon Fusion Shared Mode ----
     [Networked] public int AvatarIndex { get; set; }
@@ -111,6 +117,7 @@ public class PlayerCapsule : NetworkBehaviour
     private Rigidbody rb;
     private CharacterController _cc;
     private CapsuleCollider collider;
+    private PlayerInput _playerInput;
     private PlayerCombat _combat;
     private PlayerAnimationDriver _animationDriver;
     private NetworkTransform _networkTransform;
@@ -148,8 +155,13 @@ public class PlayerCapsule : NetworkBehaviour
         rb = GetComponent<Rigidbody>();
         _cc = GetComponent<CharacterController>();
         collider = GetComponent<CapsuleCollider>();
+        _playerInput = GetComponent<PlayerInput>();
         _combat = GetComponent<PlayerCombat>();
         _networkTransform = GetComponent<NetworkTransform>();
+
+        // ปิด PlayerInput ชั่วคราวก่อน Spawned() เพื่อป้องกันตัวละครของเพื่อนใน Co-op แย่งรับอินพุตจากคีย์บอร์ด/เมาส์เครื่องนี้
+        if (_playerInput != null)
+            _playerInput.enabled = false;
 
         if (characterVisual == null)
         {
@@ -186,6 +198,10 @@ public class PlayerCapsule : NetworkBehaviour
     public override void Spawned()
     {
         isOwner = IsLocallyControlled;
+
+        // เปิดใช้งาน PlayerInput เฉพาะตัวละครของผู้เล่นเครื่องนี้เท่านั้น (ป้องกัน Co-op แย่ง Input กัน)
+        if (_playerInput != null)
+            _playerInput.enabled = isOwner;
 
         if (isOwner)
         {
@@ -458,10 +474,12 @@ public class PlayerCapsule : NetworkBehaviour
         }
 
         // ความเร็วสไตล์ Where Winds Meet: ย่อง (2.2) / เดินสำรวจ (3.8) / วิ่งเต็มสปีด (~5.9)
+        // และลดความเร็วตอนเดินถอยหลังเฉพาะโหมด Strafe (ล็อกเป้าหรือตั้งการ์ด) เพื่อไม่ให้วิ่งถอยหลังเร็วผิดธรรมชาติ
         float basePlusGearSpeed = Mathf.Min(TotalMoveSpeed, 5.2f);
         float sprintFactor = Mathf.Clamp(runSpeed, 1.35f, 1.75f);
         float stanceMult = _crouchToggle ? (walkSpeed / Mathf.Max(0.1f, moveSpeed)) : (effectiveSprint ? sprintFactor : 1f);
-        float speed = basePlusGearSpeed * stanceMult * Mathf.Max(0f, SpeedMultiplier);
+        float backMult = ComputeBackwardSpeedFactor(wanted);
+        float speed = basePlusGearSpeed * stanceMult * backMult * Mathf.Max(0f, SpeedMultiplier);
 
         Vector3 wantedHorizontal = wanted * speed;
         float accelRate = isMoving ? acceleration : deceleration;
@@ -500,7 +518,8 @@ public class PlayerCapsule : NetworkBehaviour
         float basePlusGearSpeed = Mathf.Min(TotalMoveSpeed, 5.2f);
         float sprintFactor = Mathf.Clamp(runSpeed, 1.35f, 1.75f);
         float stanceMult = _crouchToggle ? (walkSpeed / Mathf.Max(0.1f, moveSpeed)) : (effectiveSprint ? sprintFactor : 1f);
-        float speed = basePlusGearSpeed * stanceMult * Mathf.Max(0f, SpeedMultiplier);
+        float backMult = ComputeBackwardSpeedFactor(wanted);
+        float speed = basePlusGearSpeed * stanceMult * backMult * Mathf.Max(0f, SpeedMultiplier);
 
         Vector3 wantedVelocity = wanted * speed;
         Vector3 velocity = rb.linearVelocity;
@@ -513,10 +532,40 @@ public class PlayerCapsule : NetworkBehaviour
         UpdateFacingAndNetworkParams(wanted, effectiveSprint, Time.fixedDeltaTime);
     }
 
+    /// <summary>
+    /// ตรวจสอบว่าตัวละครควรอยู่ในโหมดหันหน้าสู้ (Strafe) หรือโหมดหันตัวตามทิศทางเดินอิสระ (Souls-Like Free-Look)
+    /// </summary>
+    private bool IsStrafeFacingActive()
+    {
+        if (FacingTarget != null) return true;
+        if (_combat != null && _combat.IsBlocking) return true;
+        return !freeLookRotateToMove && MovementReference != null && strafeInActionCamera;
+    }
+
+    /// <summary>
+    /// ลดความเร็วขณะเดินถอยหลังในโหมด Strafe (ล็อกเป้าหรือตั้งการ์ด) เพื่อให้จังหวะการต่อสู้สมจริงสไตล์ Souls-Like
+    /// </summary>
+    private float ComputeBackwardSpeedFactor(Vector3 wanted)
+    {
+        if (wanted.sqrMagnitude <= 0.0001f || !IsStrafeFacingActive()) return 1f;
+        Vector3 facingForward = FacingTarget != null
+            ? (FacingTarget.position - transform.position)
+            : (MovementReference != null ? Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f) * Vector3.forward : transform.forward);
+        facingForward.y = 0f;
+        if (facingForward.sqrMagnitude <= 0.0001f) return 1f;
+
+        float dot = Vector3.Dot(facingForward.normalized, wanted.normalized);
+        if (dot >= -0.15f) return 1f;
+        float t = Mathf.InverseLerp(-0.15f, -0.85f, dot);
+        return Mathf.Lerp(1f, Mathf.Clamp(backwardSpeedMultiplier, 0.45f, 1f), t);
+    }
+
     private void UpdateFacingAndNetworkParams(Vector3 wanted, bool effectiveSprint, float dt)
     {
         Quaternion targetRotation = transform.rotation;
         bool rotateApplied = false;
+        bool blocking = _combat != null && _combat.IsBlocking;
+        bool strafeMode = IsStrafeFacingActive();
 
         if (FacingTarget != null && !MovementLocked)
         {
@@ -528,13 +577,20 @@ public class PlayerCapsule : NetworkBehaviour
                 rotateApplied = true;
             }
         }
-        else if (MovementReference != null && strafeInActionCamera && wanted.sqrMagnitude > 0.0001f)
+        else if (MovementReference != null && blocking && !MovementLocked)
+        {
+            // ขณะตั้งการ์ด (กด F) ให้หันหน้าเข้าหาทิศกล้องเสมอเพื่อให้ยกโล่/ดาบรับการโจมตีได้แม่นยำ
+            targetRotation = Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f);
+            rotateApplied = true;
+        }
+        else if (MovementReference != null && strafeInActionCamera && !freeLookRotateToMove && wanted.sqrMagnitude > 0.0001f)
         {
             targetRotation = Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f);
             rotateApplied = true;
         }
-        else if (rotateTowardsMovement && wanted.sqrMagnitude > 0.0001f)
+        else if ((rotateTowardsMovement || freeLookRotateToMove) && wanted.sqrMagnitude > 0.0001f)
         {
+            // โหมดสำรวจอิสระสไตล์ Souls-Like: หันตัวละครไปตามทิศทางปุ่ม WASD จริง (กด S จะหมุนตัววิ่งกลับมาอย่างเป็นธรรมชาติ)
             targetRotation = Quaternion.LookRotation(wanted, Vector3.up);
             rotateApplied = true;
         }
@@ -555,9 +611,20 @@ public class PlayerCapsule : NetworkBehaviour
 
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
         {
-            Vector3 refSpace = (MovementReference != null && strafeInActionCamera && FacingTarget == null)
-                ? Quaternion.Inverse(Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f)) * wanted
-                : Quaternion.Inverse(transform.rotation) * wanted;
+            Vector3 refSpace;
+            if (!strafeMode && wanted.sqrMagnitude > 0.0001f)
+            {
+                // ในโหมด Free-Look ตัวละครหมุนตามทิศทางเดินแล้ว จึงส่งค่าเดินไปข้างหน้า (0, magnitude) ให้ Blend Tree เล่นท่าวิ่งไปข้างหน้าอย่างลื่นไหล
+                refSpace = new Vector3(0f, 0f, Mathf.Clamp01(wanted.magnitude));
+            }
+            else if (MovementReference != null && strafeMode && FacingTarget == null)
+            {
+                refSpace = Quaternion.Inverse(Quaternion.Euler(0f, MovementReference.eulerAngles.y, 0f)) * wanted;
+            }
+            else
+            {
+                refSpace = Quaternion.Inverse(transform.rotation) * wanted;
+            }
             NetworkMove = new Vector2(refSpace.x, refSpace.z);
             NetworkSprinting = effectiveSprint;
             NetworkGrounded = _localGrounded;

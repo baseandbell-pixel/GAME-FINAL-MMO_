@@ -238,7 +238,17 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
     public Transform LockPoint => _lockPoint != null ? _lockPoint : transform;
     public bool IsLockable => IsAlive;
-    public string LockName => IsBoss ? $"[Lv.{ScaledLevel} BOSS] Sovereign Golem" : $"[Lv.{ScaledLevel}] {name}";
+    public string LockName
+    {
+        get
+        {
+            if (!IsBoss) return $"[Lv.{ScaledLevel}] {name}";
+            string cleanBoss = string.IsNullOrWhiteSpace(name) || name == "Boss_SovereignGolem"
+                ? "Sovereign Golem"
+                : name.Replace("(Clone)", "").Replace("Enemy_", "").Replace("Boss_", "").Replace("_", " ").Trim();
+            return $"[Lv.{ScaledLevel} BOSS] {cleanBoss}";
+        }
+    }
 
     // ---- ตัวแปรภายใน (Private State) ----
     private Transform _lockPoint;
@@ -279,6 +289,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     private float _nextAttackTime;
     private float _stateTimer;
     private float _staggerEndTime;
+    // ป้องกันการสแปม RPC_ApplyParryStagger รัวๆ เพื่อขังบอส/มอนสเตอร์ให้อยู่ในสถานะ Stagger ตลอดเวลา
+    private float _nextParryStaggerAllowedTime;
     private float _patrolMoveElapsed;
     private float _deathTime;
     private bool _hasPatrolPoint;
@@ -561,44 +573,32 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
     /// <summary>
     /// คำนวณค่าพลังฐาน (Base Stats 1.0x) ของบอสตามเลเวลโซน Endgame (Lv.20–30)
-    /// สูตรที่ Lv.25: MaxHP = 2,200, ATK = 50, DEF = 15, EXP = 1,200 (และสเกล +1.0x ต่อผู้โจมตีที่ตีโดนจริงเพิ่มแต่ละคน)
+    /// ปรับสมดุลใหม่: Lv.22 = HP 2,160 / ATK 52, Lv.25 = HP 2,700 / ATK 58, DEF 14, EXP 1,600 (แรงและท้าทายกว่า Camp 6 Golem เสมอ)
     /// </summary>
     public static void ComputeBossBaseStats(int zoneLevel, out int baseHp, out int baseAtk, out int baseDef, out int expReward)
     {
         int lvl = Mathf.Clamp(zoneLevel, 20, PlayerCombat.MaxLevel);
-        int over15 = Mathf.Max(0, lvl - 15);
-        baseHp = 1400 + over15 * 80;
-        baseAtk = 40 + over15 * 1;
-        baseDef = 10 + (over15 / 2);
-        expReward = 700 + over15 * 50;
+        int over20 = Mathf.Max(0, lvl - 20);
+        baseHp = 1800 + over20 * 180;
+        baseAtk = 48 + over20 * 2;
+        baseDef = 12 + (over20 / 2);
+        expReward = 1100 + over20 * 100;
     }
 
     /// <summary>
-    /// คำนวณค่าพลังของมอนสเตอร์ทั่วไปแบบ 3-Tier Progression (Lv.1–30):
-    ///   - Tier 1 Starter Zone (Lv.1–10, Camps 1–2): HP 80..170, ATK 10..19, DEF 0..3 -> ผู้เล่นใหม่ Lv.1 ฟันตายใน ~4–5 ฮิต
-    ///   - Tier 2 Mid-Field Frontier (Lv.11–22, Camps 3–4): HP 320..540 (~2.5x–3.0x ของ Starter), ATK 24..46, DEF 6..11 -> ป้องกัน One-Shot และบังคับใช้ Combo Finisher / Parry
+    /// คำนวณค่าพลังมอนสเตอร์ทั่วไปด้วยเส้นโค้งเรียบเนียนเดียวตลอด Lv.1–30 (ตัดกำแพงกระโดด Lv.10->11 ทิ้ง):
+    ///   - Lv.1: HP 75, ATK 10, DEF 0, EXP 50 -> ฟันตายใน ~4–5 ฮิต
+    ///   - Lv.10: HP 277, ATK 23, DEF 4, EXP 212 -> ฟันตายใน ~8–9 ฮิต
+    ///   - Lv.20: HP 597, ATK 38, DEF 9, EXP 392 -> แข็งแกร่งก่อนเจอบอสแต่ไม่ตีแรงกว่าบอส
     /// </summary>
     public static void ComputeNormalEnemyBaseStats(int zoneLevel, out int baseHp, out int baseAtk, out int baseDef, out int expReward)
     {
         int lvl = Mathf.Clamp(zoneLevel, 1, PlayerCombat.MaxLevel);
-        if (lvl <= 10)
-        {
-            // Tier 1: Starter Zone (Camps 1 & 2 สำหรับ Lv.1–10)
-            int step = lvl - 1;
-            baseHp = 80 + step * 10;
-            baseAtk = 10 + step * 1;
-            baseDef = step / 3;
-            expReward = 55 + step * 14;
-        }
-        else
-        {
-            // Tier 2: Mid-Field Frontier (Camps 3 & 4 สำหรับ Lv.11–22 — HP สูงกว่าโซนเริ่มต้น ~2.5x–3.0x)
-            int step = lvl - 11;
-            baseHp = 320 + step * 20;
-            baseAtk = 24 + step * 2;
-            baseDef = 6 + (step / 2);
-            expReward = 175 + step * 22;
-        }
+        int step = lvl - 1;
+        baseHp = 75 + step * 18 + (step * step) / 2;
+        baseAtk = 10 + Mathf.RoundToInt(step * 1.45f);
+        baseDef = step / 2;
+        expReward = 50 + step * 18;
     }
 
     /// <summary>
@@ -710,6 +710,44 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     /// <summary>
+    /// คืนค่าจุดศูนย์กลางและรัศมีของลานบอส (รองรับทั้ง SandboxWorldSpawner เดิม และ MonsterSpawnZone บนแผนที่ใหม่ FinalTestv1)
+    /// </summary>
+    protected void ResolveBossArenaBounds(out Vector3 arenaCenter, out float arenaRadius)
+    {
+        if (SandboxWorldSpawner.Instance != null)
+        {
+            arenaCenter = SandboxWorldSpawner.Instance.BossArenaCenter;
+            arenaRadius = SandboxWorldSpawner.Instance.BossArenaProximityRadius;
+            return;
+        }
+
+        // ค้นหา MonsterSpawnZone ที่เป็นโซนบอสใกล้ตัวบอสที่สุด (เพื่อรองรับลานบอสขนาดใหญ่เช่น Corrupted Altar รัศมี 65m)
+        MonsterSpawnZone bestZone = null;
+        float bestDist = float.MaxValue;
+        for (int i = 0; i < MonsterSpawnZone.All.Count; i++)
+        {
+            MonsterSpawnZone z = MonsterSpawnZone.All[i];
+            if (z == null || !z.isActiveAndEnabled || !z.IsBossZone) continue;
+            float d = PlanarDistance(HomePosition, z.transform.position);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                bestZone = z;
+            }
+        }
+
+        if (bestZone != null && bestDist <= Mathf.Max(80f, bestZone.TerritoryRadius + 25f))
+        {
+            arenaCenter = bestZone.transform.position;
+            arenaRadius = Mathf.Max(24f, bestZone.TerritoryRadius);
+            return;
+        }
+
+        arenaCenter = HomePosition;
+        arenaRadius = 65f;
+    }
+
+    /// <summary>
     /// ตรวจสอบว่าผู้เล่นที่ระบุยังมีชีวิตและอยู่ในระยะการต่อสู้ของลานบอสหรือไม่
     /// </summary>
     private bool IsPlayerActiveBossCombatant(PlayerRef pRef, out PlayerCombat resolvedPlayer)
@@ -725,12 +763,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         if (p == null || !p.IsSpawned || p.IsDead) return false;
         if (SafeZone.IsPlayerInAnySafeZone(p)) return false;
 
-        Vector3 arenaCenter = SandboxWorldSpawner.Instance != null
-            ? SandboxWorldSpawner.Instance.BossArenaCenter
-            : HomePosition;
-        float arenaRadius = SandboxWorldSpawner.Instance != null
-            ? SandboxWorldSpawner.Instance.BossArenaProximityRadius
-            : 18f;
+        ResolveBossArenaBounds(out Vector3 arenaCenter, out float arenaRadius);
         float combatLimit = Mathf.Max(leashRadius, arenaRadius + 4.0f);
 
         if (PlanarDistance(p.transform.position, arenaCenter) > combatLimit)
@@ -803,12 +836,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         // กรณียังไม่มีผู้ทำดาเมจเลย (บอสไล่ตามจากการมองเห็นก่อนโดนตี) ให้ตรวจผู้เล่นที่ยังมีชีวิตในลานบอส
         if (_uniqueDamageDealers.Count == 0)
         {
-            Vector3 arenaCenter = SandboxWorldSpawner.Instance != null
-                ? SandboxWorldSpawner.Instance.BossArenaCenter
-                : HomePosition;
-            float arenaRadius = SandboxWorldSpawner.Instance != null
-                ? SandboxWorldSpawner.Instance.BossArenaProximityRadius
-                : 18f;
+            ResolveBossArenaBounds(out Vector3 arenaCenter, out float arenaRadius);
             float nearestDist = float.MaxValue;
             for (int i = 0; i < PlayerCombat.All.Count; i++)
             {
@@ -939,12 +967,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     /// </summary>
     public int CountLivingPlayersInBossZone()
     {
-        Vector3 arenaCenter = SandboxWorldSpawner.Instance != null
-            ? SandboxWorldSpawner.Instance.BossArenaCenter
-            : HomePosition;
-        float arenaRadius = SandboxWorldSpawner.Instance != null
-            ? SandboxWorldSpawner.Instance.BossArenaProximityRadius
-            : 18f;
+        ResolveBossArenaBounds(out Vector3 arenaCenter, out float arenaRadius);
 
         int count = 0;
         for (int i = 0; i < PlayerCombat.All.Count; i++)
@@ -1811,13 +1834,18 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_JoinCampAggro(NetworkId targetId)
+    private void RPC_JoinCampAggro(NetworkId targetId, RpcInfo info = default)
     {
         if (!IsSpawned || !Object.HasStateAuthority || !IsAlive || CampId <= 0) return;
         if (State == NpcState.Returning || State == NpcState.Dead) return;
 
         PlayerCombat target = FindPlayerByNetworkId(targetId);
         if (target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target)) return;
+
+        // ตรวจสอบระยะห่างของเป้าหมายเทียบกับอาณาเขตแคมป์ (ป้องกันการยิง RPC_JoinCampAggro ปลอมจากระยะไกลทั่วแมป)
+        float maxAggroPullDist = Mathf.Max(campAllyAlertRadius, leashRadius) + aggroRadius;
+        if (PlanarDistance(HomePosition, target.transform.position) > maxAggroPullDist)
+            return;
 
         SetTarget(target);
         if (State == NpcState.Idle || State == NpcState.Patrol)
@@ -2140,23 +2168,48 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     // ------------------------------------------------------------------ ระบบรับดาเมจและบันทึกสัดส่วนดาเมจรายบุคคล
 
     /// <summary>
-    /// บันทึกดาเมจสะสมของผู้เล่นแต่ละคนลงใน _damageDealtMap และรายงานต่อไปยังตารางดาเมจสะสมประจำแคมป์ (SandboxWorldSpawner)
+    /// บันทึกดาเมจสะสมของผู้เล่นแต่ละคนลงใน _damageDealtMap, รายงานต่อไปยังตารางดาเมจประจำแคมป์,
+    /// และซิงก์สำเนาตารางดาเมจข้ามเครื่อง (Host-Migration Safe) เพื่อให้ MasterClient คนใหม่มีข้อมูลครบแม้ Host หลุดกลางไฟต์
     /// </summary>
     public void RecordPlayerDamage(PlayerRef player, float amount)
     {
         if (player == PlayerRef.None || amount <= 0f) return;
-        if (_damageDealtMap.TryGetValue(player, out float current))
-            _damageDealtMap[player] = current + amount;
-        else
-            _damageDealtMap[player] = amount;
+        float updatedTotal = _damageDealtMap.TryGetValue(player, out float current)
+            ? current + amount
+            : amount;
+        _damageDealtMap[player] = updatedTotal;
 
         // สะสมดาเมจรวมทั้งแคมป์เพื่อใช้ล็อกหีบสมบัติเฉพาะผู้มีส่วนร่วมในการต่อสู้
         SandboxWorldSpawner.Instance?.RecordCampDamage(CampId, IsBoss, player, amount);
 
-        // หากเป็นบอส ให้กระจายตารางอันดับดาเมจล่าสุดไปยังทุกเครื่องเพื่อแสดงบน BossHudUI แบบเรียลไทม์
-        if (IsBoss && IsSpawned && Object != null && Object.IsValid && Object.HasStateAuthority)
+        if (IsSpawned && Object != null && Object.IsValid && Object.HasStateAuthority)
         {
-            BroadcastBossDamageBoard();
+            // ซิงก์ยอดดาเมจสะสมของมอน/บอสตัวนี้ไปยังทุกเครื่องเพื่อกันข้อมูลหายเมื่อเกิด Host Migration
+            RPC_SyncDamageContribution(player, Mathf.Max(1, Mathf.RoundToInt(updatedTotal)));
+
+            // หากเป็นบอส ให้กระจายตารางอันดับดาเมจล่าสุดไปยังทุกเครื่องเพื่อแสดงบน BossHudUI แบบเรียลไทม์
+            if (IsBoss)
+            {
+                BroadcastBossDamageBoard();
+            }
+        }
+    }
+
+    /// <summary>
+    /// ซิงก์ยอดดาเมจสะสมรายบุคคลของมอนสเตอร์/บอสตัวนี้ไปยังทุกเครื่อง (เก็บสำรองไว้รองรับกรณี Host หลุดกลางไฟต์)
+    /// </summary>
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_SyncDamageContribution(PlayerRef attacker, int cumulativeDamage)
+    {
+        if (attacker == PlayerRef.None || cumulativeDamage <= 0) return;
+        if (Object != null && Object.IsValid && Object.HasStateAuthority) return;
+
+        float prev = _damageDealtMap.TryGetValue(attacker, out float existing) ? existing : 0f;
+        if (cumulativeDamage > prev)
+        {
+            float delta = cumulativeDamage - prev;
+            _damageDealtMap[attacker] = cumulativeDamage;
+            SandboxWorldSpawner.Instance?.RecordCampDamage(CampId, IsBoss, attacker, delta);
         }
     }
 
@@ -2172,7 +2225,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     /// <summary>
-    /// บีบอัดตารางดาเมจบอสเป็นข้อความขนาดเล็ก ("raw:dmg;...") ไม่เกิน 62 ตัวอักษรแล้วส่งผ่าน RPC ไปยังทุกเครื่อง
+    /// บีบอัดตารางดาเมจบอสเป็นข้อความขนาดเล็ก ("raw:dmg;...") รองรับสูงสุด 10 ผู้เล่น (124 ตัวอักษร) แล้วส่งผ่าน RPC ไปยังทุกเครื่อง
     /// </summary>
     private void BroadcastBossDamageBoard()
     {
@@ -2185,13 +2238,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         var list = new List<KeyValuePair<PlayerRef, float>>(_damageDealtMap);
         list.Sort((a, b) => b.Value.CompareTo(a.Value));
 
-        var sb = new StringBuilder(64);
+        var sb = new StringBuilder(128);
         for (int i = 0; i < list.Count; i++)
         {
             int dmgInt = Mathf.Max(1, Mathf.RoundToInt(list[i].Value));
             string token = $"{list[i].Key.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{dmgInt.ToString(CultureInfo.InvariantCulture)}";
             int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
-            if (sb.Length + needed > 62) break;
+            if (sb.Length + needed > 124) break;
             if (sb.Length > 0) sb.Append(';');
             sb.Append(token);
         }
@@ -2203,7 +2256,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     /// รับข้อมูลตารางอันดับดาเมจของบอสบนทุกเครื่อง (Host และ Client) และแปลงเป็นรายการพร้อมชื่อผู้เล่น + % ดาเมจ
     /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_SyncBossDamageBoard(NetworkString<_64> payload)
+    public void RPC_SyncBossDamageBoard(NetworkString<_128> payload)
     {
         _syncedBossDamageBoard.Clear();
         string rawStr = payload.ToString();
@@ -2308,6 +2361,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         PlayerCombat attacker = FindPlayerBySource(sourceRef);
         if (attacker == null || attacker.IsDead) return;
         if (SafeZone.IsPlayerInAnySafeZone(attacker)) return;
+        // ป้องกันการส่ง RPC โจมตีปลอมขณะเก็บอาวุธอยู่ (ต้องชักดาบอยู่ในโหมดต่อสู้จริงเท่านั้น)
+        if (!attacker.IsWeaponDrawn) return;
 
         float dist = PlanarDistance(transform.position, attacker.transform.position);
         float limit = IsBoss ? maxHitDistance + 1.5f : maxHitDistance;
@@ -2325,7 +2380,14 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             RegisterBossAttackerOnHit(sourceRef);
         }
 
-        int raw = Mathf.Clamp(damage, 1, maxDamagePerHit);
+        // คำนวณเพดานดาเมจสูงสุดที่เป็นไปได้จริงจากค่าพลังโจมตีของผู้เล่นฝั่ง Authority (ป้องกันการปลอมแปลงแพ็กเก็ตส่งดาเมจ 9999)
+        // เผื่อค่า Blade Oil Buff (+12) สำหรับผู้เล่น Remote เนื่องจากบัฟน้ำมันดาบคำนวณบนเครื่องเจ้าของ
+        int attackerCeilingAtk = attacker.TotalAttackDamage + (attacker.IsLocallyControlled ? 0 : 12);
+        // ตัวคูณสูงสุดที่เป็นไปได้จริง: บอสสูงสุด 1.85x (Parry Counter 1.75x / Finisher 1.45x + เผื่อ), มอนทั่วไปสูงสุด 2.60x (Stealth Backstab 2.5x + เผื่อ)
+        float maxLegitMultiplier = IsBoss ? 1.85f : 2.60f;
+        int authoritativeMaxDamage = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(1, attackerCeilingAtk) * maxLegitMultiplier) + 3, 1, maxDamagePerHit);
+
+        int raw = Mathf.Clamp(damage, 1, authoritativeMaxDamage);
         int applied = Defense > 0 ? Mathf.Max(1, raw - Defense) : raw;
 
         // บันทึกดาเมจของผู้เล่นคนนี้ลงในตารางเพื่อคำนวณโอกาสได้ของตอนตาย
@@ -2376,13 +2438,34 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
     /// <summary>
     /// รับคำสั่งชะงัก/เสียหลัก (Stagger) จากผู้เล่นที่ทำ Perfect Parry สำเร็จ (ส่งข้ามเครื่องไปยัง State Authority ของศัตรู)
+    /// ตรวจสอบสิทธิ์ผู้ส่ง ระยะประชิด สถานะการต่อสู้ และคูลดาวน์ฝั่ง Authority เพื่อป้องกันการสแปมแช่แข็งบอสจากระยะไกล
     /// </summary>
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    public void RPC_ApplyParryStagger(float durationSeconds)
+    public void RPC_ApplyParryStagger(float durationSeconds, RpcInfo info = default)
     {
         if (!IsSpawned || !Object.HasStateAuthority || !IsAlive) return;
+        if (State == NpcState.Staggered) return;
+        if (Time.time < _nextParryStaggerAllowedTime) return;
+        // ยอมรับการ Stagger เฉพาะเมื่อมอนสเตอร์/บอสกำลังอยู่ในสถานะต่อสู้ (ไล่ล่าหรือกำลังโจมตี) เท่านั้น
+        if (State != NpcState.Chasing && State != NpcState.Attacking) return;
 
-        float dur = Mathf.Clamp(durationSeconds, 0.25f, 3.0f);
+        PlayerRef sourceRef = info.Source;
+        if (sourceRef == PlayerRef.None && Runner != null)
+            sourceRef = Runner.LocalPlayer;
+
+        PlayerCombat defender = FindPlayerBySource(sourceRef);
+        if (defender == null || defender.IsDead || SafeZone.IsPlayerInAnySafeZone(defender)) return;
+
+        // ตรวจสอบระยะห่างระหว่างผู้ตั้งการ์ดกับมอนสเตอร์/บอส (กันการยิง RPC Stagger ข้ามแมป)
+        float maxParryDist = IsBoss ? Mathf.Max(8.5f, AttackRange + 4.5f) : (maxHitDistance + 2.0f);
+        if (PlanarDistance(transform.position, defender.transform.position) > maxParryDist)
+            return;
+
+        // จำกัดระยะเวลาชะงักสูงสุด (บอสสูงสุด 1.0 วิ, มอนสเตอร์ทั่วไปสูงสุด 2.2 วิ) พร้อมคูลดาวน์ป้องกัน Stunlock
+        float maxDur = IsBoss ? 1.0f : 2.2f;
+        float dur = Mathf.Clamp(durationSeconds, 0.25f, maxDur);
+        _nextParryStaggerAllowedTime = Time.time + dur + (IsBoss ? 2.0f : 1.0f);
+
         if (_bossAttackRoutine != null)
         {
             StopCoroutine(_bossAttackRoutine);
@@ -2467,6 +2550,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         LootDropSystem.AnalyzeDamageContribution(
             _damageDealtMap,
             fallbackKiller,
+            IsBoss,
             out float totalDamage,
             out PlayerRef topDpsPlayer,
             out List<PlayerRef> participants);
@@ -2568,10 +2652,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
     /// <summary>
     /// กระจายผลสรุปการเคลียร์แคมป์/บอสพร้อมรายชื่อผู้ร่วมทำดาเมจจาก State Authority ไปยังทุกเครื่องเพื่อสร้างและล็อกสิทธิ์ LootChest
-    /// ใช้ NetworkString&lt;_64&gt; เพื่อให้ขนาด Payload รวมต่ำกว่าขีดจำกัด 512 ไบต์ของ Photon Fusion 2 RPC เสมอ
+    /// ใช้ NetworkString&lt;_128&gt; เพื่อรองรับผู้เล่นช่วยตีสูงสุด 10 คนโดยยังต่ำกว่าขีดจำกัด 512 ไบต์ของ Photon Fusion 2 RPC เสมอ
     /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_NotifyCampCleared(int clearedCampId, NetworkBool isBossCamp, Vector3 chestPos, NetworkString<_64> contributorPayload)
+    public void RPC_NotifyCampCleared(int clearedCampId, NetworkBool isBossCamp, Vector3 chestPos, NetworkString<_128> contributorPayload)
     {
         SandboxWorldSpawner.Instance?.HandleAuthoritativeCampCleared(clearedCampId, isBossCamp, chestPos, contributorPayload.ToString());
     }
@@ -2663,7 +2747,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         Vector3 targetPos = pattern == BossAttackPattern.HeavyCleave
             ? centerPos + dir * 2.1f
             : centerPos;
-        targetPos.y = 0.06f;
+        targetPos.y = SandboxWorldSpawner.SampleGroundY(targetPos, centerPos.y) + 0.06f;
         disc.transform.position = targetPos;
         disc.transform.localScale = new Vector3(0.5f, 0.02f, 0.5f);
 
@@ -2687,7 +2771,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         ring.name = "BossShockwaveBurst";
         var col = ring.GetComponent<Collider>();
         if (col != null) Destroy(col);
-        ring.transform.position = new Vector3(centerPos.x, 0.10f, centerPos.z);
+        float burstY = SandboxWorldSpawner.SampleGroundY(centerPos, centerPos.y) + 0.10f;
+        ring.transform.position = new Vector3(centerPos.x, burstY, centerPos.z);
         UrpMaterialHelper.ApplyTransparentColor(ring.GetComponent<Renderer>(), new Color(1f, 0.48f, 0.10f, 0.72f));
 
         float elapsed = 0f;
@@ -2873,7 +2958,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             fontStyle = FontStyle.Bold,
             wordWrap = false
         };
-        string title = IsBoss ? $"Lv.{ScaledLevel} Sovereign Golem" : $"Lv.{ScaledLevel}";
+        string bossTitle = string.IsNullOrWhiteSpace(name) || name == "Boss_SovereignGolem"
+            ? "Sovereign Golem"
+            : name.Replace("(Clone)", "").Replace("Enemy_", "").Replace("Boss_", "").Replace("_", " ").Trim();
+        string title = IsBoss ? $"Lv.{ScaledLevel} {bossTitle}" : $"Lv.{ScaledLevel}";
         float titleW = IsBoss ? 220f : 120f;
         Rect titleRect = new Rect(sp.x - titleW * 0.5f, y - 22f, titleW, 20f);
         if (IsBoss)

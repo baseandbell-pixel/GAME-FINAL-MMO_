@@ -27,8 +27,38 @@ public enum PlayerStatType
 /// </summary>
 [DisallowMultipleComponent]
 [RequireComponent(typeof(Rigidbody))]
-public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
+public class PlayerCombat : NetworkBehaviour, IClassCombatHandler, IWorldInteractable
 {
+    // ---- IWorldInteractable (รองรับการกด [G] ค้าง 2.5 วินาทีเพื่อชุบชีวิตเพื่อนที่ล้มกลางไฟต์ในโหมด Co-op) ----
+    public InteractionChannel Channel => InteractionChannel.NpcTalk;
+    public int PriorityBias => -1; // สำคัญกว่าคุย NPC เพื่อไม่ให้หน้าต่างเควสต์มาแย่งจังหวะชุบเพื่อน
+    public float InteractionRange => 3.5f;
+    public Vector3 InteractionWorldPosition => transform.position;
+    public bool RequiresHold => true;
+    public float HoldDurationSeconds => 2.5f;
+
+    public bool CanInteractNow(PlayerCombat rescuer)
+    {
+        return _isSpawned && IsDead && rescuer != null && rescuer != this && rescuer.IsSpawned && !rescuer.IsDead;
+    }
+
+    public string GetPromptLabel(PlayerCombat rescuer)
+    {
+        return $"Hold [G] Revive {PartyManager.GetDisplayName(this)} (2.5s)";
+    }
+
+    public Color GetPromptAccentColor(PlayerCombat rescuer)
+    {
+        return new Color(0.32f, 0.98f, 0.72f, 1f);
+    }
+
+    public void ExecuteInteraction(PlayerCombat rescuer)
+    {
+        if (!CanInteractNow(rescuer)) return;
+        string rescuerName = PartyManager.GetDisplayName(rescuer);
+        RPC_ReviveByAlly(rescuerName);
+        PlayerStatusHud.Instance?.ShowToast($"Revived {PartyManager.GetDisplayName(this)}!", new Color(0.32f, 0.98f, 0.72f), 2.5f);
+    }
     private const int DefaultMaxHealth = 100;
     private const float DefaultMaxStamina = 100f;
     // เพดานเลเวลสูงสุดของแพตช์ปัจจุบัน (Lv.30 Cap)
@@ -38,6 +68,9 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     // เพดานโบนัสความเร็วเคลื่อนที่จากค่า AGI
     private const float MaxAgiMoveSpeedBonus = 1.60f;
     public const int StatPointsPerLevel = 3;
+    // เพดานค่าเงินและค่าสเตตัสต่อช่องสูงสุดที่ระบบเซฟอนุญาต (ป้องกันการแก้ไฟล์เซฟโกงค่า)
+    public const int MaxSafeGold = 9999999;
+    public const int MaxSingleStatValue = 30;
 
     // ------------------------------------------------------------------ inspector
 
@@ -123,6 +156,12 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     [Min(1)] [SerializeField] private int maxDamagePerHit = 400;
     [Tooltip("Attacker and victim must be at most this far apart (generous: remote proxies lag).")]
     [Min(0.5f)] [SerializeField] private float maxHitDistance = 5f;
+
+    [Header("PvP & Co-op Safety (ความปลอดภัยโหมด Co-op)")]
+    [Tooltip("เปิดเพื่อให้ผู้เล่นฟันทำดาเมจกันเองได้ (ค่าเริ่มต้นปิด เพื่อป้องกันการฟันเพื่อนร่วมทีมโดยไม่ตั้งใจขณะช่วยกันตีบอส/แคมป์)")]
+    [SerializeField] private bool allowFriendlyFirePvp = false;
+
+    public bool AllowFriendlyFirePvp => allowFriendlyFirePvp;
 
     [Header("Health")]
     [Min(1)] [SerializeField] private int maxHealth = DefaultMaxHealth;
@@ -229,12 +268,22 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         : maxHealth;
 
     /// <summary>
-    /// ค่า Max Stamina รวม = Base (100) + โบนัสเลเวล (+2 STA/เลเวล) + END (+2 STA/แต้ม) + อุปกรณ์สวมใส่
-    /// จำกัดเพดานสูงสุดอย่างเคร่งครัดไม่เกิน HardMaxStaminaCap (150 STA) เพื่อป้องกันการสแปมคอมโบ/กลิ้งหลบ
+    /// ค่า Max Stamina รวม = Base (100) + โบนัสเลเวล (สูงสุด +16 STA) + END (+2 STA/แต้ม) + อุปกรณ์สวมใส่
+    /// จำกัดเพดานสูงสุดไม่เกิน HardMaxStaminaCap (150 STA) โดยแต้ม END ยังเพิ่ม Stamina Regen (+4%/แต้ม) และลดค่าใช้กลิ้ง/บล็อก (-1.5%/แต้ม สูงสุด -30%) เสมอไม่สูญเปล่า
     /// </summary>
     public float MaxStamina => _isSpawned
-        ? Mathf.Min(HardMaxStaminaCap, maxStamina + (ClampedLevel - 1) * 2f + StatPointsEND * 2f + NetworkGearMaxStaminaBonus)
+        ? Mathf.Min(HardMaxStaminaCap, maxStamina + Mathf.Min(16f, (ClampedLevel - 1) * 1f) + StatPointsEND * 2f + NetworkGearMaxStaminaBonus)
         : Mathf.Min(HardMaxStaminaCap, maxStamina);
+
+    /// <summary>
+    /// อัตราฟื้นฟู Stamina ต่อวินาทีรวมโบนัสจากค่า END (+4% ต่อแต้ม END ทำให้ค่า END คุ้มค่าเสมอแม้ MaxStamina ชนเพดาน 150)
+    /// </summary>
+    public float TotalStaminaRegenRate => staminaRegenRate * (1f + (_isSpawned ? Mathf.Min(StatPointsEND, MaxSingleStatValue) * 0.04f : 0f));
+
+    /// <summary>
+    /// ตัวคูณลดการใช้ Stamina ตอนกลิ้งหลบและรับแรงปะทะขณะตั้งการ์ดจากค่า END (-1.5% ต่อแต้ม END สูงสุดลด 30% ที่ END 20)
+    /// </summary>
+    public float EndStaminaCostMultiplier => 1f - (_isSpawned ? Mathf.Min(StatPointsEND, 20) * 0.015f : 0f);
 
     /// <summary>
     /// ค่า ATK รวม = Base (14) + โบนัสเลเวล (+1 ATK ทุก 2 เลเวล รวม +14 ที่ Lv.30) + STR (+1 ATK/แต้ม) + อาวุธ/อุปกรณ์ + บัฟ
@@ -265,13 +314,38 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public int ExpToNextLevel => IsMaxLevel ? 0 : GetExpRequiredForNextLevel(ClampedLevel);
     public bool IsInCombat => _isSpawned && (Time.time - _lastCombatActivityTime < 6f);
 
+    /// <summary>
+    /// จริงเมื่อสามารถวิ่ง Sprint ได้ฟรีโดยไม่เสีย Stamina (อยู่ในเขตปลอดภัย SafeZone หรือไม่ได้อยู่ในสถานะต่อสู้และไม่มีมอนกำลังไล่ล่าใกล้ตัว)
+    /// </summary>
+    public bool IsFreeExplorationSprintActive
+    {
+        get
+        {
+            if (!_isSpawned || IsDead) return false;
+            if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)) return true;
+            if (IsInCombat) return false;
+            for (int i = 0; i < EnemyNPC.All.Count; i++)
+            {
+                var e = EnemyNPC.All[i];
+                if (e == null || !e.IsAlive) continue;
+                if (e.State == NpcState.Chasing || e.State == NpcState.Attacking)
+                {
+                    Vector3 diff = e.transform.position - transform.position;
+                    diff.y = 0f;
+                    if (diff.sqrMagnitude <= 16f * 16f) return false;
+                }
+            }
+            return true;
+        }
+    }
+
     public float CurrentStamina => _isSpawned ? NetworkStamina : maxStamina;
-    public bool CanSprint => !IsDead && CurrentStamina > 0.5f && !_sprintExhaustedCooldown;
+    public bool CanSprint => !IsDead && (IsFreeExplorationSprintActive || (CurrentStamina > 0.5f && !_sprintExhaustedCooldown));
     // ต้องชักดาบออกมาก่อน (IsWeaponDrawn) และอยู่นอกเขตปลอดภัยจึงจะโจมตีได้
     public bool CanAttack => !IsDead && IsWeaponDrawn && !IsInSafeZone && !SafeZone.IsPointInAnySafeZone(transform.position) && CurrentStamina > 0f;
     public bool CanDodge => !IsDead && CurrentStamina > 0f;
     // ข้อความแจ้งเตือนเมื่อผู้เล่นพยายามโจมตีหรือป้องกันขณะยังเก็บดาบอยู่กลางหลัง
-    public const string DrawWeaponPromptMessage = "Press [1] to Draw Weapon";
+    public const string DrawWeaponPromptMessage = "Press [1] to Draw GreatSword before attacking! (กด [1] ชักดาบก่อนโจมตี)";
     public bool IsDead => _isSpawned && NetworkHealth <= 0;
     public bool IsHitWindowOpen { get; private set; }
     public bool IsDodging => Time.time < _dodgeInvulnerableUntil;
@@ -597,12 +671,14 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         _spawnPosition = transform.position;
 
         if (!All.Contains(this)) All.Add(this);
+        InteractionManager.Register(this);
         if (IsLocallyControlled)
         {
             Local = this;
             Debug.Log($"[PlayerCombat] Local player registered ({name}, id={Object.Id}).");
             CombatHud.EnsureFor(this);
             BossHudUI.EnsureFor(this);
+            PartyManager.EnsureExists();
         }
 
         if (Object.HasStateAuthority)
@@ -630,6 +706,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
         _isSpawned = false;
         All.Remove(this);
+        InteractionManager.Unregister(this);
         if (Local == this) Local = null;
         StopAllCoroutines();
         _hitWindowRoutine = null;
@@ -659,12 +736,25 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         return currentStatValue >= 10 ? 2 : 1;
     }
 
+    /// <summary>
+    /// คำนวณแต้มสเตตัสสะสมทั้งหมดที่ใช้เพื่ออัปเกรดค่าสเตตัส 1 ช่องจาก 0 จนถึง statValue
+    /// (ช่วง 0->10 ใช้ 1 แต้ม/ขั้น, ตั้งแต่ 10 ขึ้นไปใช้ 2 แต้ม/ขั้น ตรงกับ GetAttributeUpgradePointCost)
+    /// </summary>
+    public static int GetCumulativePointsForStatValue(int statValue)
+    {
+        int v = Mathf.Max(0, statValue);
+        int tier1 = Mathf.Min(v, 10);
+        int tier2 = Mathf.Max(0, v - 10);
+        return tier1 + tier2 * 2;
+    }
+
     public static int GetAttributeUpgradeGoldCost(int currentStatValue)
     {
+        // ปรับสมดุลค่าทองอัป Stat ให้สมเหตุสมผลและไม่แย่งเงินตีบวก Blacksmith ช่วงกลาง-ปลายเกม
         if (currentStatValue < 5) return 0;
-        if (currentStatValue < 10) return 50;
-        if (currentStatValue < 15) return 150;
-        return 300 + (currentStatValue - 15) * 60;
+        if (currentStatValue < 10) return 45;
+        if (currentStatValue < 15) return 120;
+        return 220 + (currentStatValue - 15) * 40;
     }
 
     public void AddGold(int amount, string source = "Reward")
@@ -672,7 +762,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         if (!_isSpawned || amount <= 0) return;
         if (Object.HasStateAuthority)
         {
-            NetworkGold += amount;
+            long nextGold = (long)NetworkGold + amount;
+            NetworkGold = (int)Math.Min(MaxSafeGold, Math.Max(0L, nextGold));
             ProgressionChanged?.Invoke();
             if (IsLocallyControlled) CombatHud.NotifyGoldGained(amount, source);
             PlayerSaveManager.RequestAutoSave($"AddGold_{source}");
@@ -875,7 +966,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     }
 
     /// <summary>
-    /// นำข้อมูลจากไฟล์เซฟกลับมาใช้ โดยบังคับ Clamp เลเวลไม่ให้เกิน MaxLevel = 30 และเคลียร์ EXP เมื่อถึงเพดาน
+    /// นำข้อมูลจากไฟล์เซฟกลับมาใช้ โดยบังคับ Clamp เลเวลไม่เกิน MaxLevel = 30, ตรวจสอบงบแต้มสเตตัสไม่เกินแต้มจริงของเลเวลนั้น,
+    /// และจำกัดเพดาน Gold / HP / Stamina เพื่อป้องกันการแก้ไขไฟล์เซฟโกงค่า
     /// </summary>
     public void ApplySaveData(PlayerSaveData data)
     {
@@ -883,17 +975,53 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         if (!Object.HasStateAuthority) return;
 
         int clampedLvl = Mathf.Clamp(data.level, 1, MaxLevel);
+        int maxEarnedPoints = Mathf.Max(0, clampedLvl - 1) * StatPointsPerLevel;
+
+        int str = Mathf.Clamp(data.statSTR, 0, MaxSingleStatValue);
+        int vit = Mathf.Clamp(data.statVIT, 0, MaxSingleStatValue);
+        int end = Mathf.Clamp(data.statEND, 0, MaxSingleStatValue);
+        int agi = Mathf.Clamp(data.statAGI, 0, MaxSingleStatValue);
+
+        int spent = GetCumulativePointsForStatValue(str)
+                  + GetCumulativePointsForStatValue(vit)
+                  + GetCumulativePointsForStatValue(end)
+                  + GetCumulativePointsForStatValue(agi);
+
+        if (spent > maxEarnedPoints)
+        {
+            int rawSpent = spent;
+            while (spent > maxEarnedPoints && (str > 0 || vit > 0 || end > 0 || agi > 0))
+            {
+                if (str >= vit && str >= end && str >= agi) str--;
+                else if (vit >= str && vit >= end && vit >= agi) vit--;
+                else if (end >= str && end >= vit && end >= agi) end--;
+                else agi--;
+
+                spent = GetCumulativePointsForStatValue(str)
+                      + GetCumulativePointsForStatValue(vit)
+                      + GetCumulativePointsForStatValue(end)
+                      + GetCumulativePointsForStatValue(agi);
+            }
+            Debug.LogWarning($"[PlayerCombat] Save stat budget sanitized for Lv.{clampedLvl} (spent {rawSpent} > max {maxEarnedPoints}) -> STR={str}, VIT={vit}, END={end}, AGI={agi} (spent={spent}).");
+        }
+
+        int remainingBudget = Mathf.Max(0, maxEarnedPoints - spent);
+        int clampedUnspent = Mathf.Clamp(data.unspentStatPoints, 0, remainingBudget);
+        if (data.unspentStatPoints > remainingBudget)
+        {
+            Debug.LogWarning($"[PlayerCombat] Save unspentStatPoints sanitized for Lv.{clampedLvl}: {data.unspentStatPoints} -> {clampedUnspent}.");
+        }
+
         NetworkLevel = clampedLvl;
         NetworkExperience = clampedLvl >= MaxLevel
             ? 0
             : Mathf.Clamp(data.experience, 0, Mathf.Max(0, GetExpRequiredForNextLevel(clampedLvl) - 1));
-        NetworkUnspentStatPoints = Mathf.Max(0, data.unspentStatPoints);
-        StatPointsSTR = Mathf.Max(0, data.statSTR);
-        StatPointsVIT = Mathf.Max(0, data.statVIT);
-        StatPointsEND = Mathf.Max(0, data.statEND);
-        StatPointsAGI = Mathf.Max(0, data.statAGI);
-        NetworkGold = Mathf.Max(0, data.gold);
-        // บีบค่า HP/Stamina เบื้องต้นให้ไม่เกินเพดานหลังคำนวณใหม่
+        NetworkUnspentStatPoints = clampedUnspent;
+        StatPointsSTR = str;
+        StatPointsVIT = vit;
+        StatPointsEND = end;
+        StatPointsAGI = agi;
+        NetworkGold = Mathf.Clamp(data.gold, 0, MaxSafeGold);
         NetworkHealth = Mathf.Clamp(NetworkHealth, 1, MaxHealth);
         NetworkStamina = Mathf.Clamp(NetworkStamina, 1f, MaxStamina);
         ProgressionChanged?.Invoke();
@@ -937,12 +1065,13 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         int prevMaxHp = MaxHealth;
         float prevMaxSta = MaxStamina;
 
-        NetworkGearDamageBonus = dmgBonus;
-        NetworkGearMaxHealthBonus = maxHpBonus;
-        NetworkGearMaxStaminaBonus = maxStaBonus;
-        NetworkGearDefenseBonus = defBonus;
-        NetworkGearMoveSpeedBonus = moveSpeedBonus;
-        NetworkGearCritBonus = critBonus;
+        // บีบเพดานโบนัสอุปกรณ์ฝั่ง State Authority ป้องกันค่าผิดปกติจากการยิง RPC โกงอุปกรณ์
+        NetworkGearDamageBonus = Mathf.Clamp(dmgBonus, 0, 250);
+        NetworkGearMaxHealthBonus = Mathf.Clamp(maxHpBonus, 0, 1500);
+        NetworkGearMaxStaminaBonus = Mathf.Clamp(maxStaBonus, 0, 100);
+        NetworkGearDefenseBonus = Mathf.Clamp(defBonus, 0, 250);
+        NetworkGearMoveSpeedBonus = Mathf.Clamp(moveSpeedBonus, 0f, 4f);
+        NetworkGearCritBonus = Mathf.Clamp(critBonus, 0f, 1f);
 
         int hpDiff = MaxHealth - prevMaxHp;
         if (hpDiff > 0 && !IsDead)
@@ -1108,13 +1237,16 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         if (IsDead) return;
 
         bool sprinting = _capsule != null && _capsule.NetworkSprinting;
-        if (sprinting || IsDodging || IsHitWindowOpen) return;
-        if (Time.time < _nextStaminaRegenTime) return;
+        bool freeSprint = IsFreeExplorationSprintActive;
+        // ในโหมดสำรวจนอกต่อสู้หรือ SafeZone การวิ่ง Sprint ไม่เสีย Stamina และยังฟื้น Stamina กลับเต็มได้ปกติ
+        if ((sprinting && !freeSprint) || IsDodging || IsHitWindowOpen) return;
+        if (Time.time < _nextStaminaRegenTime && !freeSprint) return;
 
         float cap = MaxStamina;
         if (NetworkStamina < cap)
         {
-            NetworkStamina = Mathf.Min(cap, NetworkStamina + staminaRegenRate * dt);
+            // ใช้ TotalStaminaRegenRate ที่รวมโบนัสฟื้นฟู +4%/แต้ม จากค่า END
+            NetworkStamina = Mathf.Min(cap, NetworkStamina + TotalStaminaRegenRate * dt);
             if (_sprintExhaustedCooldown && NetworkStamina >= 12f)
                 _sprintExhaustedCooldown = false;
         }
@@ -1123,6 +1255,14 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public bool ConsumeSprintStamina(float dt)
     {
         if (!_isSpawned || IsDead) return false;
+
+        // วิ่ง Sprint ฟรีเมื่ออยู่ใน SafeZone หรืออยู่นอกการต่อสู้ (Out-of-Combat) เพื่อสำรวจแผนที่ FinalTestv1 ได้ไม่เหนื่อย
+        if (IsFreeExplorationSprintActive)
+        {
+            _sprintExhaustedCooldown = false;
+            return true;
+        }
+
         if (_sprintExhaustedCooldown || NetworkStamina <= 0f)
         {
             _sprintExhaustedCooldown = true;
@@ -1803,7 +1943,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     public void RPC_RequestDodge(float rollX, float rollY)
     {
         if (!Object.HasStateAuthority || IsDead) return;
-        if (!TryConsumeAuthorityStamina(dodgeStaminaCost)) return;
+        // ใช้ตัวคูณลดค่า Stamina จากแต้ม END สำหรับการกลิ้งหลบ
+        if (!TryConsumeAuthorityStamina(dodgeStaminaCost * EndStaminaCostMultiplier)) return;
 
         if (IsBlocking)
         {
@@ -1931,6 +2072,9 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
 
         var attacker = other.GetComponentInParent<PlayerCombat>();
         if (attacker == null || attacker == this || !attacker._isSpawned) return;
+
+        // ป้องกันการฟันทำดาเมจเพื่อนร่วมทีมในโหมด Co-op (หากไม่ได้เปิด allowFriendlyFirePvp ทั้งสองฝั่ง)
+        if (!allowFriendlyFirePvp || !attacker.allowFriendlyFirePvp) return;
 
         if (other != attacker.weaponHitbox || !attacker.IsHitWindowOpen || attacker.IsDead) return;
         if (!WeaponOverlapsBody(attacker)) return;
@@ -2178,7 +2322,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
     private void ApplyIncomingDamageAuthority(int damage, EnemyNPC attackerNpc)
     {
         if (!Object.HasStateAuthority) return;
-        if (IsDead || IsDodging) return;
+        if (IsDead || IsDodging || Time.time < _reviveInvulnerableUntil) return;
         if (IsInSafeZone || SafeZone.IsPointInAnySafeZone(transform.position)) return;
 
         _lastCombatActivityTime = Time.time;
@@ -2220,11 +2364,11 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
         if (TotalDefense > 0)
             damage = Mathf.Max(1, damage - TotalDefense);
 
-        // 3. ตั้งการ์ดป้องกันปกติ (Sustained Block: ลดดาเมจ 75% และใช้ Stamina)
+        // 3. ตั้งการ์ดป้องกันปกติ (Sustained Block: ลดดาเมจ 75% และใช้ Stamina ลดลงตามแต้ม END)
         if (IsBlocking && NetworkStamina > 0f)
         {
             damage = Mathf.Max(1, Mathf.RoundToInt(damage * (1f - blockDamageReduction)));
-            TryConsumeAuthorityStamina(blockHitStaminaCost);
+            TryConsumeAuthorityStamina(blockHitStaminaCost * EndStaminaCostMultiplier);
             if (NetworkStamina <= 0f)
             {
                 IsBlocking = false;
@@ -2250,24 +2394,124 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             _respawnRoutine = StartCoroutine(RespawnRoutine());
     }
 
+    private float _reviveInvulnerableUntil = -100f;
+    private const float CoopDownedReviveWindowSeconds = 15f;
+
+    private bool HasLivingAllyInRoom()
+    {
+        for (int i = 0; i < All.Count; i++)
+        {
+            var other = All[i];
+            if (other != null && other != this && other.IsSpawned && !other.IsDead)
+                return true;
+        }
+        return false;
+    }
+
     private IEnumerator RespawnRoutine()
     {
-        yield return new WaitForSeconds(respawnDelaySeconds);
-        _respawnRoutine = null;
+        bool coopMode = HasLivingAllyInRoom();
+        float waitDur = coopMode ? CoopDownedReviveWindowSeconds : respawnDelaySeconds;
 
-        if (!_isSpawned || !Object.HasStateAuthority) yield break;
+        if (IsLocallyControlled && coopMode)
+        {
+            PlayerStatusHud.Instance?.ShowToast(
+                $"DOWNED! Allies can [Hold G] to Revive you ({waitDur:0}s)  |  Press [R] to Respawn now",
+                new Color(1f, 0.42f, 0.30f),
+                5.0f);
+        }
+
+        float elapsed = 0f;
+        while (elapsed < waitDur)
+        {
+            // หากเพื่อนชุบชีวิตสำเร็จระหว่างรอ ให้หยุดการเกิดใหม่ทันที
+            if (!_isSpawned || !IsDead)
+            {
+                _respawnRoutine = null;
+                yield break;
+            }
+            if (IsLocallyControlled && coopMode && elapsed >= 1.0f)
+            {
+                var kb = Keyboard.current;
+                if (kb != null && kb.rKey.wasPressedThisFrame && !GameplayInput.IsBlocked)
+                    break;
+            }
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        _respawnRoutine = null;
+        if (!_isSpawned || !Object.HasStateAuthority || !IsDead) yield break;
 
         TeleportToSpawn();
         _lastHitSequenceByAttacker.Clear();
         NetworkStamina = MaxStamina;
         _sprintExhaustedCooldown = false;
+        _reviveInvulnerableUntil = Time.time + 2.0f;
         NetworkHealth = MaxHealth;
     }
 
     private void TeleportToSpawn()
     {
-        Vector3 dest = SafeZone.Instance != null ? SafeZone.Instance.ReconnectSpawnPosition : _spawnPosition;
+        Vector3 fallbackSafe = SafeZone.Instance != null ? SafeZone.Instance.ReconnectSpawnPosition : _spawnPosition;
+        // หากผู้เล่นปลดล็อกหินเทเลพอร์ตใกล้จุดตายไว้แล้ว ให้เกิดที่หินใกล้สุดแทนการเดินไกลจากเมือง
+        Vector3 dest = TeleportWaystone.ResolveBestRespawnPosition(transform.position, fallbackSafe);
         TeleportTo(dest);
+    }
+
+    /// <summary>
+    /// รับคำสั่งชุบชีวิตกลางไฟต์จากเพื่อนร่วมห้อง (กด [G] ค้าง 2.5 วินาที) -> ฟื้นตรงจุดเดิม 50% HP + 100% Stamina + อมตะสั้น 2.5 วิ
+    /// ตรวจสอบระยะประชิดและสถานะมีชีวิตของผู้ชุบฝั่ง Authority เพื่อป้องกันการยิง RPC ชุบข้ามแมป
+    /// </summary>
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_ReviveByAlly(NetworkString<_32> rescuerName, RpcInfo info = default)
+    {
+        if (!_isSpawned || !Object.HasStateAuthority || !IsDead) return;
+
+        // ตรวจสอบว่าผู้ส่งคำสั่งชุบยังมีชีวิตและอยู่ใกล้ตัวจริง (เผื่อ Lag 6.5m)
+        if (info.Source != PlayerRef.None)
+        {
+            PlayerCombat rescuer = PartyManager.FindCombatByRef(info.Source);
+            if (rescuer != null)
+            {
+                if (rescuer.IsDead) return;
+                Vector3 diff = rescuer.transform.position - transform.position;
+                diff.y = 0f;
+                if (diff.magnitude > 6.5f) return;
+            }
+        }
+
+        if (_respawnRoutine != null)
+        {
+            StopCoroutine(_respawnRoutine);
+            _respawnRoutine = null;
+        }
+
+        _lastHitSequenceByAttacker.Clear();
+        NetworkStamina = MaxStamina;
+        _sprintExhaustedCooldown = false;
+        _reviveInvulnerableUntil = Time.time + 2.5f;
+        NetworkHealth = Mathf.Max(1, Mathf.RoundToInt(MaxHealth * 0.50f));
+
+        string helper = rescuerName.ToString();
+        if (IsLocallyControlled)
+        {
+            PlayerStatusHud.Instance?.ShowToast(
+                $"Revived by {(string.IsNullOrEmpty(helper) ? "Ally" : helper)}! (50% HP restored)",
+                new Color(0.32f, 0.98f, 0.72f),
+                3.0f);
+        }
+        Debug.Log($"[PlayerCombat] {name} revived on-spot by '{helper}' at {NetworkHealth}/{MaxHealth} HP.");
+    }
+
+    /// <summary>
+    /// ส่งสัญญาณระบบปาร์ตี้ (Invite / Accept / Decline / Leave / SyncMember) ข้ามเครื่องผ่าน Photon Fusion Shared Mode
+    /// </summary>
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_PartySignal(int actionType, int partyId, PlayerRef senderRef, NetworkString<_32> senderName)
+    {
+        if (!_isSpawned || !Object.HasStateAuthority) return;
+        PartyManager.EnsureExists().HandleNetworkSignal((PartySignalAction)actionType, partyId, senderRef, senderName.ToString());
     }
 
     public void TeleportTo(Vector3 targetPosition)
@@ -2332,7 +2576,8 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler
             _bufferedUntil = -1f;
         }
 
-        if (_capsule != null) _capsule.SetBodyVisible(!dead);
+        // ในโหมด Co-op คงการมองเห็นตัวละครที่ล้มอยู่กับพื้นไว้เพื่อให้เพื่อนมองเห็นและเดินมากด [G] ค้างชุบชีวิตได้
+        if (_capsule != null) _capsule.SetBodyVisible(!dead || HasLivingAllyInRoom());
         _animationDriver?.SetDead(dead);
 
         DeathStateChanged?.Invoke(dead);

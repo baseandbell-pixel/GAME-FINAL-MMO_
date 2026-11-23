@@ -9,8 +9,25 @@ using UnityEngine.InputSystem;
 ///   - กดปุ่ม [E] เพื่อเก็บเข้ากระเป๋า InventoryManager.Local ทันทีพร้อมระบบนับเวลาสลายตัวอัตโนมัติ (90 วินาที)
 /// </summary>
 [DisallowMultipleComponent]
-public sealed class LocalPersonalLoot : MonoBehaviour
+public sealed class LocalPersonalLoot : MonoBehaviour, IWorldInteractable
 {
+    public InteractionChannel Channel => InteractionChannel.PickupOrChest;
+    public int PriorityBias => 0;
+    public float InteractionRange => _pickupRadius;
+    public Vector3 InteractionWorldPosition => transform.position;
+    public bool CanInteractNow(PlayerCombat player) => !IsCollected && Data != null;
+    public void ExecuteInteraction(PlayerCombat player) => TryPickup();
+
+    public string GetPromptLabel(PlayerCombat player)
+    {
+        string enhTag = EnhancementLevel > 0 ? $" +{EnhancementLevel}" : "";
+        return $"Pick up  {(Data != null ? Data.displayName : ItemId)}{enhTag}  x{Quantity}  [{SourceTag}]";
+    }
+
+    public Color GetPromptAccentColor(PlayerCombat player)
+    {
+        return Data != null ? ItemData.GetTierColor(Data.tier) : Color.white;
+    }
     // รายการไอเทมส่วนตัวแบบ Client-Local ทั้งหมดที่อยู่บนพื้นเครื่องนี้
     public static readonly List<LocalPersonalLoot> All = new List<LocalPersonalLoot>();
 
@@ -68,7 +85,9 @@ public sealed class LocalPersonalLoot : MonoBehaviour
         if (item == null || ItemRegistry.IsRemovedJunkItem(item.itemId)) return null;
 
         var go = new GameObject($"LocalPersonalLoot_{item.itemId}");
-        go.transform.position = new Vector3(position.x, Mathf.Max(0.05f, position.y), position.z);
+        // แนบไอเทมดรอปส่วนตัวเข้ากับความสูงพื้นผิวจริงของแผนที่ (ไม่จมเนินหรือลอยสูงบนภูมิประเทศต่างระดับ)
+        float groundY = SandboxWorldSpawner.SampleGroundY(position, position.y);
+        go.transform.position = new Vector3(position.x, groundY + 0.08f, position.z);
 
         var loot = go.AddComponent<LocalPersonalLoot>();
         loot.Initialize(item, Mathf.Max(1, quantity), Mathf.Max(0, enhancementLevel), Mathf.Max(10f, lifetimeSeconds), sourceTag);
@@ -112,11 +131,13 @@ public sealed class LocalPersonalLoot : MonoBehaviour
     private void OnEnable()
     {
         if (!All.Contains(this)) All.Add(this);
+        InteractionManager.Register(this);
     }
 
     private void OnDisable()
     {
         All.Remove(this);
+        InteractionManager.Unregister(this);
         if (s_promptItem == this) s_promptItem = null;
     }
 
@@ -176,17 +197,8 @@ public sealed class LocalPersonalLoot : MonoBehaviour
             _visual.Rotate(0f, _spinSpeed * Time.deltaTime, 0f, Space.World);
         }
 
+        // การกดปุ่ม [E] ถูกรวมศูนย์ไว้ที่ InteractionManager แล้ว (ป้องกันการเก็บของซ้อนเปิดกล่อง)
         RefreshPromptTarget();
-        if (s_promptItem != this) return;
-
-        // หากมี Networked WorldItem อยู่ใกล้กว่า ให้ตัวที่ใกล้กว่าเป็นคนรับปุ่ม [E]
-        if (WorldItem.IsAnyNetworkedItemCloserThan(s_closestDistance)) return;
-
-        var kb = Keyboard.current;
-        if (kb != null && kb.eKey.wasPressedThisFrame)
-        {
-            TryPickup();
-        }
     }
 
     private static void RefreshPromptTarget()
@@ -250,29 +262,7 @@ public sealed class LocalPersonalLoot : MonoBehaviour
         return true;
     }
 
-    private void OnGUI()
-    {
-        if (IsCollected || s_promptItem != this || Event.current.type != EventType.Repaint) return;
-        if (GameplayInput.IsBlocked) return;
-        if (WorldItem.IsAnyNetworkedItemCloserThan(s_closestDistance)) return;
-
-        string enhTag = EnhancementLevel > 0 ? $" +{EnhancementLevel}" : "";
-        string text = $"[E] Pick up  {(Data != null ? Data.displayName : ItemId)}{enhTag}  x{Quantity}  [{SourceTag}]";
-
-        var rect = new Rect(Screen.width * 0.5f - 205f, Screen.height * 0.72f, 410f, 30f);
-        var prev = GUI.color;
-        GUI.color = new Color(0.04f, 0.05f, 0.08f, 0.86f);
-        GUI.DrawTexture(rect, Texture2D.whiteTexture);
-        GUI.color = Data != null ? ItemData.GetTierColor(Data.tier) : Color.white;
-        var style = new GUIStyle(GUI.skin.label)
-        {
-            alignment = TextAnchor.MiddleCenter,
-            fontSize = 14,
-            fontStyle = FontStyle.Bold
-        };
-        GUI.Label(rect, text, style);
-        GUI.color = prev;
-    }
+    // ป้ายแจ้งเตือน [E] ย้ายไปวาดรวมบน uGUI Canvas กลางที่ InteractionPromptUI แล้ว (รองรับ 2K/4K และแก้ไขหน้าตาใน Unity Prefab ได้)
 
     private static float PlanarDistance(Vector3 a, Vector3 b)
     {

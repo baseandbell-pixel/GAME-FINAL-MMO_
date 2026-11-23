@@ -17,8 +17,10 @@ public class SafeZone : MonoBehaviour
 
     // รัศมีเขตปลอดภัย Comfort Zone (ขยายเป็น 12 เมตรสำหรับศูนย์กลางแผนที่ใหม่ขนาด 220x220 เมตร)
     [SerializeField] private float radius = 12.0f;
-    // ระยะชดเชยแนวดิ่งเมื่อวาร์ปผู้เล่นกลับเข้า Safe Zone (ปรับให้พอดีกับ Pivot ที่ปลายเท้าของ GreatSwordGirl)
+    // ระยะชดเชยแนวดิ่งเมื่อวาร์ปผู้เล่นกลับเข้า Safe Zone (ปรับให้พอดีกับ Pivot ที่ปลายเท้าของตัวละคร)
     [SerializeField] private Vector3 reconnectLocalOffset = new Vector3(0f, 0.05f, 0f);
+    // ปิดได้เมื่อวางทับเมืองจริง (เช่น FinalTestv1) เพื่อไม่ให้เสา/แผ่นดิสก์/ป้าย Primitive โผล่เกะกะกลางลานเมือง
+    [SerializeField] private bool createProceduralVisuals = true;
 
     public float Radius => radius;
     public Vector3 Center => transform.position;
@@ -29,7 +31,7 @@ public class SafeZone : MonoBehaviour
 
     private TextMeshPro _worldSign;
 
-    public static SafeZone EnsureAt(Vector3 position, float zoneRadius = 7.5f)
+    public static SafeZone EnsureAt(Vector3 position, float zoneRadius = 7.5f, Vector3? reconnectOffset = null, bool showProceduralVisuals = true)
     {
         if (Instance != null) return Instance;
         var existing = FindAnyObjectByType<SafeZone>();
@@ -40,11 +42,15 @@ public class SafeZone : MonoBehaviour
         }
 
         var go = new GameObject("ComfortSafeZone");
-        go.transform.position = new Vector3(position.x, 0f, position.z);
+        // คงค่าความสูง Y จริงของพื้นที่เมือง/ลานปลอดภัย (ไม่บังคับกดลง 0 เพื่อรองรับแผนที่ภูมิประเทศสูงต่ำ)
+        go.transform.position = position;
         var zone = go.AddComponent<SafeZone>();
         zone.radius = zoneRadius;
+        if (reconnectOffset.HasValue)
+            zone.reconnectLocalOffset = reconnectOffset.Value;
+        zone.createProceduralVisuals = showProceduralVisuals;
         zone.BuildVisuals();
-        Debug.Log($"[SafeZone] Created Comfort Zone (Safe Haven) at {go.transform.position}, radius={zoneRadius}m.");
+        Debug.Log($"[SafeZone] Created Comfort Zone (Safe Haven) at {go.transform.position}, radius={zoneRadius}m, visuals={showProceduralVisuals}.");
         return zone;
     }
 
@@ -66,13 +72,15 @@ public class SafeZone : MonoBehaviour
 
     private void BuildVisuals()
     {
-        if (transform.Find("SanctuaryFloor") != null) return;
-
-        // Non-blocking sphere trigger volume
+        // Non-blocking sphere trigger volume (สร้างไว้เสมอแม้ปิดโมเดล Primitive เพื่อให้ระบบตรวจ Safe Zone ทำงานครบ)
         var triggerCol = GetComponent<SphereCollider>();
         if (triggerCol == null) triggerCol = gameObject.AddComponent<SphereCollider>();
         triggerCol.isTrigger = true;
         triggerCol.radius = radius;
+
+        // ข้ามการสร้างพื้น/เสา/ป้าย Primitive เมื่อใช้เมืองจริงในแผนที่ (เช่น FinalTestv1)
+        if (!createProceduralVisuals) return;
+        if (transform.Find("SanctuaryFloor") != null) return;
 
         Color padColor = new Color(0.08f, 0.34f, 0.28f, 1f);
         Color rimColor = new Color(0.18f, 0.92f, 0.68f, 1f);

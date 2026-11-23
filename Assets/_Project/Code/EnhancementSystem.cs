@@ -29,34 +29,38 @@ public static class EnhancementSystem
         public int flatPrimaryGain;     // โบนัสสเตตัสหลักแบบจำนวนเต็มที่เพิ่มขึ้นต่อ 1 ขั้น (+1 ถึง +2)
     }
 
-    // ตารางค่าใช้จ่าย Gold พื้นฐานในแต่ละระดับ (+1 ถึง +10)
+    // โบนัส Pity (Failstack) ต่อการตีบวกพลาด 1 ครั้งบนอุปกรณ์ชิ้นนั้น (+6%/ครั้ง สูงสุด +60%) รีเซ็ตเป็น 0 เมื่อตีติด
+    public const float FailstackBonusPerFail = 0.06f;
+    public const float MaxFailstackBonus = 0.60f;
+
+    // ตารางค่าใช้จ่าย Gold พื้นฐานที่ปรับสมดุลใหม่ (+1 ถึง +10) ลดความตึงช่วง +7..+10 ให้ฟาร์มได้สนุกไม่ท้อ
     private static readonly int[] GoldCostTable =
     {
-        50,    // +0 -> +1
-        95,    // +1 -> +2
-        160,   // +2 -> +3
-        260,   // +3 -> +4
-        410,   // +4 -> +5
-        620,   // +5 -> +6
-        920,   // +6 -> +7
-        1350,  // +7 -> +8
-        1950,  // +8 -> +9
-        2800   // +9 -> +10
+        40,    // +0 -> +1
+        75,    // +1 -> +2
+        120,   // +2 -> +3
+        190,   // +3 -> +4
+        290,   // +4 -> +5
+        420,   // +5 -> +6
+        600,   // +6 -> +7
+        820,   // +7 -> +8
+        1100,  // +8 -> +9
+        1450   // +9 -> +10
     };
 
-    // ตารางโอกาสตีบวกสำเร็จพื้นฐานเมื่อใช้วัตถุดิบระดับเดียวกัน
+    // ตารางโอกาสตีบวกสำเร็จพื้นฐานที่ปรับสมดุลใหม่ (22% ที่ +9->+10 พร้อมระบบ Pity Failstack +6%/ครั้ง)
     private static readonly float[] SuccessRateTable =
     {
         1.00f, // +0 -> +1 (100%)
         0.95f, // +1 -> +2 (95%)
-        0.85f, // +2 -> +3 (85%)
-        0.72f, // +3 -> +4 (72%)
-        0.60f, // +4 -> +5 (60%)
-        0.48f, // +5 -> +6 (48%)
-        0.36f, // +6 -> +7 (36%)
-        0.26f, // +7 -> +8 (26%)
-        0.18f, // +8 -> +9 (18%)
-        0.12f  // +9 -> +10 (12%)
+        0.88f, // +2 -> +3 (88%)
+        0.78f, // +3 -> +4 (78%)
+        0.68f, // +4 -> +5 (68%)
+        0.58f, // +5 -> +6 (58%)
+        0.48f, // +6 -> +7 (48%)
+        0.38f, // +7 -> +8 (38%)
+        0.28f, // +8 -> +9 (28%)
+        0.22f  // +9 -> +10 (22%)
     };
 
     /// <summary>
@@ -90,7 +94,8 @@ public static class EnhancementSystem
         int idx = nextLvl - 1;
 
         int tierMultiplier = targetItem != null ? ((int)targetItem.tier + 1) : 1;
-        int goldCost = Mathf.RoundToInt(GoldCostTable[idx] * (0.75f + 0.25f * tierMultiplier));
+        // ตัวคูณราคาตาม Tier แบบสมดุล: Normal 1.00x, Rare 1.15x, Epic 1.30x, Legendary 1.45x
+        int goldCost = Mathf.RoundToInt(GoldCostTable[idx] * (0.85f + 0.15f * tierMultiplier));
 
         // จำนวนวัตถุดิบ: +1..+3 ใช้ 1 ชิ้น, +4..+7 ใช้ 2 ชิ้น, +8..+10 ใช้ 3 ชิ้น
         int fodderCount = nextLvl <= 3 ? 1 : (nextLvl <= 7 ? 2 : 3);
@@ -117,14 +122,28 @@ public static class EnhancementSystem
     }
 
     /// <summary>
-    /// คำนวณอัตราความสำเร็จ (%) แบบไดนามิกตามระดับความหายากของวัตถุดิบที่เลือกเทียบกับอุปกรณ์เป้าหมาย
+    /// คืนค่าโบนัสโอกาสตีบวกจากระบบ Pity (Failstack) ตามจำนวนครั้งที่ตีพลาดสะสม (+6% ต่อครั้ง สูงสุด +60%)
     /// </summary>
-    public static float CalculateDynamicSuccessRate(ItemData targetItem, int currentEnhancementLevel, IReadOnlyList<ItemData> selectedFodderItems)
+    public static float GetFailstackBonus(int failStacks)
+    {
+        if (failStacks <= 0) return 0f;
+        return Mathf.Clamp(failStacks * FailstackBonusPerFail, 0f, MaxFailstackBonus);
+    }
+
+    /// <summary>
+    /// คำนวณอัตราความสำเร็จ (%) แบบไดนามิกตามระดับความหายากของวัตถุดิบที่เลือกเทียบกับอุปกรณ์เป้าหมาย + โบนัส Pity Failstack
+    /// </summary>
+    public static float CalculateDynamicSuccessRate(
+        ItemData targetItem,
+        int currentEnhancementLevel,
+        IReadOnlyList<ItemData> selectedFodderItems,
+        int failStacks = 0)
     {
         var spec = GetNextSpec(targetItem, currentEnhancementLevel);
         float baseRate = spec.successRate;
+        float pityBonus = GetFailstackBonus(failStacks);
         if (targetItem == null || selectedFodderItems == null || selectedFodderItems.Count == 0)
-            return baseRate;
+            return Mathf.Clamp(baseRate + pityBonus, 0.05f, 1.00f);
 
         // คำนวณตัวคูณเฉลี่ยจากส่วนต่างระดับ (Tier Gap) ของวัตถุดิบทุกชิ้นที่ใส่เข้ามา
         float sumFactor = 0f;
@@ -162,9 +181,9 @@ public static class EnhancementSystem
             sumFactor += factor;
         }
 
-        if (validCount == 0) return baseRate;
+        if (validCount == 0) return Mathf.Clamp(baseRate + pityBonus, 0.05f, 1.00f);
         float avgFactor = sumFactor / validCount;
-        return Mathf.Clamp(baseRate * avgFactor, 0.05f, 1.00f);
+        return Mathf.Clamp(baseRate * avgFactor + pityBonus, 0.05f, 1.00f);
     }
 
     /// <summary>

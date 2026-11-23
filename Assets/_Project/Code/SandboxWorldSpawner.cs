@@ -101,6 +101,9 @@ public class SandboxWorldSpawner : MonoBehaviour
     [Header("Comfort Safe Zone (South-Central Hub - Non-Combat & Reconnect Anchor)")]
     [SerializeField] private Vector3 safeZoneCenter = new Vector3(0f, 0f, -60f);
     [Min(3f)] [SerializeField] private float safeZoneRadius = 12.0f;
+    // ระยะชดเชยจุดเกิดกลับเข้าเมืองปลอดภัยและตัวเลือกปิดเสา/แผ่นดิสก์ Primitive บนแผนที่จริง
+    [SerializeField] private Vector3 safeZoneReconnectOffset = new Vector3(0f, 0.05f, 0f);
+    [SerializeField] private bool showProceduralSafeZoneVisuals = true;
 
     [Header("Loot & Camp Clear Reward")]
     [SerializeField] private WorldItem itemPrefab;
@@ -112,6 +115,7 @@ public class SandboxWorldSpawner : MonoBehaviour
 
     [Header("Sandbox collision test geometry")]
     [SerializeField] private bool createTestObstacles = true;
+    [SerializeField] private bool createBossArenaGeometry = true;
 
     // ---- Public Inspection & Phase 2 UI Hooks ----
     public IReadOnlyList<CampRuntimeState> Camps => _camps;
@@ -157,15 +161,59 @@ public class SandboxWorldSpawner : MonoBehaviour
     private bool _wasSharedModeMasterClient;
     private float _nextAuthoritySweepAt;
 
+    private static readonly RaycastHit[] s_sampleGroundHits = new RaycastHit[32];
+
+    /// <summary>
+    /// ยิง Raycast ลงแนวดิ่งเพื่อหาความสูงพื้นผิวภูมิประเทศจริง (Terrain / Static Mesh Collider) ที่ตำแหน่ง XZ ที่ระบุ
+    /// เลือกจุดกระทบที่ใกล้ค่า fallbackY ที่สุด เพื่อป้องกันการดีดขึ้นไปบนยอดต้นไม้หรือหลังคาสิ่งปลูกสร้าง และข้ามผิวน้ำ
+    /// </summary>
+    public static float SampleGroundY(Vector3 worldXZ, float fallbackY = 0f)
+    {
+        float originY = Mathf.Max(fallbackY + 25f, 120f);
+        Vector3 origin = new Vector3(worldXZ.x, originY, worldXZ.z);
+        int count = Physics.RaycastNonAlloc(origin, Vector3.down, s_sampleGroundHits, originY + 200f, ~0, QueryTriggerInteraction.Ignore);
+
+        bool found = false;
+        float bestY = fallbackY;
+        float bestDelta = float.MaxValue;
+
+        for (int i = 0; i < count; i++)
+        {
+            RaycastHit h = s_sampleGroundHits[i];
+            Collider col = h.collider;
+            if (col == null || h.normal.y < 0.45f) continue;
+            if (col.attachedRigidbody != null) continue;
+            if (col.GetComponentInParent<PlayerCombat>() != null) continue;
+            if (col.GetComponentInParent<EnemyNPC>() != null) continue;
+            if (col.GetComponentInParent<LootChest>() != null) continue;
+            if (col.GetComponentInParent<WorldItem>() != null) continue;
+            if (col.GetComponentInParent<LocalPersonalLoot>() != null) continue;
+            if (col.name.IndexOf("Water", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+
+            float delta = Mathf.Abs(h.point.y - fallbackY);
+            if (!found || delta < bestDelta)
+            {
+                bestDelta = delta;
+                bestY = h.point.y;
+                found = true;
+            }
+        }
+
+        return found ? bestY : fallbackY;
+    }
+
     private void Awake()
     {
         Instance = this;
         PlayerSaveManager.EnsureExists();
-        SafeZone.EnsureAt(safeZoneCenter, safeZoneRadius);
+        SafeZone.EnsureAt(safeZoneCenter, safeZoneRadius, safeZoneReconnectOffset, showProceduralSafeZoneVisuals);
         InitializeCampDefinitions();
         if (createTestObstacles)
         {
             CreateTestObstacles();
+        }
+        if (createBossArenaGeometry)
+        {
             CreateBossArenaGeometry();
         }
     }
@@ -410,14 +458,15 @@ public class SandboxWorldSpawner : MonoBehaviour
         LootDropSystem.AnalyzeDamageContribution(
             ledger,
             PlayerRef.None,
+            isBoss,
             out float totalDamage,
             out PlayerRef topDps,
             out List<PlayerRef> participants);
 
         if (participants.Count == 0 || totalDamage <= 0f) return string.Empty;
 
-        var sb = new StringBuilder(64);
-        // เรียงผู้ทำดาเมจจากมากไปน้อยก่อนประกอบข้อความ เพื่อรับประกันว่าไม่เกินขีดจำกัด 64 ตัวอักษรของ NetworkString<_64>
+        var sb = new StringBuilder(128);
+        // เรียงผู้ทำดาเมจจากมากไปน้อยก่อนประกอบข้อความ รองรับผู้เล่นสูงสุด 10 คนภายใน NetworkString<_128>
         participants.Sort((a, b) =>
         {
             float da = ledger.TryGetValue(a, out float va) ? va : 0f;
@@ -434,7 +483,7 @@ public class SandboxWorldSpawner : MonoBehaviour
             int topFlag = p == topDps ? 1 : 0;
             string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{share.ToString("0.##", CultureInfo.InvariantCulture)}:{topFlag}";
             int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
-            if (sb.Length + needed > 62) break;
+            if (sb.Length + needed > 124) break;
 
             if (sb.Length > 0) sb.Append(';');
             sb.Append(token);

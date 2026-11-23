@@ -310,6 +310,31 @@ public class MinimapUI : MonoBehaviour
                 float halfW = Mathf.Max(1f, _viewRect.rect.width * 0.5f);
                 float halfH = Mathf.Max(1f, _viewRect.rect.height * 0.5f);
                 Vector2 norm = new Vector2(localPt.x / halfW, localPt.y / halfH);
+
+                // ตรวจสอบว่าคลิกโดนไอคอนหินเทเลพอร์ต (Waystone) บน World Map หรือไม่ -> ถ้าปลดล็อกแล้ววาร์ปทันที!
+                Vector3 clickedWorld = new Vector3(
+                    _map.Focus.x + Mathf.Clamp(norm.x, -1f, 1f) * _map.CurrentRadius,
+                    0f,
+                    _map.Focus.z + Mathf.Clamp(norm.y, -1f, 1f) * _map.CurrentRadius);
+                float hitRadius = Mathf.Max(32f, _map.CurrentRadius * 0.055f);
+                TeleportWaystone hitWaystone = TeleportWaystone.FindNearestToWorldPoint(clickedWorld, hitRadius);
+                if (hitWaystone != null)
+                {
+                    if (hitWaystone.IsUnlocked)
+                    {
+                        TeleportWaystone.TryFastTravelTo(hitWaystone, out _);
+                    }
+                    else
+                    {
+                        _map.SetWaypoint(hitWaystone.transform.position);
+                        PlayerStatusHud.Instance?.ShowToast(
+                            $"Waystone '{hitWaystone.DisplayName}' is locked — Waypoint pinned! Walk there and press [E] to attune.",
+                            new Color(1f, 0.82f, 0.30f),
+                            3.0f);
+                    }
+                    return;
+                }
+
                 _map.SetWaypointFromNormalizedMapClick(norm);
             }
         }
@@ -647,6 +672,24 @@ public class MinimapUI : MonoBehaviour
                 irt.sizeDelta = worldMode ? new Vector2(24f, 24f) : new Vector2(15f, 15f);
                 w.label.color = UITheme.JadeAccent;
                 lrt.anchoredPosition = new Vector2(0f, 26f);
+                break;
+
+            case MarkerKind.WaystoneUnlocked:
+                w.icon.sprite = HudIcons.GetSprite("diamond");
+                w.icon.color = new Color(0.24f, 0.98f, 0.80f, 1f);
+                irt.sizeDelta = worldMode ? new Vector2(22f, 22f) : new Vector2(14f, 14f);
+                w.label.color = new Color(0.38f, 1.00f, 0.84f, 1f);
+                lrt.anchoredPosition = new Vector2(0f, 22f);
+                showLabel = worldMode;
+                break;
+
+            case MarkerKind.WaystoneLocked:
+                w.icon.sprite = HudIcons.GetSprite("diamond");
+                w.icon.color = new Color(0.62f, 0.68f, 0.78f, 0.85f);
+                irt.sizeDelta = worldMode ? new Vector2(17f, 17f) : new Vector2(11f, 11f);
+                w.label.color = new Color(0.75f, 0.80f, 0.88f, 0.9f);
+                lrt.anchoredPosition = new Vector2(0f, 20f);
+                showLabel = worldMode;
                 break;
 
             case MarkerKind.Waypoint:

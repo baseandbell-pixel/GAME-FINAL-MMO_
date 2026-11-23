@@ -113,6 +113,14 @@ public class MonsterEnemyNPC : EnemyNPC
     [SerializeField] private float bossSlamDamageMultiplier = 1.55f;
     [Tooltip("สัดส่วนเลือดที่จะกระตุ้น Phase 2 Enrage (0.50 = ต่ำกว่า 50%)")]
     [Range(0.15f, 0.80f)] [SerializeField] private float bossEnrageHpFraction = 0.50f;
+    [Tooltip("คูลดาวน์ท่าฟาดกวาดรอบตัว 360° Cleave ของบอส (อยู่กับที่ ทำงานใน Phase 2 หรือเมื่อมีผู้เล่นอ้อมตีด้านหลัง)")]
+    [SerializeField] private float bossCleaveCooldown = 10.5f;
+    [Tooltip("เวลาแสดงวงแดงเตือนก่อนบอสฟาดกวาด 360° (วินาที — กลิ้งหลบหรือกด [F] Perfect Parry ได้)")]
+    [SerializeField] private float bossCleaveTelegraphSeconds = 0.85f;
+    [Tooltip("รัศมีวงกวาดรอบตัว 360° Cleave ของบอส (เมตร)")]
+    [SerializeField] private float bossCleaveRadius = 5.20f;
+    [Tooltip("ตัวคูณดาเมจท่าฟาดกวาดรอบตัว 360° Cleave ของบอส")]
+    [SerializeField] private float bossCleaveDamageMultiplier = 1.30f;
 
     [Header("7. การตรวจสอบ (Debug)")]
     [SerializeField] private bool verboseLogs = false;
@@ -171,6 +179,7 @@ public class MonsterEnemyNPC : EnemyNPC
     private float _lastDamageDealtToPlayerStamp = -100f;
     private float _nextAttackAt;
     private float _nextBossSlamAt;
+    private float _nextBossCleaveAt;
     private float _nextLungeAllowedAt;
     private float _attackLockUntil;
     private float _hitFlinchUntil;
@@ -190,6 +199,7 @@ public class MonsterEnemyNPC : EnemyNPC
     private bool _listenersWired;
     private bool _speciesStatsApplied;
     private bool _lootDropped;
+    private bool _zoneLedgerMerged;
     private bool _capturedInitialScale;
     private Vector3 _initialPrefabScale = Vector3.one;
     private int _avoidDirSign;
@@ -254,6 +264,7 @@ public class MonsterEnemyNPC : EnemyNPC
 
         _speciesStatsApplied = false;
         _lootDropped = false;
+        _zoneLedgerMerged = false;
         _lastKnownAttacker = null;
 
         if (Object.HasStateAuthority && IsConfiguredAsBoss)
@@ -517,6 +528,9 @@ public class MonsterEnemyNPC : EnemyNPC
         {
             _bossTickArgs[0] = dt;
             BaseTickBossCombatAndRegenMethod.Invoke(this, _bossTickArgs);
+            // เมื่อบอสฟื้นฟูเลือดกลับเต็ม 100% หลังจบไฟต์ ให้ปลดสถานะ Enrage กลับเป็นปกติ
+            if (IsEnragedNet && CurrentHealth >= MaxHealth && State != NpcState.Chasing && State != NpcState.Attacking)
+                IsEnragedNet = false;
         }
 
         // 1. Staggered (from Friend's Perfect Parry -> NpcState.Staggered)
@@ -699,8 +713,16 @@ public class MonsterEnemyNPC : EnemyNPC
         PlayerCombat target = ResolveCurrentTarget();
         if (target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target))
         {
-            BeginReturnAuthority();
-            return;
+            // สำหรับบอสในโหมด Co-op: หากเป้าหมายหลักตายหรือเข้า Safe Zone ให้สลับไปหาผู้ร่วมสู้คนถัดไปที่ยังมีชีวิตก่อน (ไม่ยกเลิกไฟต์และไม่รีเซ็ตเลือด)
+            if (IsBoss && TrySwitchBossTargetLocal(out PlayerCombat nextTarget))
+            {
+                target = nextTarget;
+            }
+            else
+            {
+                BeginReturnAuthority();
+                return;
+            }
         }
 
         // Strict Anti-Slide: NEVER move feet while Attack or Hit_React animation is still playing!
@@ -760,8 +782,16 @@ public class MonsterEnemyNPC : EnemyNPC
         PlayerCombat target = ResolveCurrentTarget();
         if (target == null || target.IsDead || SafeZone.IsPlayerInAnySafeZone(target))
         {
-            BeginReturnAuthority();
-            return;
+            // สำหรับบอสในโหมด Co-op: สลับเป้าหมายไปยังผู้ร่วมสู้คนอื่นที่ยังมีชีวิตในลานบอสแทนการยกเลิกไฟต์
+            if (IsBoss && TrySwitchBossTargetLocal(out PlayerCombat nextTarget))
+            {
+                target = nextTarget;
+            }
+            else
+            {
+                BeginReturnAuthority();
+                return;
+            }
         }
 
         // Strict Anti-Slide: plant feet until Attack, Boss Slam & Hit_React finish completely!
@@ -783,6 +813,14 @@ public class MonsterEnemyNPC : EnemyNPC
             return;
 
         MonsterArchetype arch = GetArchetype();
+
+        if (IsBoss && !IsGuarding && !IsStunnedNet && !_isBossSlamming &&
+            Time.time >= _nextBossCleaveAt &&
+            ((IsEnragedNet && dist <= bossCleaveRadius) || HasPlayerFlankingBehind(bossCleaveRadius)))
+        {
+            StartBossCleaveAuthority();
+            return;
+        }
 
         if (IsBoss && !IsGuarding && !IsStunnedNet && !_isBossSlamming && Time.time >= _nextBossSlamAt)
         {
@@ -891,6 +929,13 @@ public class MonsterEnemyNPC : EnemyNPC
 
     private void TickReturningAuthority(float dt)
     {
+        // สำหรับบอส: หากระหว่างเดินกลับยังมีผู้ร่วมสู้ที่ยังมีชีวิตอยู่ในลานบอส ให้หันกลับไปสู้ต่อทันที
+        if (IsBoss && CountActiveBossParticipants() > 0 && TrySwitchBossTargetLocal(out _))
+        {
+            State = NpcState.Chasing;
+            return;
+        }
+
         if (IsMovementAnimationLocked()) return;
 
         float remaining = MoveTowardsLocal(HomePosition, returnMoveSpeed, dt);
@@ -921,13 +966,54 @@ public class MonsterEnemyNPC : EnemyNPC
 
     private void FinishReturnHome()
     {
-        CurrentHealth = MaxHealth;
+        // มอนสเตอร์ทั่วไปรีเซ็ตเลือดเต็มเมื่อกลับถึงจุดเกิด ส่วนบอสปล่อยให้ระบบ Boss 10s Cooldown + Gradual Regen (+25%/3s) ของ EnemyNPC จัดการ
+        if (!IsBoss)
+        {
+            CurrentHealth = MaxHealth;
+            if (IsEnragedNet) IsEnragedNet = false;
+        }
         TargetId = default;
-        if (IsEnragedNet) IsEnragedNet = false;
         _consecutiveHits = 0;
         _returnStuckTimer = 0f;
         _idleTimer = Random.Range(personalIdleWait.x, personalIdleWait.y);
         State = NpcState.Idle;
+    }
+
+    /// <summary>
+    /// ค้นหาผู้เล่นที่ยังมีชีวิตและอยู่นอก Safe Zone ภายในลานบอส เพื่อสลับเป้าหมายในโหมด Co-op โดยไม่รีเซ็ตเลือดบอส
+    /// </summary>
+    private bool TrySwitchBossTargetLocal(out PlayerCombat nextTarget)
+    {
+        nextTarget = null;
+        if (!IsBoss) return false;
+
+        ResolveBossArenaBounds(out Vector3 arenaCenter, out float arenaRadius);
+        float limit = Mathf.Max(personalLeashRadius, arenaRadius + 4.0f);
+        float bestScore = float.NegativeInfinity;
+
+        for (int i = 0; i < PlayerCombat.All.Count; i++)
+        {
+            var p = PlayerCombat.All[i];
+            if (p == null || !p.IsSpawned || p.IsDead || SafeZone.IsPlayerInAnySafeZone(p)) continue;
+            if (PlanarDistance(p.transform.position, arenaCenter) > limit) continue;
+
+            PlayerRef pRef = p.Object != null && p.Object.IsValid ? p.Object.StateAuthority : PlayerRef.None;
+            float share = pRef != PlayerRef.None ? GetPlayerDamageShare(pRef) : 0f;
+            float dist = PlanarDistance(transform.position, p.transform.position);
+            float score = (share * 500f) - dist;
+            if (score > bestScore)
+            {
+                bestScore = score;
+                nextTarget = p;
+            }
+        }
+
+        if (nextTarget != null)
+        {
+            TargetId = nextTarget.Object.Id;
+            return true;
+        }
+        return false;
     }
 
     private void BeginReturnAuthority()
@@ -1021,6 +1107,102 @@ public class MonsterEnemyNPC : EnemyNPC
         }
 
         yield return new WaitForSeconds(0.55f);
+        _isBossSlamming = false;
+        _bossSlamRoutine = null;
+    }
+
+    // ------------------------------------------------------------------ Boss Stationary 360° Cleave (Phase 2 / Anti-Backhug, Parryable & Zero Wall-Clip)
+
+    private bool HasPlayerFlankingBehind(float maxRadius)
+    {
+        for (int i = 0; i < PlayerCombat.All.Count; i++)
+        {
+            var p = PlayerCombat.All[i];
+            if (p == null || !p.IsSpawned || p.IsDead || SafeZone.IsPlayerInAnySafeZone(p)) continue;
+            Vector3 toP = p.transform.position - transform.position;
+            toP.y = 0f;
+            float d = toP.magnitude;
+            if (d > 0.2f && d <= maxRadius)
+            {
+                if (Vector3.Dot(transform.forward, toP / d) < -0.15f)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>ตัวช่วยทดสอบใน Play Mode: สั่งให้บอสออกท่า 360° Cleave ทันทีบน State Authority</summary>
+    public bool TryTriggerBossCleaveForTest()
+    {
+        if (!IsSpawned || !Object.HasStateAuthority || !IsAlive || !IsBoss || _isBossSlamming) return false;
+        StartBossCleaveAuthority();
+        return true;
+    }
+
+    private void StartBossCleaveAuthority()
+    {
+        if (!IsAlive || !IsBoss || _isBossSlamming) return;
+        if (_swingRoutine != null) { StopCoroutine(_swingRoutine); _swingRoutine = null; _isSwinging = false; }
+        if (_bossSlamRoutine != null) StopCoroutine(_bossSlamRoutine);
+
+        _isBossSlamming = true;
+        float cd = IsEnragedNet ? Mathf.Max(6.5f, bossCleaveCooldown * 0.78f) : bossCleaveCooldown;
+        _nextBossCleaveAt = Time.time + cd;
+        // เว้นระยะห่างจาก Slam อย่างน้อย 3.8 วินาที เพื่อไม่ให้บอสออกท่าใหญ่ 2 ท่าติดกันจนผู้เล่นหนีไม่ทัน
+        _nextBossSlamAt = Mathf.Max(_nextBossSlamAt, Time.time + 3.8f);
+        _nextAttackAt = Time.time + bossCleaveTelegraphSeconds + 0.85f;
+        _hyperArmorUntil = Time.time + bossCleaveTelegraphSeconds + 0.50f;
+
+        Vector3 groundCenter = transform.position;
+        SnapToGround(ref groundCenter, searchUp: 3.0f, searchDown: 12.0f);
+        _bossSlamRoutine = StartCoroutine(BossCleaveAuthorityRoutine(groundCenter));
+    }
+
+    private IEnumerator BossCleaveAuthorityRoutine(Vector3 groundCenter)
+    {
+        float telegraphDur = IsEnragedNet ? Mathf.Max(0.70f, bossCleaveTelegraphSeconds * 0.90f) : bossCleaveTelegraphSeconds;
+        RPC_BossCleaveTelegraph(groundCenter, bossCleaveRadius, telegraphDur);
+
+        // ยิงแสงเตือน Parry Glint ช่วง 0.22 วินาทีสุดท้ายก่อนฟาดกวาด เพื่อให้ผู้เล่นกด [F] Perfect Parry สวนได้จริง
+        float glintLead = Mathf.Clamp(parryTelegraphLeadTime, 0.16f, Mathf.Max(0.16f, telegraphDur - 0.15f));
+        float glintAt = Time.time + Mathf.Max(0f, telegraphDur - glintLead);
+        bool glintSent = false;
+
+        float endAt = Time.time + telegraphDur;
+        while (Time.time < endAt && IsAlive && !IsStunnedNet && State != NpcState.Staggered)
+        {
+            if (!glintSent && Time.time >= glintAt)
+            {
+                glintSent = true;
+                RPC_MonsterParryTelegraph(glintLead, isHeavyBrute: true);
+            }
+            yield return null;
+        }
+
+        if (IsAlive && !IsStunnedNet && State != NpcState.Staggered && Object != null && Object.IsValid && Object.HasStateAuthority)
+        {
+            RPC_BossCleaveImpact(groundCenter, bossCleaveRadius);
+
+            int rawCleave = Mathf.RoundToInt(AttackDamage * bossCleaveDamageMultiplier);
+            int cleaveDmg = Mathf.Min(rawCleave, AttackDamage * 2);
+            _lastDamageDealtToPlayerStamp = Time.time;
+
+            for (int i = 0; i < PlayerCombat.All.Count; i++)
+            {
+                PlayerCombat p = PlayerCombat.All[i];
+                if (p == null || !p.IsSpawned || p.IsDead) continue;
+                if (SafeZone.IsPlayerInAnySafeZone(p)) continue;
+
+                // ฟาดกวาดรอบตัว 360° ภายในรัศมี bossCleaveRadius (หลบด้วย Ctrl, บล็อก หรือ Perfect Parry ด้วย [F] ได้!)
+                float dist = PlanarDistance(transform.position, p.transform.position);
+                if (dist <= bossCleaveRadius)
+                {
+                    p.RPC_ReceiveNpcDamage(Object.Id, cleaveDmg);
+                }
+            }
+        }
+
+        yield return new WaitForSeconds(0.50f);
         _isBossSlamming = false;
         _bossSlamRoutine = null;
     }
@@ -1144,7 +1326,8 @@ public class MonsterEnemyNPC : EnemyNPC
             CurrentHealth <= Mathf.RoundToInt(MaxHealth * bossEnrageHpFraction))
         {
             IsEnragedNet = true;
-            _nextBossSlamAt = Mathf.Min(_nextBossSlamAt, Time.time + 1.8f);
+            _nextBossSlamAt = Mathf.Min(_nextBossSlamAt, Time.time + 2.2f);
+            _nextBossCleaveAt = Mathf.Min(_nextBossCleaveAt, Time.time + 1.4f);
             RPC_BossEnrageFeedback();
         }
 
@@ -1230,7 +1413,11 @@ public class MonsterEnemyNPC : EnemyNPC
         _deathStamp = Time.time;
         StopAllCombatRoutines();
 
-        PlayerCombat killer = _lastKnownAttacker ?? ResolveCurrentTarget() ?? FindLikelyAttacker(12f);
+        // ลบ FindLikelyAttacker(12f) ทิ้ง เพื่อป้องกันคนยืนดูเฉยๆ (Bystander) ได้สิทธิ์ของดรอปหรือทองฟรี
+        PlayerCombat killer = _lastKnownAttacker ?? ResolveCurrentTarget();
+
+        // รวมตารางดาเมจของมอนตัวนี้เข้า Zone Ledger บนทุกเครื่อง (Host-Migration Safe: หาก Host หลุดกลางแคมป์ MasterClient คนใหม่จะยังมีข้อมูลครบ)
+        MergeMonsterDamageIntoZoneLedgerOnce(killer);
 
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
         {
@@ -1258,14 +1445,14 @@ public class MonsterEnemyNPC : EnemyNPC
     }
 
     /// <summary>
-    /// On State Authority, merges this dying monster's <see cref="EnemyNPC.DamageDealtMap"/> into its
-    /// <see cref="MonsterSpawnZone"/> damage ledger and, if this was the last living monster in the zone,
-    /// broadcasts the compact contributor payload to all peers so their LootChest unlocks for real participants!
+    /// รวมยอดดาเมจของมอนสเตอร์ที่เพิ่งตายเข้าตาราง Zone Ledger เพียงครั้งเดียวต่อเครื่อง (รองรับทั้ง Authority และ Remote Peer เพื่อกัน Host Migration)
     /// </summary>
-    private void RecordAndCheckZoneClearOnAuthority(PlayerCombat fallbackKiller)
+    private void MergeMonsterDamageIntoZoneLedgerOnce(PlayerCombat fallbackKiller)
     {
+        if (_zoneLedgerMerged) return;
         int sig = ZoneSignature;
         if (sig == 0) return;
+        _zoneLedgerMerged = true;
 
         bool recordedAny = false;
         IReadOnlyDictionary<PlayerRef, float> dmgMap = DamageDealtMap;
@@ -1281,7 +1468,7 @@ public class MonsterEnemyNPC : EnemyNPC
             }
         }
 
-        // Fallback for edge cases (e.g. instant/scripted kill without DamageDealtMap entry)
+        // เฉพาะกรณีพิเศษที่ไม่มีบันทึกใน DamageDealtMap จริงๆ (เช่น สั่งฆ่าในการทดสอบ) และรู้ตัวผู้โจมตีชัดเจนเท่านั้น
         if (!recordedAny && fallbackKiller != null && fallbackKiller.IsSpawned)
         {
             PlayerRef killerRef = PlayerRef.None;
@@ -1293,6 +1480,19 @@ public class MonsterEnemyNPC : EnemyNPC
             if (killerRef != PlayerRef.None)
                 MonsterSpawnZone.RecordZoneDamageFromAuthority(sig, killerRef, Mathf.Max(1f, ScaledMaxHealth));
         }
+    }
+
+    /// <summary>
+    /// On State Authority, merges this dying monster's <see cref="EnemyNPC.DamageDealtMap"/> into its
+    /// <see cref="MonsterSpawnZone"/> damage ledger and, if this was the last living monster in the zone,
+    /// broadcasts the compact contributor payload to all peers so their LootChest unlocks for real participants!
+    /// </summary>
+    private void RecordAndCheckZoneClearOnAuthority(PlayerCombat fallbackKiller)
+    {
+        int sig = ZoneSignature;
+        if (sig == 0) return;
+
+        MergeMonsterDamageIntoZoneLedgerOnce(fallbackKiller);
 
         // Check if any other monster in this same MonsterSpawnZone is still alive
         for (int i = 0; i < EnemyNPC.All.Count; i++)
@@ -1303,7 +1503,7 @@ public class MonsterEnemyNPC : EnemyNPC
                 return;
         }
 
-        string payload = MonsterSpawnZone.BuildZoneContributorPayload(sig);
+        string payload = MonsterSpawnZone.BuildZoneContributorPayload(sig, IsBoss);
         RPC_NotifyMonsterZoneCleared(sig, payload);
     }
 
@@ -1323,7 +1523,7 @@ public class MonsterEnemyNPC : EnemyNPC
         MonsterSystemManager mgr = MonsterSystemManager.Active;
         float dropRateMult = mgr != null ? Mathf.Max(0f, mgr.globalDropRateMultiplier) : 1.0f;
 
-        // 1. Optional Gold Drop (0% = disabled by default)
+        // 1. แจก Gold รายตัวจากมอนสเตอร์ผ่าน Targeted RPC ให้ผู้เล่นที่มีส่วนร่วมทำดาเมจจริงทุกคน (แก้บั๊ก Remote Client ไม่ได้รับทองใน Shared Mode)
         if (cfg.goldDropChancePercent > 0f && dropRateMult > 0f)
         {
             float effectiveGoldChance = Mathf.Clamp(cfg.goldDropChancePercent * dropRateMult, 0f, 100f);
@@ -1331,14 +1531,32 @@ public class MonsterEnemyNPC : EnemyNPC
             {
                 int minG = Mathf.Min(cfg.minGold, cfg.maxGold);
                 int maxG = Mathf.Max(cfg.minGold, cfg.maxGold);
-                int goldAmount = Random.Range(minG, maxG + 1);
-                if (goldAmount > 0)
+                int baseGoldAmount = Random.Range(minG, maxG + 1);
+                if (baseGoldAmount > 0)
                 {
-                    PlayerCombat killer = _lastKnownAttacker ?? ResolveCurrentTarget() ?? FindLikelyAttacker(12f);
-                    if (killer != null && killer.IsSpawned)
+                    PlayerRef fallbackKillerRef = ResolveKillerPlayerRefStrict();
+                    LootDropSystem.AnalyzeDamageContribution(
+                        DamageDealtMap,
+                        fallbackKillerRef,
+                        IsBoss,
+                        out float totalDmg,
+                        out _,
+                        out List<PlayerRef> eligiblePlayers);
+
+                    string cleanSource = string.IsNullOrWhiteSpace(cfg.monsterName) ? name : cfg.monsterName;
+                    if (cleanSource.Length > 28) cleanSource = cleanSource.Substring(0, 28);
+
+                    for (int pIdx = 0; pIdx < eligiblePlayers.Count; pIdx++)
                     {
-                        killer.AddGold(goldAmount, name);
-                        if (verboseLogs) Debug.Log($"[MonsterEnemyNPC] {name} awarded {goldAmount}G to {killer.name}.");
+                        PlayerRef targetRef = eligiblePlayers[pIdx];
+                        if (targetRef == PlayerRef.None) continue;
+
+                        float dealt = (DamageDealtMap != null && DamageDealtMap.TryGetValue(targetRef, out float d)) ? d : totalDmg;
+                        float share = totalDmg > 0f ? Mathf.Clamp01(dealt / totalDmg) : 1f;
+                        // ผู้ร่วมตีทุกคนที่ผ่านเกณฑ์ได้รับ Gold อย่างน้อย 65% ถึง 100% ตามสัดส่วนดาเมจ (Solo = 100%)
+                        int award = Mathf.Max(1, Mathf.RoundToInt(baseGoldAmount * Mathf.Lerp(0.65f, 1.0f, share)));
+                        RPC_GrantMonsterGold(targetRef, award, cleanSource);
+                        if (verboseLogs) Debug.Log($"[MonsterEnemyNPC] {name} sent Targeted Gold RPC ({award}G) to {targetRef} (share={share * 100f:0}%).");
                     }
                 }
             }
@@ -1416,31 +1634,30 @@ public class MonsterEnemyNPC : EnemyNPC
             transform.position.z + Mathf.Sin(angle) * radius);
 
         Vector3 dropPos = ResolveLootGroundPoint(candidate);
-        WorldItem.Spawn(Runner, worldItemPrefab, dropPos, entry.item, qty);
+        // ผูกสิทธิ์เจ้าของไอเทม (AllowedLooter) ให้ Top DPS จาก DamageDealtMap (ไม่ใช้ FindLikelyAttacker 12m เพื่อกันคนยืนดูได้ของฟรี)
+        PlayerRef killerRef = ResolveTopDpsPlayerRefStrict();
+
+        WorldItem.Spawn(Runner, worldItemPrefab, dropPos, entry.item, qty, allowedLooter: killerRef);
+    }
+
+    private PlayerRef ResolveKillerPlayerRefStrict()
+    {
+        PlayerCombat killer = _lastKnownAttacker ?? ResolveCurrentTarget();
+        if (killer != null && killer.IsSpawned && killer.Object != null && killer.Object.IsValid)
+            return killer.Object.StateAuthority != PlayerRef.None ? killer.Object.StateAuthority : killer.Object.InputAuthority;
+        return PlayerRef.None;
+    }
+
+    private PlayerRef ResolveTopDpsPlayerRefStrict()
+    {
+        PlayerRef fallback = ResolveKillerPlayerRefStrict();
+        LootDropSystem.AnalyzeDamageContribution(DamageDealtMap, fallback, IsBoss, out _, out PlayerRef topDps, out _);
+        return topDps != PlayerRef.None ? topDps : fallback;
     }
 
     private Vector3 ResolveLootGroundPoint(Vector3 candidate)
     {
-        Vector3 origin = new Vector3(candidate.x, candidate.y + 3.0f, candidate.z);
-        int count = Physics.RaycastNonAlloc(origin, Vector3.down, s_monsterCastBuf, 14.0f, ~0, QueryTriggerInteraction.Ignore);
-        float bestY = float.MinValue;
-        bool found = false;
-
-        for (int i = 0; i < count; i++)
-        {
-            RaycastHit h = s_monsterCastBuf[i];
-            if (h.collider == null || h.collider == BodyCollider || h.normal.y < 0.45f) continue;
-            if (h.collider.GetComponentInParent<EnemyNPC>() != null) continue;
-            if (h.collider.GetComponentInParent<PlayerCombat>() != null) continue;
-
-            if (h.point.y > bestY)
-            {
-                bestY = h.point.y;
-                found = true;
-            }
-        }
-
-        float footY = found ? bestY : (transform.position.y - GetGroundPivotHeight());
+        float footY = SandboxWorldSpawner.SampleGroundY(candidate, transform.position.y - GetGroundPivotHeight());
         return new Vector3(candidate.x, footY + 0.45f, candidate.z);
     }
 
@@ -1599,6 +1816,71 @@ public class MonsterEnemyNPC : EnemyNPC
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BossCleaveTelegraph(Vector3 groundCenter, float radius, float duration)
+    {
+        animatorBridge?.StartSkillCast(0);
+        // ซิงก์ขึ้น BossHudUI Cast Bar ให้ผู้เล่นทุกคนเห็นคำว่า "360° CLEAVE" บนหัวจอแบบเรียลไทม์
+        float safeDur = Mathf.Max(0.10f, duration);
+        BaseTelegraphNameProp?.SetValue(this, "360° CLEAVE");
+        BaseTelegraphDurationProp?.SetValue(this, safeDur);
+        BaseTelegraphEndTimeProp?.SetValue(this, Time.time + safeDur);
+        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition() + Vector3.up * 0.65f, "CLEAVE!", new Color(1.0f, 0.32f, 0.12f, 1f));
+        if (_slamVfxRoutine != null) StopCoroutine(_slamVfxRoutine);
+        _slamVfxRoutine = StartCoroutine(BossSlamTelegraphRoutine(groundCenter, radius, duration));
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BossCleaveImpact(Vector3 groundCenter, float radius)
+    {
+        ClearActiveSlamTelegraph();
+        animatorBridge?.ReleaseSkill();
+        int swingIdx = animatorBridge != null && animatorBridge.AttackVariantCount >= 2 ? 1 : 0;
+        animatorBridge?.TriggerAttack(swingIdx);
+        PlayRandomClip(animatorBridge?.Config?.attackSwingClips);
+        if (_slamVfxRoutine != null) StopCoroutine(_slamVfxRoutine);
+        _slamVfxRoutine = StartCoroutine(BossCleaveSpinAndWaveRoutine(groundCenter, radius));
+    }
+
+    private IEnumerator BossCleaveSpinAndWaveRoutine(Vector3 groundCenter, float radius)
+    {
+        EnsureSharedVfxMaterials();
+        GameObject ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        ring.name = "BossCleave360WaveVFX";
+        var col = ring.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        ring.transform.position = new Vector3(groundCenter.x, groundCenter.y + 0.85f, groundCenter.z);
+        var wr = ring.GetComponent<Renderer>();
+        if (wr != null)
+        {
+            wr.shadowCastingMode = ShadowCastingMode.Off;
+            wr.receiveShadows = false;
+            if (s_slamInnerFillMat != null) wr.sharedMaterial = s_slamInnerFillMat;
+        }
+
+        // หมุนตัวบอสอยู่กับที่ 360° (ไม่เคลื่อนที่ จึงไม่ทะลุกำแพงและไม่กระตุกข้ามเน็ต) พร้อมวงคลื่นดาบกวาดรอบตัว
+        Quaternion startRot = transform.rotation;
+        const float spinDur = 0.28f;
+        float elapsed = 0f;
+        while (elapsed < spinDur && ring != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / spinDur);
+            if (Object != null && Object.IsValid && Object.HasStateAuthority && IsAlive)
+                transform.rotation = startRot * Quaternion.Euler(0f, 360f * t, 0f);
+
+            float diam = Mathf.Lerp(radius * 0.45f, radius * 2.15f, t);
+            float h = Mathf.Lerp(0.18f, 0.02f, t);
+            ring.transform.localScale = new Vector3(diam, h, diam);
+            yield return null;
+        }
+
+        if (Object != null && Object.IsValid && Object.HasStateAuthority && IsAlive)
+            transform.rotation = startRot;
+        if (ring != null) Destroy(ring);
+        _slamVfxRoutine = null;
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_BossEnrageFeedback()
     {
         animatorBridge?.SetPersistentEnrageGlow(true);
@@ -1606,8 +1888,25 @@ public class MonsterEnemyNPC : EnemyNPC
         FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "ENRAGE!", new Color(1.0f, 0.14f, 0.14f, 1f));
     }
 
+    /// <summary>
+    /// Targeted RPC ส่ง Gold รายตัวของมอนสเตอร์ตรงไปยังผู้เล่นที่มีส่วนร่วมทำดาเมจ (ทำงานได้ถูกต้องทั้ง Host และ Remote Client ใน Shared Mode)
+    /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_NotifyMonsterZoneCleared(int clearedZoneSignature, NetworkString<_64> contributorPayload)
+    public void RPC_GrantMonsterGold([RpcTarget] PlayerRef targetPlayer, int amount, NetworkString<_32> source)
+    {
+        if (amount <= 0 || Runner == null) return;
+        if (targetPlayer != PlayerRef.None && Runner.LocalPlayer != targetPlayer) return;
+
+        var local = PlayerCombat.Local;
+        if (local != null && local.IsSpawned)
+        {
+            string src = source.ToString();
+            local.AddGold(amount, string.IsNullOrEmpty(src) ? "Monster" : src);
+        }
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_NotifyMonsterZoneCleared(int clearedZoneSignature, NetworkString<_128> contributorPayload)
     {
         MonsterSpawnZone.HandleAuthoritativeZoneCleared(clearedZoneSignature, contributorPayload.ToString());
     }
@@ -2130,20 +2429,26 @@ public class MonsterEnemyNPC : EnemyNPC
 
     private bool SnapToGround(ref Vector3 pos, float searchUp = 3.0f, float searchDown = 12.0f)
     {
+        // เลือกพื้นผิวที่เดินได้ซึ่งอยู่ใกล้ระดับเท้าปัจจุบันที่สุด (ป้องกันมอนสเตอร์ดีดขึ้นไปบนยอดต้นไม้ หลังคาเต็นท์ หรือยืนบนผิวน้ำ)
+        float currentFootY = pos.y - GetGroundPivotHeight();
         Vector3 origin = new Vector3(pos.x, pos.y + searchUp, pos.z);
         int count = Physics.RaycastNonAlloc(origin, Vector3.down, s_monsterCastBuf, searchUp + searchDown, ~0, QueryTriggerInteraction.Ignore);
-        float bestY = float.MinValue;
+        float bestY = currentFootY;
+        float bestDelta = float.MaxValue;
         bool found = false;
 
         for (int i = 0; i < count; i++)
         {
             RaycastHit h = s_monsterCastBuf[i];
-            if (h.collider == null || h.collider == BodyCollider) continue;
+            if (h.collider == null || h.collider == BodyCollider || h.normal.y < 0.45f) continue;
             if (h.collider.GetComponentInParent<EnemyNPC>() != null) continue;
             if (h.collider.GetComponentInParent<PlayerCombat>() != null) continue;
+            if (h.collider.name.IndexOf("Water", System.StringComparison.OrdinalIgnoreCase) >= 0) continue;
 
-            if (h.point.y > bestY && h.normal.y >= 0.45f)
+            float delta = Mathf.Abs(h.point.y - currentFootY);
+            if (!found || delta < bestDelta)
             {
+                bestDelta = delta;
                 bestY = h.point.y;
                 found = true;
             }

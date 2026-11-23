@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ItemData
   itemId: reinforced_greatsword_oil
   displayName: Reinforced GreatSword Oil
-  description: Alchemical blade oil granting +8 Attack Damage for 45 seconds.
+  description: 'Coats your GreatSword in battle oil: +10 Attack Power for 60 seconds.'
   obtainAndUseGuide: Drops from Rare Chests & Enemies. Use from Inventory or Hotbar
     [2-7] before Frontier or Boss fights for a 45s +8 ATK buff.
   type: 0
@@ -27,8 +27,8 @@ MonoBehaviour:
   maxStack: 10
   healAmount: 0
   staminaRestoreAmount: 0
-  attackBuffBonus: 8
-  attackBuffDuration: 45
+  attackBuffBonus: 10
+  attackBuffDuration: 60
   damageBonus: 0
   maxHealthBonus: 0
   maxStaminaBonus: 0

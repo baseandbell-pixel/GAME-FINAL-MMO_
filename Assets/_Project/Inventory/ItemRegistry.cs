@@ -223,10 +223,10 @@ public static class ItemRegistry
         // 1. NORMAL TIER (สีเทาเงิน - ลดค่าพลังอุปกรณ์ลง 50%, อาวุธเน้น ATK, ชุดป้องกัน ATK = +0)
         // ============================================================
         RegisterOrUpdate("health_potion", "Healing Potion",
-            "Restores 25 HP immediately when consumed.",
-            "Drop from Camp Enemies & Chests. Select in Inventory or Hotbar [2-7] to restore 25 HP during combat.",
+            "Restores 28% of Max HP (minimum +50 HP) immediately when consumed.",
+            "Drop from Camp Enemies & Chests. Select in Inventory or Hotbar [2-7] to restore 28% Max HP (min +50 HP) during combat.",
             ItemType.Consumable, ItemTier.Normal, new Color(0.25f, 0.92f, 0.38f),
-            stackable: true, maxStack: 10, healAmount: 25);
+            stackable: true, maxStack: 10, healAmount: 50);
 
         RegisterOrUpdate("iron_sword", "Iron GreatSword",
             "Standard-issue iron greatsword for vanguard warriors. +5 Attack Damage.",
@@ -256,16 +256,16 @@ public static class ItemRegistry
         // 2. RARE TIER (สีฟ้า - ลดค่าพลังลง 50%, ตัด % CRIT ออก, ชุดป้องกัน ATK = +0)
         // ============================================================
         RegisterOrUpdate("stamina_elixir", "Stamina Elixir",
-            "Instantly restores 40 Stamina for sustained combos, sprinting, and dodging.",
-            "Drops from Enemies & Treasure Chests. Use from Inventory or Hotbar [2-7] to recover 40 Stamina immediately.",
+            "Instantly restores 60 Stamina for sustained combos, sprinting, and dodging.",
+            "Drops from Enemies & Treasure Chests. Use from Inventory or Hotbar [2-7] to recover 60 Stamina immediately.",
             ItemType.Consumable, ItemTier.Rare, new Color(0.20f, 0.72f, 1.00f),
-            stackable: true, maxStack: 10, staminaRestore: 40);
+            stackable: true, maxStack: 10, staminaRestore: 60);
 
         RegisterOrUpdate("reinforced_greatsword_oil", "Reinforced GreatSword Oil",
-            "Alchemical blade oil granting +8 Attack Damage for 45 seconds.",
-            "Drops from Rare Chests & Enemies. Use from Inventory or Hotbar [2-7] before Frontier or Boss fights for a 45s +8 ATK buff.",
+            "Alchemical blade oil granting +10 Attack Damage for 60 seconds.",
+            "Drops from Rare Chests & Enemies. Use from Inventory or Hotbar [2-7] before Frontier or Boss fights for a 60s +10 ATK buff.",
             ItemType.Consumable, ItemTier.Rare, new Color(0.18f, 0.85f, 0.95f),
-            stackable: true, maxStack: 10, atkBuffBonus: 8, atkBuffDuration: 45f);
+            stackable: true, maxStack: 10, atkBuffBonus: 10, atkBuffDuration: 60f);
 
         RegisterOrUpdate("steel_claymore", "Knight's Steel Claymore",
             "Fine tempered knight's claymore. +8 Attack Damage, +2 Max Stamina.",

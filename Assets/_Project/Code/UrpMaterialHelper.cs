@@ -218,7 +218,8 @@ public static class UrpMaterialHelper
     {
         var go = new GameObject(ringName);
         if (parent != null) go.transform.SetParent(parent, true);
-        go.transform.position = new Vector3(worldCenter.x, yHeight, worldCenter.z);
+        float ringY = SandboxWorldSpawner.SampleGroundY(worldCenter, worldCenter.y) + yHeight;
+        go.transform.position = new Vector3(worldCenter.x, ringY, worldCenter.z);
         go.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
 
         var lr = go.AddComponent<LineRenderer>();
@@ -248,7 +249,8 @@ public static class UrpMaterialHelper
         if (lr == null) return;
         int seg = Mathf.Clamp(segments, 16, 180);
         float r = Mathf.Max(0.25f, radius);
-        lr.transform.position = new Vector3(worldCenter.x, yHeight, worldCenter.z);
+        float ringY = SandboxWorldSpawner.SampleGroundY(worldCenter, worldCenter.y) + yHeight;
+        lr.transform.position = new Vector3(worldCenter.x, ringY, worldCenter.z);
         lr.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
         lr.positionCount = seg;
 

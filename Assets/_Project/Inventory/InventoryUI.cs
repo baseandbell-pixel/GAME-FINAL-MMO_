@@ -294,7 +294,7 @@ public class InventoryUI : MonoBehaviour
         // ปุ่มอัปเกรดค่าสถานะแบบ Flat Integer สมดุล Lv.1–30 (ตัด % CRIT สุ่มออก ใช้ Skill-Based Crit แทน)
         BuildStatRow(allocBox.transform, 0, PlayerStatType.STR, "STR", "+1 ATK", 48f);
         BuildStatRow(allocBox.transform, 1, PlayerStatType.VIT, "VIT", "+6 HP", 102f);
-        BuildStatRow(allocBox.transform, 2, PlayerStatType.END, "END", "+2 STA", 156f);
+        BuildStatRow(allocBox.transform, 2, PlayerStatType.END, "END", "+2 STA / +4% Reg", 156f);
         BuildStatRow(allocBox.transform, 3, PlayerStatType.AGI, "AGI", "+0.08 SPD", 210f);
 
         // ============================================================
@@ -1547,13 +1547,19 @@ public class InventoryUI : MonoBehaviour
             if (fs != null && !fs.IsEmpty && fs.item != null)
                 selectedFodderItems.Add(fs.item);
         }
-        float dynamicRate = EnhancementSystem.CalculateDynamicSuccessRate(tItem, curLvl, selectedFodderItems);
+        float dynamicRate = EnhancementSystem.CalculateDynamicSuccessRate(
+            tItem,
+            curLvl,
+            selectedFodderItems,
+            targetSlot.enhanceFailStacks);
         int pct = Mathf.RoundToInt(dynamicRate * 100f);
+        int pityPct = Mathf.RoundToInt(EnhancementSystem.GetFailstackBonus(targetSlot.enhanceFailStacks) * 100f);
 
         Color oddsCol = dynamicRate >= 0.70f ? UITheme.JadeAccent
             : (dynamicRate >= 0.40f ? UITheme.BrushedGoldBright : new Color(1f, 0.42f, 0.28f));
-        string rateTag = selectedFodderItems.Count > 0 ? "Dynamic Rate" : "Base Rate";
-        _bsOddsText.text = $"Success Chance: {pct}%  ({rateTag})";
+        string rateTag = selectedFodderItems.Count > 0 ? "Dynamic" : "Base";
+        string pityTag = pityPct > 0 ? $" +{pityPct}% Pity" : "";
+        _bsOddsText.text = $"Success Chance: {pct}%  ({rateTag}{pityTag})";
         _bsOddsText.color = oddsCol;
         _bsOddsBarFill.fillAmount = dynamicRate;
         _bsOddsBarFill.color = oddsCol;
@@ -1944,7 +1950,7 @@ public class InventoryUI : MonoBehaviour
         if (item.maxHealthBonus != 0) sb.AppendLine($"• Max Health: +{item.maxHealthBonus}  (At +10: +{item.GetEnhancedMaxHealth(10)})");
         if (item.maxStaminaBonus != 0) sb.AppendLine($"• Max Stamina: +{item.maxStaminaBonus}  (At +10: +{item.GetEnhancedMaxStamina(10)})");
         if (item.moveSpeedBonus > 0f) sb.AppendLine($"• Move Speed: +{item.moveSpeedBonus:0.00} m/s  (At +10: +{item.GetEnhancedMoveSpeed(10):0.00} m/s)");
-        if (item.healAmount > 0) sb.AppendLine($"• Instant Heal: +{item.healAmount} HP");
+        if (item.healAmount > 0) sb.AppendLine($"• Instant Heal: 28% Max HP (min +{item.healAmount} HP)");
         if (item.staminaRestoreAmount > 0) sb.AppendLine($"• Stamina Restore: +{item.staminaRestoreAmount} STA");
         if (item.attackBuffBonus > 0) sb.AppendLine($"• Attack Buff: +{item.attackBuffBonus} ATK for {item.attackBuffDuration:0}s");
         if (sb.Length == 0) sb.AppendLine("• Utility / Special Item");
@@ -1977,7 +1983,7 @@ public class InventoryUI : MonoBehaviour
         if (sta != 0) sb.Append($"+{sta} Max STA  ");
         if (def != 0) sb.Append($"+{def} DEF  ");
         if (spd > 0f) sb.Append($"+{spd:0.00} SPD  ");
-        if (item.healAmount > 0) sb.Append($"Heals +{item.healAmount} HP  ");
+        if (item.healAmount > 0) sb.Append($"Heals 28% Max HP (min +{item.healAmount} HP)  ");
         if (item.staminaRestoreAmount > 0) sb.Append($"+{item.staminaRestoreAmount} STA  ");
         if (item.attackBuffBonus > 0) sb.Append($"+{item.attackBuffBonus} ATK ({item.attackBuffDuration:0}s)  ");
 

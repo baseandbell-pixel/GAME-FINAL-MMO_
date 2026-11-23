@@ -77,12 +77,26 @@ public class NpcQuestConfig
 
         string cleanSceneName = enemy.gameObject.name.Replace("(Clone)", "").Trim();
         string lockName = (enemy.Object != null && enemy.Object.IsValid) ? (enemy.LockName ?? "") : "";
+        // ดึงชื่อสายพันธุ์จริงจาก MonsterAnimatorBridge (กรณีใช้มอนสเตอร์จากระบบ MonsterSystem_Manager)
+        var bridge = enemy.GetComponent<MonsterAnimatorBridge>();
+        string speciesName = (bridge != null && bridge.Config != null && !string.IsNullOrWhiteSpace(bridge.Config.monsterName))
+            ? bridge.Config.monsterName.Trim()
+            : "";
 
         if (targetMonsterPrefab != null)
         {
             string prefabName = targetMonsterPrefab.gameObject.name.Trim();
+            // ตัดคำนำหน้า Enemy_ / Boss_ ออกเพื่อเทียบกับชื่อจริงหลังเกิดของ MonsterEnemyNPC (เช่น Enemy_Orc -> Orc)
+            string strippedPrefab = prefabName;
+            if (strippedPrefab.StartsWith("Enemy_", StringComparison.OrdinalIgnoreCase))
+                strippedPrefab = strippedPrefab.Substring(6);
+            else if (strippedPrefab.StartsWith("Boss_", StringComparison.OrdinalIgnoreCase))
+                strippedPrefab = strippedPrefab.Substring(5);
+
             if (cleanSceneName.StartsWith(prefabName, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrEmpty(lockName) && lockName.IndexOf(prefabName, StringComparison.OrdinalIgnoreCase) >= 0))
+                cleanSceneName.StartsWith(strippedPrefab, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(speciesName) && (speciesName.Equals(prefabName, StringComparison.OrdinalIgnoreCase) || speciesName.Equals(strippedPrefab, StringComparison.OrdinalIgnoreCase))) ||
+                (!string.IsNullOrEmpty(lockName) && (lockName.IndexOf(prefabName, StringComparison.OrdinalIgnoreCase) >= 0 || lockName.IndexOf(strippedPrefab, StringComparison.OrdinalIgnoreCase) >= 0)))
             {
                 return true;
             }
@@ -92,6 +106,7 @@ public class NpcQuestConfig
         {
             string filter = targetMonsterNameContains.Trim();
             return cleanSceneName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   (!string.IsNullOrEmpty(speciesName) && speciesName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0) ||
                    lockName.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
@@ -111,8 +126,35 @@ public class NpcQuestConfig
 // ============================================================================
 // 2. คอมโพเนนต์หลักสำหรับแปะบนตัว NPC ในฉาก (QuestNPC)
 // ============================================================================
-public class QuestNPC : MonoBehaviour
+public class QuestNPC : MonoBehaviour, IWorldInteractable
 {
+    public InteractionChannel Channel => InteractionChannel.NpcTalk;
+    public int PriorityBias => 0;
+    public float InteractionRange => interactRadius;
+    public Vector3 InteractionWorldPosition => transform.position;
+    public bool CanInteractNow(PlayerCombat player) => isActiveAndEnabled && player != null && player.IsSpawned && !player.IsDead;
+    public void ExecuteInteraction(PlayerCombat player) => BeginInteraction();
+
+    public string GetPromptLabel(PlayerCombat player)
+    {
+        if (quest == null) return $"Talk to {npcName}";
+        var qm = QuestSystemManager.EnsureExists();
+        var prog = qm.GetProgress(quest);
+        bool hasOtherActive = prog.status == QuestStatus.NotStarted && qm.HasActiveQuest(out _);
+        return prog.status switch
+        {
+            QuestStatus.NotStarted => hasOtherActive ? $"Talk to {npcName} (Active Quest)" : $"Accept Quest  •  {npcName}",
+            QuestStatus.InProgress => $"Talk to {npcName} (In Progress)",
+            QuestStatus.ReadyToTurnIn => $"Turn In Quest  •  {npcName} (Ready!)",
+            _ => $"Talk to {npcName}"
+        };
+    }
+
+    public Color GetPromptAccentColor(PlayerCombat player)
+    {
+        return new Color(0.32f, 0.96f, 0.72f, 1f);
+    }
+
     public static readonly List<QuestNPC> All = new List<QuestNPC>();
 
     [Header("ข้อมูลตัวละคร NPC")]
@@ -123,7 +165,8 @@ public class QuestNPC : MonoBehaviour
 
     [Header("ระยะกดคุย & อนิเมชั่น")]
     [Min(1f)] public float interactRadius = 3.2f;
-    public Key interactKey = Key.E;
+    // แยกปุ่มคุยกับ NPC เป็น [G] เพื่อไม่ให้ชนกับปุ่มเก็บของ [E] หรือปุ่มสกิลในอนาคต [Q]/[E]
+    public Key interactKey = InteractionManager.NpcTalkKey;
     [Tooltip("Animator ของตัว NPC (จะค้นหาให้อัตโนมัติถ้าปล่อยว่าง)")]
     public Animator npcAnimator;
     [Tooltip("หาก NPC มี NetworkObject ให้ลาก NetworkMecanimAnimator มาใส่เพื่อให้เพื่อนเห็นท่าทางพร้อมกัน (ไม่บังคับ)")]
@@ -140,6 +183,9 @@ public class QuestNPC : MonoBehaviour
     {
         if (npcAnimator == null) npcAnimator = GetComponentInChildren<Animator>();
         if (networkAnimator == null) networkAnimator = GetComponent<NetworkMecanimAnimator>();
+        // อัปเกรด NPC ในฉากที่ยังค้างค่าปุ่มเก่า E ให้ย้ายมาใช้ปุ่ม G (ผ่าน InteractionManager กลาง) อัตโนมัติ
+        if (interactKey == Key.E || interactKey == Key.Q)
+            interactKey = InteractionManager.NpcTalkKey;
     }
 
     private void Start()
@@ -155,6 +201,7 @@ public class QuestNPC : MonoBehaviour
     private void OnEnable()
     {
         if (!All.Contains(this)) All.Add(this);
+        InteractionManager.Register(this);
         if (QuestSystemManager.Instance != null)
             QuestSystemManager.Instance.QuestStateChanged += RefreshOverheadMarker;
     }
@@ -162,6 +209,7 @@ public class QuestNPC : MonoBehaviour
     private void OnDisable()
     {
         All.Remove(this);
+        InteractionManager.Unregister(this);
         if (QuestSystemManager.Instance != null)
             QuestSystemManager.Instance.QuestStateChanged -= RefreshOverheadMarker;
     }
@@ -188,14 +236,7 @@ public class QuestNPC : MonoBehaviour
         if (_overheadMarker != null && Camera.main != null)
             _overheadMarker.transform.rotation = Camera.main.transform.rotation;
 
-        if (GameplayInput.IsBlocked || !IsPlayerInRange || !Application.isFocused) return;
-        if (GetClosestInteractableNPC() != this) return;
-
-        var kb = Keyboard.current;
-        if (kb != null && kb[interactKey].wasPressedThisFrame)
-        {
-            BeginInteraction();
-        }
+        // การรับปุ่มคุยกับ NPC ([G]) ถูกรวมศูนย์ไว้ที่ InteractionManager แล้ว เพื่อป้องกันการทับซ้อนกับ [E] และสกิล [Q]/[E]
     }
 
     public static QuestNPC GetClosestInteractableNPC()
@@ -540,6 +581,12 @@ public class QuestSystemManager : MonoBehaviour
         var localPlayer = PlayerCombat.Local;
         if (localPlayer == null || !localPlayer.IsSpawned || localPlayer.IsDead) return;
 
+        // เช็คว่าผู้เล่นต้องอยู่ใกล้จุดมอนตาย (<= 30m) หรือช่วยทำดาเมจใส่มอนตัวนี้จริง (กันคนยืน AFK ใน Safe Zone ผ่านเควสต์ฟรี)
+        var runner = localPlayer.Runner;
+        bool dealtDamage = runner != null && enemy.GetPlayerDamageShare(runner.LocalPlayer) > 0f;
+        float dist = Vector3.Distance(localPlayer.transform.position, enemy.transform.position);
+        if (!dealtDamage && dist > 30f) return;
+
         bool anyUpdated = false;
 
         foreach (var kv in _progressById)
@@ -758,7 +805,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
         {
             if (kb.escapeKey.wasPressedThisFrame)
                 CloseDialog();
-            else if (kb.eKey.wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame)
+            else if (kb[InteractionManager.NpcTalkKey].wasPressedThisFrame || kb.spaceKey.wasPressedThisFrame)
                 OnClickPrimaryAction();
         }
     }
@@ -847,7 +894,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
         if (!isLastLine)
         {
             _primaryBtn.interactable = true;
-            _primaryBtnText.text = "ถัดไป [E]";
+            _primaryBtnText.text = "ถัดไป [G]";
             _primaryBtnBg.color = UITheme.BrushedGoldDark;
             _closeBtnText.text = "ปิด [Esc]";
         }
@@ -869,7 +916,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
                     else
                     {
                         _primaryBtn.interactable = true;
-                        _primaryBtnText.text = "รับเควสต์ [E]";
+                        _primaryBtnText.text = "รับเควสต์ [G]";
                         _primaryBtnBg.color = UITheme.JadeButton;
                         _closeBtnText.text = "ปฏิเสธ [Esc]";
                         if (_errorNoticeText) _errorNoticeText.text = "";
@@ -878,14 +925,14 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
 
                 case QuestStatus.ReadyToTurnIn:
                     _primaryBtn.interactable = true;
-                    _primaryBtnText.text = "รับรางวัล [E]";
+                    _primaryBtnText.text = "รับรางวัล [G]";
                     _primaryBtnBg.color = UITheme.JadeButton;
                     _closeBtnText.text = "ไว้ทีหลัง [Esc]";
                     break;
 
                 default:
                     _primaryBtn.interactable = true;
-                    _primaryBtnText.text = "ตกลง [E]";
+                    _primaryBtnText.text = "ตกลง [G]";
                     _primaryBtnBg.color = UITheme.BrushedGoldDark;
                     _closeBtnText.text = "ปิด [Esc]";
                     break;
@@ -938,7 +985,8 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
     {
         if (_promptRoot == null) return;
 
-        if (IsDialogOpen || GameplayInput.IsBlocked)
+        // หากมี InteractionPromptUI กลาง (uGUI Canvas Prefab) ทำงานอยู่แล้ว ให้ซ่อนป้ายซ้ำของเควสต์เพื่อไม่ให้ป้ายซ้อนกัน
+        if (IsDialogOpen || GameplayInput.IsBlocked || InteractionPromptUI.Instance != null)
         {
             if (_promptRoot.activeSelf) _promptRoot.SetActive(false);
             return;
@@ -964,7 +1012,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
                 QuestStatus.ReadyToTurnIn => $"ส่งเควสต์กับ {closestNpc.npcName} (สำเร็จแล้ว!)",
                 _ => $"คุยกับ {closestNpc.npcName}"
             };
-            _promptText.text = $"[E]  {actionHint}";
+            _promptText.text = $"[G]  {actionHint}";
         }
     }
 
@@ -1035,7 +1083,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
         UITheme.ApplySlicedStyle(inner, UITheme.ObsidianDeep);
         Stretch(inner.rectTransform, 2f);
 
-        _promptText = MakeText(inner.transform, "PromptText", "[E] Talk", 18, FontStyle.Bold, TextAnchor.MiddleCenter, UITheme.TextPrimary);
+        _promptText = MakeText(inner.transform, "PromptText", "[G] Talk", 18, FontStyle.Bold, TextAnchor.MiddleCenter, UITheme.TextPrimary);
         Stretch(_promptText.rectTransform, 4f);
 
         _promptRoot.SetActive(false);
@@ -1098,7 +1146,7 @@ public class QuestDialogAndTrackerUI : MonoBehaviour
         PlaceBottomRight((RectTransform)primGo.transform, 24f, 16f, 160f, 44f);
         _primaryBtn = primGo.GetComponent<Button>();
         _primaryBtn.onClick.AddListener(OnClickPrimaryAction);
-        _primaryBtnText = MakeText(primGo.transform, "Label", "รับเควสต์ [E]", 17, FontStyle.Bold, TextAnchor.MiddleCenter, Color.white);
+        _primaryBtnText = MakeText(primGo.transform, "Label", "รับเควสต์ [G]", 17, FontStyle.Bold, TextAnchor.MiddleCenter, Color.white);
         Stretch(_primaryBtnText.rectTransform, 2f);
 
         _dialogPanel.SetActive(false);

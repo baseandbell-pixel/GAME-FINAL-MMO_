@@ -15,8 +15,8 @@ MonoBehaviour:
   monsterName: Golem
   archetype: 2
   isBoss: 0
-  healthMultiplier: 2.1
-  damageMultiplier: 1.75
+  healthMultiplier: 1.45
+  damageMultiplier: 1.2
   defenseBonus: 4
   attackRange: 2.45
   attackImpactDelay: 0.48
@@ -24,9 +24,9 @@ MonoBehaviour:
   lootRollMode: 0
   maxDropsPerKill: 0
   lootDrops: []
-  goldDropChancePercent: 0
-  minGold: 5
-  maxGold: 15
+  goldDropChancePercent: 50
+  minGold: 80
+  maxGold: 130
   canFlinch: 0
   hitReactCooldown: 0.25
   attackVariantCount: 1
