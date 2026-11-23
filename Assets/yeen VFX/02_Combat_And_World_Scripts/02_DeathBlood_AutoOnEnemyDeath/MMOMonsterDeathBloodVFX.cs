@@ -102,7 +102,7 @@ public class MMOMonsterDeathBloodVFX : MonoBehaviour
         MMOMonsterDeathBloodVFX controller = Instance;
         if (controller == null)
         {
-            controller = FindFirstObjectByType<MMOMonsterDeathBloodVFX>();
+            controller = FindAnyObjectByType<MMOMonsterDeathBloodVFX>();
             if (controller != null)
             {
                 Instance = controller;

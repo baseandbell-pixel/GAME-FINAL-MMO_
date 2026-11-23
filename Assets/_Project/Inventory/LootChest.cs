@@ -256,6 +256,7 @@ public class LootChest : MonoBehaviour
         }
         if (_vfxController != null)
         {
+            // เอฟเฟกต์เปิดกล่องสมบัติคงเป็นแสงสีทอง 4 เลเยอร์
             _vfxController.TriggerOpenChest();
         }
 
@@ -268,6 +269,7 @@ public class LootChest : MonoBehaviour
         _droppedItems.Clear();
         ItemTier highestTier = ItemTier.Normal;
         int count = Mathf.Max(1, dropsPerChest);
+        Vector3 chestMouthPos = transform.position + Vector3.up * 0.62f;
 
         for (int i = 0; i < count; i++)
         {
@@ -280,8 +282,10 @@ public class LootChest : MonoBehaviour
             if (rolledTier > highestTier) highestTier = rolledTier;
 
             float angle = (i / (float)count) * Mathf.PI * 2f + 0.4f;
-            Vector3 dropOffset = new Vector3(Mathf.Cos(angle) * 1.45f, 0.45f, Mathf.Sin(angle) * 1.45f);
+            Vector3 dropOffset = new Vector3(Mathf.Cos(angle) * 1.55f, 0.35f, Mathf.Sin(angle) * 1.55f);
             Vector3 dropPos = transform.position + dropOffset;
+            float launchDelay = 0.14f + i * 0.08f;
+            float arcHeight = 1.85f + (i % 2) * 0.25f;
 
             WorldItem spawnedDrop = null;
             if (runner != null && runner.IsRunning && worldItemPrefab != null)
@@ -289,16 +293,26 @@ public class LootChest : MonoBehaviour
                 spawnedDrop = WorldItem.Spawn(runner, worldItemPrefab, dropPos, rolled, 1);
             }
 
-            if (spawnedDrop == null && InventoryManager.Local != null)
+            if (spawnedDrop != null)
             {
-                InventoryManager.Local.AddItem(rolled, 1);
+                // ให้ตัวไอเทมลอยโค้งออกจากปากกล่องพร้อมเส้นแสงสีตามระดับ แล้วจางหายเมื่อตกลงพื้น
+                spawnedDrop.LaunchArcFromChest(chestMouthPos, rolledTier, launchDelay, 0.72f, arcHeight);
+            }
+            else
+            {
+                // โหมดออฟไลน์ที่เก็บเข้ากระเป๋าตรง: แสดงเส้นแสงไอเทมลอยโค้งตกลงพื้นแล้วจางหายเช่นเดียวกัน
+                MMOTreasureChestController.SpawnStandaloneLootArc(chestMouthPos, dropPos, rolledTier, launchDelay, 0.72f, arcHeight);
+                if (InventoryManager.Local != null)
+                {
+                    InventoryManager.Local.AddItem(rolled, 1);
+                }
             }
 
             Debug.Log($"[LootChest] {(isBossChest ? "Boss " : "")}Camp {campId} Chest rolled [{ItemData.GetTierDisplayName(rolledTier)}] -> {rolled.displayName} (id={rolled.itemId}).");
         }
 
         if (_beaconRing != null) _beaconRing.gameObject.SetActive(false);
-        if (_chestLight != null) _chestLight.color = ItemData.GetTierColor(highestTier);
+        if (_chestLight != null) _chestLight.color = new Color(1.0f, 0.82f, 0.28f, 1f);
 
         string summary = _droppedItems.Count > 0
             ? string.Join("  +  ", _droppedItems.ConvertAll(d => $"[{ItemData.GetTierDisplayName(d.tier)}] {d.displayName}"))

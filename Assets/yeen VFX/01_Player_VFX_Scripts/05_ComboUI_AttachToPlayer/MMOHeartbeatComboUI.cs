@@ -44,9 +44,9 @@ public class MMOHeartbeatComboUI : MonoBehaviour
     public float beat2SettleDuration = 0.14f;
 
     [Header("=== Screen Layout (Reference 1920x1080) ===")]
-    [Tooltip("ตำแหน่งขอบมุมขวาบนของกรอบคอมโบ (หน่วยพิกเซลบน Canvas 1920x1080)")]
-    public Vector2 topRightOffset = new Vector2(-72f, -86f);
-    [Tooltip("องศาเอียงโฉบเฉี่ยวของกรอบคอมโบ (ค่ามาตรฐาน -4 องศา)")]
+    [Tooltip("ระยะห่างจากขอบกลางจอขวาสุด (หน่วยพิกเซลบน Canvas 1920x1080)")]
+    public Vector2 middleRightOffset = new Vector2(-58f, 0f);
+    [Tooltip("องศาเอียงโฉบเฉี่ยวของตัวอักษรคอมโบ (ค่ามาตรฐาน -4 องศา)")]
     public float frameTiltAngle = -4f;
     [Tooltip("ลำดับการเรนเดอร์ของ Canvas Overlay")]
     public int canvasSortingOrder = 120;
@@ -55,27 +55,24 @@ public class MMOHeartbeatComboUI : MonoBehaviour
     [Tooltip("เปิดไว้เพื่อทดสอบกดคลิกซ้ายหรือปุ่ม J รัวๆ ได้ทันที (ปิดเป็น false เมื่อเชื่อมเข้ากับระบบฟันศัตรูจริง)")]
     public bool countOnAttackInputForTest = true;
 
+    [Header("=== สีและรูปแบบคอมโบ (Clean Combo Color — ไม่มีระดับ C-SSS) ===")]
+    [Tooltip("สีหลักของตัวเลขคอมโบ ออร่า และหลอดเวลา (ไม่เปลี่ยนตามเทียร์ C-SSS)")]
+    public Color comboAccentColor = new Color(1.00f, 0.84f, 0.24f, 1f);
+
     [Header("=== Live Runtime Status (Read-Only) ===")]
     [SerializeField] private int currentCombo = 0;
     [SerializeField] private float remainingComboTime = 0f;
-    [SerializeField] private string currentRankLabel = "C  CHAIN";
 
     // Runtime UI References (สร้างอัตโนมัติใน Awake)
     private Canvas _canvas;
     private RectTransform _frameRootRect;
     private CanvasGroup _frameCanvasGroup;
-    private Image _backgroundImage;
-    private Image _leftAccentBar;
-    private Image _topBorderLine;
-    private Image _bottomBorderLine;
     private Image _pulseGlowRingImage;
     private RectTransform _pulseGlowRingRect;
-    private Image _rankPillBackground;
     private Image _timerBarTrack;
     private Image _timerBarFill;
     private Text _comboNumberText;
     private Text _hitsLabelText;
-    private Text _rankBadgeText;
 
     // Runtime Procedural Textures & Sprites
     private Texture2D _whiteTexture2x2;
@@ -87,11 +84,10 @@ public class MMOHeartbeatComboUI : MonoBehaviour
     private Coroutine _heartbeatCoroutine;
     private bool _isPlayingHitPulse = false;
     private float _idleBeatPhase = 0f;
-    private Color _activeRankColor = new Color(0.15f, 0.88f, 1.00f, 1f);
+    private Color _activeRankColor = new Color(1.00f, 0.84f, 0.24f, 1f);
 
     public int CurrentCombo => currentCombo;
     public float RemainingComboTime => remainingComboTime;
-    public string CurrentRankLabel => currentRankLabel;
 
     // ================================================================================================
     // STATIC PUBLIC API สำหรับให้ระบบอาวุธหรือระบบรับดาเมจศัตรูเรียกใช้งานได้ทันทีจากทุกที่
@@ -105,7 +101,7 @@ public class MMOHeartbeatComboUI : MonoBehaviour
 
         if (Instance == null)
         {
-            Instance = FindFirstObjectByType<MMOHeartbeatComboUI>();
+            Instance = FindAnyObjectByType<MMOHeartbeatComboUI>();
         }
 
         if (Instance != null)
@@ -427,73 +423,23 @@ public class MMOHeartbeatComboUI : MonoBehaviour
     }
 
     // ================================================================================================
-    // กฎเหล็กข้อที่ 3: ระบบเปลี่ยนสีกรอบและระดับแรงก์ตามความต่อเนื่องของคอมโบ
+    // อัปเดตสีตัวเลขและหลอดเวลาคอมโบแบบสะอาด (ไม่มีการไล่ระดับเทียร์ C - SSS)
     // ================================================================================================
     private void ApplyRankStyleForCombo(int combo)
     {
-        Color rankColor;
-        string rankTitle;
+        Color accentColor = comboAccentColor;
+        _activeRankColor = accentColor;
 
-        if (combo >= 50)
-        {
-            // 50+ Hits: สีแดงชาดคลั่ง
-            rankColor = new Color(1.00f, 0.16f, 0.22f, 1f);
-            rankTitle = "SSS  APOCALYPSE";
-        }
-        else if (combo >= 30)
-        {
-            // 30 - 49 Hits: สีส้มเพลิง
-            rankColor = new Color(1.00f, 0.48f, 0.10f, 1f);
-            rankTitle = "SS  SAVAGE";
-        }
-        else if (combo >= 20)
-        {
-            // 20 - 29 Hits: สีทองคำสว่าง
-            rankColor = new Color(1.00f, 0.84f, 0.16f, 1f);
-            rankTitle = "S  SUPREME";
-        }
-        else if (combo >= 10)
-        {
-            // 10 - 19 Hits: สีเขียวมรกต
-            rankColor = new Color(0.14f, 0.94f, 0.54f, 1f);
-            rankTitle = "A  ASSAULT";
-        }
-        else if (combo >= 5)
-        {
-            // 5 - 9 Hits: สีฟ้าครามคมกริบ
-            rankColor = new Color(0.16f, 0.90f, 1.00f, 1f);
-            rankTitle = "B  BRUTAL";
-        }
-        else
-        {
-            // 1 - 4 Hits: สีฟ้าครามคมกริบ
-            rankColor = new Color(0.14f, 0.84f, 1.00f, 1f);
-            rankTitle = "C  CHAIN";
-        }
-
-        _activeRankColor = rankColor;
-        currentRankLabel = rankTitle;
-
-        if (_leftAccentBar != null) _leftAccentBar.color = rankColor;
-        if (_topBorderLine != null) _topBorderLine.color = new Color(rankColor.r, rankColor.g, rankColor.b, 0.92f);
-        if (_bottomBorderLine != null) _bottomBorderLine.color = new Color(rankColor.r, rankColor.g, rankColor.b, 0.78f);
-        if (_timerBarFill != null) _timerBarFill.color = rankColor;
-        if (_rankPillBackground != null) _rankPillBackground.color = new Color(rankColor.r * 0.22f, rankColor.g * 0.22f, rankColor.b * 0.22f, 0.85f);
+        if (_timerBarFill != null) _timerBarFill.color = accentColor;
 
         if (_comboNumberText != null)
         {
-            _comboNumberText.color = Color.Lerp(rankColor, Color.white, 0.45f);
+            _comboNumberText.color = Color.Lerp(accentColor, Color.white, 0.45f);
         }
 
         if (_hitsLabelText != null)
         {
-            _hitsLabelText.color = Color.Lerp(rankColor, Color.white, 0.72f);
-        }
-
-        if (_rankBadgeText != null)
-        {
-            _rankBadgeText.text = rankTitle;
-            _rankBadgeText.color = Color.Lerp(rankColor, Color.white, 0.25f);
+            _hitsLabelText.color = Color.Lerp(accentColor, Color.white, 0.72f);
         }
     }
 
@@ -510,8 +456,8 @@ public class MMOHeartbeatComboUI : MonoBehaviour
         _whiteTexture2x2.Apply();
         _whiteSprite = Sprite.Create(_whiteTexture2x2, new Rect(0f, 0f, 2f, 2f), new Vector2(0.5f, 0.5f), 100f);
 
-        // 2. Sprite วงแสงขอบกรอบเรืองแสง (Pulse Glow Ring) 64x64 แบบกลวงตรงกลาง ขอบฟุ้งเรืองแสงรอบกรอบ
-        const int size = 64;
+        // 2. Sprite ออร่าแสงกลมฟุ้งนุ่มๆ หลังตัวเลขคอมโบ (ไร้ขอบสี่เหลี่ยม) สำหรับจังหวะกระแทกหัวใจ "ตึก-ตัก"
+        const int size = 128;
         _glowRingTexture = new Texture2D(size, size, TextureFormat.RGBA32, false);
         _glowRingTexture.wrapMode = TextureWrapMode.Clamp;
         Color[] ringPixels = new Color[size * size];
@@ -522,13 +468,13 @@ public class MMOHeartbeatComboUI : MonoBehaviour
             for (int x = 0; x < size; x++)
             {
                 float nx = ((float)x / (size - 1)) * 2f - 1f;
-                float boxEdge = Mathf.Max(Mathf.Abs(nx), Mathf.Abs(ny));
+                float r = Mathf.Sqrt(nx * nx + ny * ny);
 
-                // สร้างขอบเรืองแสงรอบสี่เหลี่ยม (โปร่งตรงกลาง คมสว่างที่ระยะ 0.84 และฟุ้งนุ่มออกสู่ 1.0)
-                float outerFade = 1f - SmoothStep(0.88f, 1.00f, boxEdge);
-                float innerFade = SmoothStep(0.68f, 0.86f, boxEdge);
-                float crispRim = Mathf.Exp(-Mathf.Pow((boxEdge - 0.85f) / 0.055f, 2f));
-                float alpha = Mathf.Clamp01((innerFade * outerFade * 0.75f) + (crispRim * outerFade * 0.85f));
+                // ออร่าฟุ้งกลมโปร่งแสง + วงคลื่นเบาๆ ไร้กรอบเหลี่ยม
+                float softAura = Mathf.Exp(-r * r * 5.2f) * 0.52f;
+                float shockWave = Mathf.Exp(-Mathf.Pow((r - 0.68f) / 0.10f, 2f)) * 0.42f;
+                float outerFade = 1f - SmoothStep(0.80f, 0.98f, r);
+                float alpha = Mathf.Clamp01((softAura + shockWave) * outerFade);
 
                 ringPixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
             }
@@ -555,18 +501,18 @@ public class MMOHeartbeatComboUI : MonoBehaviour
         scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
         scaler.matchWidthOrHeight = 0.5f;
 
-        // 2. สร้างกล่องกรอบหลักมุมขวาบน เอียงโฉบเฉี่ยว -4 องศา พร้อม CanvasGroup
-        GameObject frameObj = new GameObject("ComboFrame_Root");
+        // 2. สร้างโหนดหลักแบบไร้กรอบ วางตำแหน่ง "กลางจอขวาสุด" (Anchor 1, 0.5) เอียงโฉบเฉี่ยว -4 องศา
+        GameObject frameObj = new GameObject("ComboCounter_Root");
         frameObj.transform.SetParent(canvasObj.transform, false);
 
         _frameRootRect = frameObj.AddComponent<RectTransform>();
-        _frameRootRect.anchorMin = new Vector2(1f, 1f);
-        _frameRootRect.anchorMax = new Vector2(1f, 1f);
+        _frameRootRect.anchorMin = new Vector2(1f, 0.5f);
+        _frameRootRect.anchorMax = new Vector2(1f, 0.5f);
         _frameRootRect.pivot = new Vector2(0.5f, 0.5f);
-        _frameRootRect.sizeDelta = new Vector2(330f, 152f);
+        _frameRootRect.sizeDelta = new Vector2(280f, 118f);
         _frameRootRect.anchoredPosition = new Vector2(
-            topRightOffset.x - _frameRootRect.sizeDelta.x * 0.5f,
-            topRightOffset.y - _frameRootRect.sizeDelta.y * 0.5f);
+            middleRightOffset.x - _frameRootRect.sizeDelta.x * 0.5f,
+            middleRightOffset.y);
         _frameRootRect.localRotation = Quaternion.Euler(0f, 0f, frameTiltAngle);
 
         _frameCanvasGroup = frameObj.AddComponent<CanvasGroup>();
@@ -574,97 +520,45 @@ public class MMOHeartbeatComboUI : MonoBehaviour
         _frameCanvasGroup.interactable = false;
         _frameCanvasGroup.blocksRaycasts = false;
 
-        // 3. วงแสงกระแทกรอบกรอบ (Pulse Glow Ring) วางด้านหลังกรอบหลัก
-        GameObject glowRingObj = new GameObject("PulseGlowRing");
+        // 3. ออร่าแสงกลมฟุ้งด้านหลังตัวเลข (Pulse Glow Aura — ไร้กรอบเหลี่ยมและไม่มีป้ายเทียร์ C-SSS)
+        GameObject glowRingObj = new GameObject("PulseGlowAura");
         glowRingObj.transform.SetParent(_frameRootRect, false);
         _pulseGlowRingRect = glowRingObj.AddComponent<RectTransform>();
-        _pulseGlowRingRect.anchorMin = Vector2.zero;
-        _pulseGlowRingRect.anchorMax = Vector2.one;
-        _pulseGlowRingRect.offsetMin = new Vector2(-24f, -20f);
-        _pulseGlowRingRect.offsetMax = new Vector2(24f, 20f);
+        _pulseGlowRingRect.anchorMin = new Vector2(0.5f, 0.5f);
+        _pulseGlowRingRect.anchorMax = new Vector2(0.5f, 0.5f);
+        _pulseGlowRingRect.sizeDelta = new Vector2(230f, 175f);
+        _pulseGlowRingRect.anchoredPosition = new Vector2(18f, 4f);
         _pulseGlowRingImage = glowRingObj.AddComponent<Image>();
         _pulseGlowRingImage.sprite = _glowRingSprite;
         _pulseGlowRingImage.color = new Color(_activeRankColor.r, _activeRankColor.g, _activeRankColor.b, 0f);
         _pulseGlowRingImage.raycastTarget = false;
 
-        // 4. พื้นหลังสีเข้มโปร่งแสงของกรอบคอมโบ
-        GameObject bgObj = new GameObject("FrameBackground");
-        bgObj.transform.SetParent(_frameRootRect, false);
-        RectTransform bgRect = bgObj.AddComponent<RectTransform>();
-        bgRect.anchorMin = Vector2.zero;
-        bgRect.anchorMax = Vector2.one;
-        bgRect.offsetMin = Vector2.zero;
-        bgRect.offsetMax = Vector2.zero;
-        _backgroundImage = bgObj.AddComponent<Image>();
-        _backgroundImage.sprite = _whiteSprite;
-        _backgroundImage.color = new Color(0.04f, 0.05f, 0.09f, 0.84f);
-        _backgroundImage.raycastTarget = false;
-
-        // 5. แถบเส้นสีเรืองแสงด้านซ้าย (Left Accent Bar)
-        _leftAccentBar = CreateBarImage("LeftAccentBar", _frameRootRect,
-            new Vector2(0f, 0f), new Vector2(0f, 1f),
-            new Vector2(0f, 0f), new Vector2(9f, 0f), _activeRankColor);
-
-        // 6. ขอบเส้นสีเรืองแสงด้านบน (Top Border Line)
-        _topBorderLine = CreateBarImage("TopBorderLine", _frameRootRect,
-            new Vector2(0f, 1f), new Vector2(1f, 1f),
-            new Vector2(0f, -3.5f), new Vector2(0f, 0f), _activeRankColor);
-
-        // 7. ขอบเส้นสีเรืองแสงด้านล่าง (Bottom Border Line)
-        _bottomBorderLine = CreateBarImage("BottomBorderLine", _frameRootRect,
-            new Vector2(0f, 0f), new Vector2(1f, 0f),
-            new Vector2(0f, 0f), new Vector2(0f, 3f), _activeRankColor);
-
-        // 8. พื้นหลังป้ายระดับแรงก์ (Rank Badge Pill) บริเวณด้านบนของกรอบ
-        GameObject rankPillObj = new GameObject("RankBadge_BG");
-        rankPillObj.transform.SetParent(_frameRootRect, false);
-        RectTransform rankPillRect = rankPillObj.AddComponent<RectTransform>();
-        rankPillRect.anchorMin = new Vector2(0f, 1f);
-        rankPillRect.anchorMax = new Vector2(1f, 1f);
-        rankPillRect.offsetMin = new Vector2(18f, -36f);
-        rankPillRect.offsetMax = new Vector2(-14f, -9f);
-        _rankPillBackground = rankPillObj.AddComponent<Image>();
-        _rankPillBackground.sprite = _whiteSprite;
-        _rankPillBackground.color = new Color(0.08f, 0.18f, 0.24f, 0.85f);
-        _rankPillBackground.raycastTarget = false;
-
-        // 9. ป้ายข้อความระดับแรงก์ (Rank Badge Text เช่น "C  CHAIN" -> "SSS  APOCALYPSE")
-        _rankBadgeText = CreateStyledText("RankBadge_Text", rankPillRect, uiFont,
-            "C  CHAIN", 19, FontStyle.BoldAndItalic, TextAnchor.MiddleLeft, Color.white);
-        RectTransform rankTextRect = _rankBadgeText.rectTransform;
-        rankTextRect.anchorMin = Vector2.zero;
-        rankTextRect.anchorMax = Vector2.one;
-        rankTextRect.offsetMin = new Vector2(10f, 0f);
-        rankTextRect.offsetMax = new Vector2(-8f, 0f);
-
-        // 10. ตัวเลขคอมโบขนาดใหญ่ (BoldAndItalic + Shadow + Outline)
+        // 4. ตัวเลขคอมโบขนาดใหญ่ไร้กรอบ (BoldAndItalic + Shadow + Outline คมชัดบนทุกฉากหลัง)
         _comboNumberText = CreateStyledText("ComboNumber_Text", _frameRootRect, uiFont,
-            "0", 84, FontStyle.BoldAndItalic, TextAnchor.MiddleRight, Color.white);
+            "0", 90, FontStyle.BoldAndItalic, TextAnchor.MiddleRight, Color.white);
         RectTransform numRect = _comboNumberText.rectTransform;
         numRect.anchorMin = new Vector2(0f, 0f);
-        numRect.anchorMax = new Vector2(0.68f, 1f);
-        numRect.offsetMin = new Vector2(14f, 18f);
-        numRect.offsetMax = new Vector2(-4f, -34f);
+        numRect.anchorMax = new Vector2(0.72f, 1f);
+        numRect.offsetMin = new Vector2(0f, 14f);
+        numRect.offsetMax = new Vector2(-4f, -4f);
+        AddCrispOutline(_comboNumberText);
 
-        Outline numOutline = _comboNumberText.gameObject.AddComponent<Outline>();
-        numOutline.effectColor = new Color(0f, 0f, 0f, 0.72f);
-        numOutline.effectDistance = new Vector2(2f, -2f);
-
-        // 11. ป้ายคำว่า "HITS" ข้างตัวเลขคอมโบ
+        // 5. ป้ายคำว่า "HITS" ข้างตัวเลขคอมโบชิดขวาสุด
         _hitsLabelText = CreateStyledText("HitsLabel_Text", _frameRootRect, uiFont,
             "HITS", 24, FontStyle.BoldAndItalic, TextAnchor.LowerLeft, Color.white);
         RectTransform hitsRect = _hitsLabelText.rectTransform;
-        hitsRect.anchorMin = new Vector2(0.68f, 0f);
+        hitsRect.anchorMin = new Vector2(0.72f, 0f);
         hitsRect.anchorMax = new Vector2(1f, 1f);
-        hitsRect.offsetMin = new Vector2(6f, 34f);
-        hitsRect.offsetMax = new Vector2(-12f, -42f);
+        hitsRect.offsetMin = new Vector2(6f, 24f);
+        hitsRect.offsetMax = new Vector2(0f, -14f);
+        AddCrispOutline(_hitsLabelText);
 
-        // 12. รางพื้นหลังหลอดเวลา (Timer Bar Track)
+        // 7. เส้นหลอดเวลาบางเฉียบใต้ตัวเลขคอมโบ (Timer Bar Track แบบมินิมอลไร้กรอบ)
         _timerBarTrack = CreateBarImage("TimerBar_Track", _frameRootRect,
-            new Vector2(0f, 0f), new Vector2(1f, 0f),
-            new Vector2(18f, 12f), new Vector2(-14f, 22f), new Color(1f, 1f, 1f, 0.14f));
+            new Vector2(0.18f, 0f), new Vector2(1f, 0f),
+            new Vector2(0f, 8f), new Vector2(-4f, 14f), new Color(0f, 0f, 0f, 0.42f));
 
-        // 13. หลอดเวลาคอมโบ (Filled Timer Bar ใช้ White Sprite 2x2 ในหน่วยความจำ)
+        // 8. หลอดเวลาคอมโบสีเรืองแสงตามแรงก์ (Filled Timer Bar จากขวาไปซ้ายหรือซ้ายไปขวา)
         GameObject fillObj = new GameObject("TimerBar_Fill");
         fillObj.transform.SetParent(_timerBarTrack.rectTransform, false);
         RectTransform fillRect = fillObj.AddComponent<RectTransform>();
@@ -677,10 +571,18 @@ public class MMOHeartbeatComboUI : MonoBehaviour
         _timerBarFill.sprite = _whiteSprite;
         _timerBarFill.type = Image.Type.Filled;
         _timerBarFill.fillMethod = Image.FillMethod.Horizontal;
-        _timerBarFill.fillOrigin = (int)Image.OriginHorizontal.Left;
+        _timerBarFill.fillOrigin = (int)Image.OriginHorizontal.Right;
         _timerBarFill.fillAmount = 0f;
         _timerBarFill.color = _activeRankColor;
         _timerBarFill.raycastTarget = false;
+    }
+
+    private static void AddCrispOutline(Text target)
+    {
+        if (target == null) return;
+        Outline outline = target.gameObject.AddComponent<Outline>();
+        outline.effectColor = new Color(0f, 0f, 0f, 0.80f);
+        outline.effectDistance = new Vector2(2f, -2f);
     }
 
     private Image CreateBarImage(string objName, RectTransform parent, Vector2 anchorMin, Vector2 anchorMax,

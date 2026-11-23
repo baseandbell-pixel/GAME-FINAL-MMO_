@@ -660,8 +660,8 @@ MonoBehaviour:
   minMoveSpeedThreshold: 0.25
   worldRunSpeedThreshold: 4.2
   stopGraceTime: 0.14
-  windDensity: 54
-  windOpacity: 0.68
+  windDensity: 34
+  windOpacity: 0.62
   leftFootBoneName: Bip001 L Foot
   rightFootBoneName: Bip001 R Foot
   isWindActive: 0

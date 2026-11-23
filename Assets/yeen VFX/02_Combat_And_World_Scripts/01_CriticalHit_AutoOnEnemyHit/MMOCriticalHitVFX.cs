@@ -124,7 +124,7 @@ public class MMOCriticalHitVFX : MonoBehaviour
         MMOCriticalHitVFX controller = Instance;
         if (controller == null)
         {
-            controller = FindFirstObjectByType<MMOCriticalHitVFX>();
+            controller = FindAnyObjectByType<MMOCriticalHitVFX>();
             if (controller != null)
             {
                 Instance = controller;
@@ -395,10 +395,10 @@ public class MMOCriticalHitVFX : MonoBehaviour
         if (s_RuntimeCoreFlashTex == null) s_RuntimeCoreFlashTex = BuildRuntimeCoreFlashTex(256, 256);
         if (s_RuntimeShockwaveTex == null) s_RuntimeShockwaveTex = BuildRuntimeShockwaveTex(256, 256);
 
-        if (s_RuntimeMatCoreFlash == null) s_RuntimeMatCoreFlash = CreateRuntimeAdditiveMat(s_RuntimeCoreFlashTex, new Color(1.5f, 0.35f, 0.28f, 1f));
-        if (s_RuntimeMatCrossSlash == null) s_RuntimeMatCrossSlash = CreateRuntimeAdditiveMat(s_RuntimeCrossSlashTex, new Color(1.6f, 0.25f, 0.20f, 1f));
-        if (s_RuntimeMatSparks == null) s_RuntimeMatSparks = CreateRuntimeAdditiveMat(s_RuntimeCoreFlashTex, new Color(1.8f, 0.45f, 0.16f, 1f));
-        if (s_RuntimeMatShockwave == null) s_RuntimeMatShockwave = CreateRuntimeAdditiveMat(s_RuntimeShockwaveTex, new Color(1.4f, 0.12f, 0.15f, 1f));
+        if (s_RuntimeMatCoreFlash == null) s_RuntimeMatCoreFlash = CreateRuntimeAdditiveMat(s_RuntimeCoreFlashTex, new Color(4.5f, 0.95f, 0.75f, 1f));
+        if (s_RuntimeMatCrossSlash == null) s_RuntimeMatCrossSlash = CreateRuntimeAdditiveMat(s_RuntimeCrossSlashTex, new Color(4.2f, 0.55f, 0.42f, 1f));
+        if (s_RuntimeMatSparks == null) s_RuntimeMatSparks = CreateRuntimeAdditiveMat(s_RuntimeCoreFlashTex, new Color(4.6f, 0.92f, 0.34f, 1f));
+        if (s_RuntimeMatShockwave == null) s_RuntimeMatShockwave = CreateRuntimeAdditiveMat(s_RuntimeShockwaveTex, new Color(3.0f, 0.28f, 0.32f, 1f));
     }
 
     private static Material CreateRuntimeAdditiveMat(Texture2D tex, Color baseColor)
@@ -466,7 +466,8 @@ public class MMOCriticalHitVFX : MonoBehaviour
         main.startLifetime = 0.16f;
         main.startSpeed = 0f;
         main.startSize = 2.6f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(5.2f, 0.85f, 0.65f, 1f));
+        main.startColor = Color.white;
+        main.scalingMode = ParticleSystemScalingMode.Hierarchy;
         main.maxParticles = 2;
 
         var em = ps.emission;
@@ -502,7 +503,8 @@ public class MMOCriticalHitVFX : MonoBehaviour
         main.startLifetime = 0.26f;
         main.startSpeed = 0f;
         main.startSize = 3.8f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(4.5f, 0.36f, 0.24f, 1f));
+        main.startColor = Color.white;
+        main.scalingMode = ParticleSystemScalingMode.Hierarchy;
         main.maxParticles = 2;
 
         var em = ps.emission;
@@ -561,9 +563,10 @@ public class MMOCriticalHitVFX : MonoBehaviour
         main.startSpeed = new ParticleSystem.MinMaxCurve(9f, 18f);
         main.startSize = new ParticleSystem.MinMaxCurve(0.08f, 0.18f);
         main.startColor = new ParticleSystem.MinMaxGradient(
-            new Color(4.8f, 0.55f, 0.18f, 1f),
-            new Color(5.2f, 1.30f, 0.45f, 1f));
+            new Color(1.0f, 0.72f, 0.45f, 1f),
+            new Color(1.0f, 0.96f, 0.80f, 1f));
         main.simulationSpace = ParticleSystemSimulationSpace.World;
+        main.scalingMode = ParticleSystemScalingMode.Hierarchy;
         main.maxParticles = 64;
 
         var em = ps.emission;
@@ -602,7 +605,8 @@ public class MMOCriticalHitVFX : MonoBehaviour
         main.startLifetime = 0.24f;
         main.startSpeed = 0f;
         main.startSize = 3.4f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(3.0f, 0.14f, 0.16f, 1f));
+        main.startColor = Color.white;
+        main.scalingMode = ParticleSystemScalingMode.Hierarchy;
         main.maxParticles = 2;
 
         var em = ps.emission;

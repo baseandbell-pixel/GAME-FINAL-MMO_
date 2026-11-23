@@ -5,12 +5,12 @@ using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
 
 /// <summary>
-/// ระบบเอฟเฟกต์ "สายลมแหวกอากาศผ่านลำตัวและเส้นลมติดข้อเท้าซ้าย-ขวา" ระดับ AAA สำหรับ Unity 6 (URP)
-/// ออกแบบสไตล์ Genshin Impact / Wuthering Waves / Naraka: Bladepoint:
-/// - Layer 1: เส้นสายลมเรียวคมโปร่งแสงโค้งพริ้วตามแรงอากาศ (Silky Aerodynamic Speed Lines + Organic Noise)
-/// - Layer 2: วงแหวนแหวกอากาศจังหวะออกตัววิ่ง + เข็มลมพุ่งถอยหลัง (Crisp Sprint Launch Air-Ring & Gust)
-/// - Layer 3: ริบบิ้นสายลมไหมคู่พริ้วติดข้อเท้าซ้าย-ขวา (Graceful Dual-Filament Ankle Silk Ribbons)
-/// - Layer 4: ละอองลมและประกายอากาศลอยหมุนรอบตัว (Delicate Wind Motes & Ground Air Draft)
+/// ระบบเอฟเฟกต์ "สายลมวิ่งพริ้วไหวระดับ AAA (Silky Wuxia Sprint Wind VFX)" สำหรับ Unity 6 (URP)
+/// ออกแบบสไตล์ Where Winds Meet / Wuthering Waves (สะอาด หรูหรา พริ้วไหว ไม่มีใบไม้และไม่มีวงแหวนแหวกลม):
+/// - Layer 1: ริบบิ้นสายลมโค้งพริ้วไหวรอบลำตัว (Curving Silky Wind Ribbons via Particle Trails + Organic Curl Noise)
+/// - Layer 2: เส้นสายลมพู่กันบางคม + แรงลมพุ่งออกตัว (Painterly Aerodynamic Speed Wisps & Launch Gust)
+/// - Layer 3: ริบบิ้นสายลมไหมคู่พริ้วติดข้อเท้าซ้าย-ขวา + หมอกฝุ่นเท้าจางๆ (Dual-Filament Ankle Silk Ribbons & Ground Step Mist)
+/// - Layer 4: ละอองลมปราณเรืองแสงอ่อนๆ ลอยตามแรงลม (Luminous Wuxia Qi Wind Motes)
 /// ทำงานเฉพาะตอนวิ่ง (กด Shift + เคลื่อนที่ หรืออนิเมชั่นเข้าท่าวิ่ง) เดินปกติจะไม่แสดงเอฟเฟกต์
 /// </summary>
 [AddComponentMenu("yeen VFX/02. [Player] วิ่งลมผ่านตัว (Run Wind Slipstream)")]
@@ -18,14 +18,14 @@ using UnityEngine.Rendering;
 public class RunWindSlipstream : MonoBehaviour
 {
     [Header("=== 1. ระบบสลับสีสายลมแบบเรียลไทม์ (Real-Time Wind Color Palette) ===")]
-    [Tooltip("ติ๊กถูก = สีเขียวอ่อนสายลม (Light Mint Wind) / เอาติ๊กออก = สีขาวใสสายลมบริสุทธิ์ (Pure Aerial White)")]
-    public bool useLightGreenWind = false;
+    [Tooltip("ติ๊กถูก = สีหยกมรกตอ่อนสายลม (Celadon Jade Wind) / เอาติ๊กออก = สีขาวจันทร์สายลมบริสุทธิ์ (Moonlight Aerial White)")]
+    public bool useLightGreenWind = true;
 
-    [Tooltip("สีเขียวอ่อนสายลม (Light Mint Wind)")]
-    public Color lightGreenWindColor = new Color(0.62f, 1.0f, 0.86f, 0.72f);
+    [Tooltip("สีหยกอ่อนสายลมสไตล์จอมยุทธ์ (Celadon Jade Wind)")]
+    public Color lightGreenWindColor = new Color(0.68f, 1.0f, 0.90f, 0.78f);
 
-    [Tooltip("สีขาวใสสายลมบริสุทธิ์ (Pure Aerial White)")]
-    public Color pureWhiteWindColor = new Color(0.93f, 0.98f, 1.0f, 0.68f);
+    [Tooltip("สีขาวจันทร์สายลมบริสุทธิ์ (Moonlight Aerial White)")]
+    public Color pureWhiteWindColor = new Color(0.92f, 0.98f, 1.0f, 0.76f);
 
     [Header("=== 2. การตรวจจับอนิเมชั่นวิ่ง & ปุ่ม Shift (Animator BlendTree & Shift Detection) ===")]
     [Tooltip("เปิดใช้งานอัตโนมัติทันทีเมื่ออนิเมชั่นของตัวละครเข้าสู่ท่าวิ่ง (BlendTree MoveX/MoveY >= 1.55)")]
@@ -51,13 +51,13 @@ public class RunWindSlipstream : MonoBehaviour
     public float stopGraceTime = 0.14f;
 
     [Header("=== 3. ปรับแต่งความสวยงามและความหนาแน่นของสายลม (AAA Wind Tuning) ===")]
-    [Tooltip("ความหนาแน่นของเส้นสายลมแหวกอากาศผ่านลำตัว (ค่าแนะนำ 45 - 65 เส้น/วินาที ให้ความรู้สึกพริ้วคมไม่รกตา)")]
-    [Range(20f, 140f)]
-    public float windDensity = 54f;
+    [Tooltip("ความหนาแน่นของเส้นสายลมแหวกอากาศผ่านลำตัว (ค่าแนะนำ 24 - 40 เส้น/วินาที)")]
+    [Range(8f, 90f)]
+    public float windDensity = 30f;
 
-    [Tooltip("ความโปร่งใสของสายลม (ค่าแนะนำ 0.62 - 0.78 เพื่อความใสพริ้วเหมือนสายลมจริง)")]
+    [Tooltip("ความสว่างโปร่งแสงของสายลม (ค่าแนะนำ 0.58 - 0.80 พริ้วคมชัดไม่บังตัวละคร)")]
     [Range(0.15f, 1.0f)]
-    public float windOpacity = 0.68f;
+    public float windOpacity = 0.70f;
 
     [Header("=== 4. ชื่อกระดูกข้อเท้าซ้าย-ขวา (Biped Foot Bones) ===")]
     public string leftFootBoneName = "Bip001 L Foot";
@@ -72,22 +72,19 @@ public class RunWindSlipstream : MonoBehaviour
     [SerializeField] private string activeTriggerSource = "Idle";
 
     // Runtime Generated Textures & Materials
-    private Mesh runtimeQuadMesh;
     private Texture2D runtimeWindStreakTex;
     private Texture2D runtimeFootRibbonTex;
-    private Texture2D runtimeAirRingTex;
-    private Texture2D runtimeWindMoteTex;
+    private Texture2D runtimeStepMistTex;
 
     private Material runtimeStreakMat;
     private Material runtimeRibbonMat;
-    private Material runtimeAirRingMat;
-    private Material runtimeMoteMat;
+    private Material runtimeStepMistMat;
 
-    // 4-Layer AAA Wind VFX
+    // 3-Layer Silky Wuxia Sprint Wind VFX (ไม่มีใบไม้ วงแหวนแหวกลม และละออง)
+    private ParticleSystem flowingRibbonsPS;
     private ParticleSystem bodyWindPS;
-    private ParticleSystem launchAirRingPS;
     private ParticleSystem launchGustNeedlesPS;
-    private ParticleSystem windMotesPS;
+    private ParticleSystem footStepMistPS;
     private readonly List<ParticleSystem> existingChildParticles = new List<ParticleSystem>();
     private readonly List<TrailRenderer> footTrailRenderers = new List<TrailRenderer>();
 
@@ -97,11 +94,13 @@ public class RunWindSlipstream : MonoBehaviour
     private Rigidbody cachedRigidbody;
     private NetworkCharacter cachedNetCharacter;
     private PlayerCapsule cachedPlayerCapsule;
+    private PlayerCombat cachedPlayerCombat;
 
     private Vector3 previousWorldPos;
+    private Vector3 currentMoveDirection = Vector3.forward;
     private bool hasInitializedPos = false;
     private float graceTimer = 0f;
-    private float launchRingCooldown = 0f;
+    private float launchBurstCooldown = 0f;
 
     private bool hasMoveXParam = false;
     private bool hasMoveYParam = false;
@@ -121,17 +120,20 @@ public class RunWindSlipstream : MonoBehaviour
     {
         ResolveCharacterComponents();
         DisableLegacyDuplicateScripts();
-
         GenerateRuntimeWindAssets();
+        SilenceLegacyDuplicateSprintParticles();
 
-        // ปลุกเอฟเฟกต์ Sprint Wind เดิม (ถ้ามีวางไว้ใน Scene)
-        DiscoverAndWakeUpExistingChildVFX();
+        // ล้างโหนดรุ่นเก่าที่ไม่ต้องการ (ไม่มีใบไม้ วงแหวนแหวกลม และละออง)
+        DestroyChildIfExists(transform, "VFX_Runtime_WWM_BambooLeaves");
+        DestroyChildIfExists(transform, "VFX_Runtime_SprintStartAirRing");
+        DestroyChildIfExists(transform, "VFX_Runtime_QinggongFootRipple");
+        DestroyChildIfExists(transform, "VFX_Runtime_DashStartBurst");
+        DestroyChildIfExists(transform, "VFX_Runtime_WindMotes");
 
-        // สร้างโครงสร้างเอฟเฟกต์สายลมวิ่งระดับ AAA ทั้ง 4 เลเยอร์
-        BuildLayer1SilkyBodySlipstream();
-        BuildLayer2SprintLaunchAirRingAndGust();
-        BuildLayer3DualAnkleSilkRibbons();
-        BuildLayer4WindMotesAndAirDraft();
+        // สร้างโครงสร้างสายลมวิ่งพริ้วไหวระดับ AAA
+        BuildLayer1FlowingSilkRibbons();
+        BuildLayer2BodyWindAndLaunchGust();
+        BuildLayer3DualAnkleRibbonsAndFootMist();
 
         previousWorldPos = transform.position;
         hasInitializedPos = true;
@@ -141,15 +143,9 @@ public class RunWindSlipstream : MonoBehaviour
     {
         CacheAnimatorParameterList();
 
+        StopLoopEmitter(flowingRibbonsPS);
         StopLoopEmitter(bodyWindPS);
-        StopLoopEmitter(windMotesPS);
-
-        if (launchAirRingPS != null)
-        {
-            ParticleSystem.EmissionModule em = launchAirRingPS.emission;
-            em.enabled = false;
-            launchAirRingPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-        }
+        StopLoopEmitter(footStepMistPS);
 
         if (launchGustNeedlesPS != null)
         {
@@ -199,6 +195,9 @@ public class RunWindSlipstream : MonoBehaviour
 
         cachedPlayerCapsule = GetComponentInParent<PlayerCapsule>();
         if (cachedPlayerCapsule == null) cachedPlayerCapsule = GetComponentInChildren<PlayerCapsule>(true);
+
+        cachedPlayerCombat = GetComponentInParent<PlayerCombat>();
+        if (cachedPlayerCombat == null) cachedPlayerCombat = GetComponentInChildren<PlayerCombat>(true);
     }
 
     private void CacheAnimatorParameterList()
@@ -237,30 +236,31 @@ public class RunWindSlipstream : MonoBehaviour
     private void LateUpdate()
     {
         float dt = Time.deltaTime;
-        if (dt <= 0.00001f)
-        {
-            return;
-        }
+        if (dt <= 0.00001f) return;
 
-        if (launchRingCooldown > 0f)
+        if (launchBurstCooldown > 0f)
         {
-            launchRingCooldown -= dt;
+            launchBurstCooldown -= dt;
         }
 
         ApplyRealTimeColorAndVisualUpdates(false);
         UpdateRealHorizontalSpeed(dt);
+        AlignWindRigToMovementDirection();
 
-        bool movementKeyPressed;
-        isShiftHeld = DetectUniversalShiftAndMovementInput(out movementKeyPressed);
+        bool isRemoteNetworkedPlayer =
+            (cachedPlayerCombat != null && cachedPlayerCombat.IsSpawned && !cachedPlayerCombat.IsLocallyControlled) ||
+            (cachedNetCharacter != null && cachedNetCharacter.IsSpawned && !cachedNetCharacter.HasInputAuthority);
+
+        bool movementKeyPressed = false;
+        isShiftHeld = !isRemoteNetworkedPlayer && DetectUniversalShiftAndMovementInput(out movementKeyPressed);
         bool isMovingNow = movementKeyPressed || (currentHorizontalSpeed >= minMoveSpeedThreshold);
 
         string animReason;
         isPlayingRunAnimation = EvaluateRunAnimationAndNetworkState(out animReason);
 
-        // เดินปกติ (Walk) ต้องไม่ขึ้นเอฟเฟกต์เด็ดขาด จะขึ้นเฉพาะตอนกด Shift วิ่ง หรือ Animator อยู่ในท่าวิ่งจริงเท่านั้น
         bool shouldActivateWind = false;
 
-        if (isShiftHeld && (requireMovementWithShift ? isMovingNow : true))
+        if (!isRemoteNetworkedPlayer && isShiftHeld && (requireMovementWithShift ? isMovingNow : true))
         {
             shouldActivateWind = true;
             activeTriggerSource = "Shift Key + Running";
@@ -369,7 +369,13 @@ public class RunWindSlipstream : MonoBehaviour
         return false;
     }
 
-    private void DiscoverAndWakeUpExistingChildVFX()
+    private float GetFeetLocalY()
+    {
+        Transform visual = transform.Find("CharacterVisual");
+        return visual != null ? visual.localPosition.y : 0f;
+    }
+
+    private void SilenceLegacyDuplicateSprintParticles()
     {
         existingChildParticles.Clear();
 
@@ -394,87 +400,45 @@ public class RunWindSlipstream : MonoBehaviour
             if (n.IndexOf("Sprint", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 n.IndexOf("Slipstream", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                if (!t.gameObject.activeSelf)
-                {
-                    t.gameObject.SetActive(true);
-                }
-
                 ParticleSystem[] psArray = t.GetComponentsInChildren<ParticleSystem>(true);
                 for (int p = 0; p < psArray.Length; p++)
                 {
-                    ParticleSystem ps = psArray[p];
-                    if (ps != null && !existingChildParticles.Contains(ps))
+                    if (psArray[p] != null)
                     {
-                        FixParticleVelocityCurveMode(ps);
-                        existingChildParticles.Add(ps);
-                    }
-                }
-
-                TrailRenderer[] trArray = t.GetComponentsInChildren<TrailRenderer>(true);
-                for (int r = 0; r < trArray.Length; r++)
-                {
-                    TrailRenderer tr = trArray[r];
-                    if (tr != null && !footTrailRenderers.Contains(tr))
-                    {
-                        footTrailRenderers.Add(tr);
+                        ParticleSystem.EmissionModule em = psArray[p].emission;
+                        em.enabled = false;
+                        psArray[p].Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
                     }
                 }
             }
         }
     }
 
-    private static void FixParticleVelocityCurveMode(ParticleSystem ps)
-    {
-        ParticleSystem.VelocityOverLifetimeModule vel = ps.velocityOverLifetime;
-        if (!vel.enabled) return;
-
-        ParticleSystem.MinMaxCurve cX = new ParticleSystem.MinMaxCurve(vel.x.constant);
-        cX.mode = ParticleSystemCurveMode.Constant;
-        ParticleSystem.MinMaxCurve cY = new ParticleSystem.MinMaxCurve(vel.y.constant);
-        cY.mode = ParticleSystemCurveMode.Constant;
-        ParticleSystem.MinMaxCurve cZ = new ParticleSystem.MinMaxCurve(vel.z.constant);
-        cZ.mode = ParticleSystemCurveMode.Constant;
-
-        vel.x = cX;
-        vel.y = cY;
-        vel.z = cZ;
-
-        ParticleSystem.MinMaxCurve zero = new ParticleSystem.MinMaxCurve(0f);
-        zero.mode = ParticleSystemCurveMode.Constant;
-        vel.orbitalX = zero;
-        vel.orbitalY = zero;
-        vel.orbitalZ = zero;
-        vel.orbitalOffsetX = zero;
-        vel.orbitalOffsetY = zero;
-        vel.orbitalOffsetZ = zero;
-        vel.radial = zero;
-
-        ParticleSystem.MinMaxCurve one = new ParticleSystem.MinMaxCurve(1f);
-        one.mode = ParticleSystemCurveMode.Constant;
-        vel.speedModifier = one;
-    }
-
     private void SetWindEmissionState(bool active)
     {
         isWindActive = active;
 
+        SetLoopEmitterActive(flowingRibbonsPS, active);
         SetLoopEmitterActive(bodyWindPS, active);
-        SetLoopEmitterActive(windMotesPS, active);
+        SetLoopEmitterActive(footStepMistPS, active);
 
-        // Layer 2: จังหวะเริ่มออกตัววิ่ง ปล่อยวงแหวนแหวกอากาศ + เข็มลมพุ่งถอยหลัง 1 ครั้ง
-        if (active && launchRingCooldown <= 0f)
+        // จังหวะเริ่มออกตัววิ่ง ปล่อยริบบิ้นลมโค้ง + เข็มลมเรียวพุ่งถอยหลังแบบนุ่มนวล (ไม่มีวงแหวนแหวกลมและใบไม้)
+        if (active && launchBurstCooldown <= 0f)
         {
-            if (launchAirRingPS != null)
-            {
-                launchAirRingPS.Play(true);
-                launchAirRingPS.Emit(1);
-            }
             if (launchGustNeedlesPS != null)
             {
                 launchGustNeedlesPS.Play(true);
                 launchGustNeedlesPS.Emit(12);
             }
-            launchRingCooldown = 0.35f;
+            if (flowingRibbonsPS != null)
+            {
+                flowingRibbonsPS.Emit(3);
+            }
+            if (footStepMistPS != null)
+            {
+                footStepMistPS.Emit(4);
+            }
+            launchBurstCooldown = 0.55f;
         }
 
         for (int i = 0; i < existingChildParticles.Count; i++)
@@ -502,8 +466,9 @@ public class RunWindSlipstream : MonoBehaviour
 
     private void KeepActiveWindAlive()
     {
+        SetLoopEmitterActive(flowingRibbonsPS, true);
         SetLoopEmitterActive(bodyWindPS, true);
-        SetLoopEmitterActive(windMotesPS, true);
+        SetLoopEmitterActive(footStepMistPS, true);
 
         for (int i = 0; i < existingChildParticles.Count; i++)
         {
@@ -559,7 +524,6 @@ public class RunWindSlipstream : MonoBehaviour
         }
         catch
         {
-            // Ignore if legacy input is disabled
         }
 
         movementKeyPressed = moveFromNewInput || moveFromLegacyInput;
@@ -576,7 +540,18 @@ public class RunWindSlipstream : MonoBehaviour
 
         Vector3 currentPos = transform.position;
         Vector3 horizontalDelta = new Vector3(currentPos.x - previousWorldPos.x, 0f, currentPos.z - previousWorldPos.z);
-        float deltaSpeed = horizontalDelta.magnitude / dt;
+        float deltaDist = horizontalDelta.magnitude;
+        float deltaSpeed = deltaDist / dt;
+        if (deltaDist > 0.002f)
+        {
+            currentMoveDirection = Vector3.Slerp(currentMoveDirection, horizontalDelta / deltaDist, Mathf.Clamp01(dt * 18f));
+        }
+        else if (transform.forward.sqrMagnitude > 0.01f)
+        {
+            Vector3 flatFwd = new Vector3(transform.forward.x, 0f, transform.forward.z);
+            if (flatFwd.sqrMagnitude > 0.001f)
+                currentMoveDirection = flatFwd.normalized;
+        }
         previousWorldPos = currentPos;
 
         float ccSpeed = 0f;
@@ -597,24 +572,50 @@ public class RunWindSlipstream : MonoBehaviour
         currentHorizontalSpeed = Mathf.Lerp(currentHorizontalSpeed, measuredSpeed, Mathf.Clamp01(dt * 20f));
     }
 
+    private void AlignWindRigToMovementDirection()
+    {
+        if (currentMoveDirection.sqrMagnitude < 0.001f) return;
+
+        Quaternion backwardRot = Quaternion.LookRotation(-currentMoveDirection, Vector3.up);
+        float feetY = GetFeetLocalY();
+
+        if (flowingRibbonsPS != null)
+        {
+            flowingRibbonsPS.transform.position = transform.position + Vector3.up * (feetY + 0.30f) + currentMoveDirection * 0.22f;
+            flowingRibbonsPS.transform.rotation = backwardRot;
+        }
+
+        if (bodyWindPS != null)
+        {
+            bodyWindPS.transform.position = transform.position + Vector3.up * (feetY + 0.28f) + currentMoveDirection * 0.26f;
+            bodyWindPS.transform.rotation = backwardRot;
+        }
+
+        if (launchGustNeedlesPS != null)
+        {
+            launchGustNeedlesPS.transform.position = transform.position + Vector3.up * (feetY + 0.24f) + currentMoveDirection * 0.12f;
+            launchGustNeedlesPS.transform.rotation = backwardRot;
+        }
+
+        if (footStepMistPS != null)
+        {
+            footStepMistPS.transform.position = transform.position + Vector3.up * (feetY + 0.10f) - currentMoveDirection * 0.10f;
+            footStepMistPS.transform.rotation = backwardRot;
+        }
+    }
+
     // ================================================================================================
-    // สร้าง Procedural Textures & Materials ระดับ AAA (เส้นสายลมเรียวคมพริ้วไหว ไม่แข็งทื่อเป็นแท่ง)
+    // สร้าง Procedural Textures & Materials ระดับ AAA (พู่กันสายลมไหม, หมอกฝุ่นเท้า)
     // ================================================================================================
     private void GenerateRuntimeWindAssets()
     {
-        GameObject q = GameObject.CreatePrimitive(PrimitiveType.Quad);
-        runtimeQuadMesh = q.GetComponent<MeshFilter>().sharedMesh;
-        Destroy(q);
-
         runtimeWindStreakTex = CreateSilkyWindStreakTexture();
-        runtimeFootRibbonTex = CreateDualFilamentFootRibbonTexture();
-        runtimeAirRingTex = CreateAerodynamicAirRingTexture();
-        runtimeWindMoteTex = CreateSoftWindMoteTexture();
+        runtimeFootRibbonTex = CreateDualFilamentSilkRibbonTexture();
+        runtimeStepMistTex = CreateSoftFootMistTexture();
 
-        runtimeStreakMat = CreateURPWindMaterial("MAT_AAA_WindStreak_Silky", runtimeWindStreakTex);
-        runtimeRibbonMat = CreateURPWindMaterial("MAT_AAA_FootRibbon_Silk", runtimeFootRibbonTex);
-        runtimeAirRingMat = CreateURPWindMaterial("MAT_AAA_SprintAirRing", runtimeAirRingTex);
-        runtimeMoteMat = CreateURPWindMaterial("MAT_AAA_WindMotes", runtimeWindMoteTex);
+        runtimeStreakMat = CreateURPWindMaterial("MAT_WWM_CalligraphyWindStreak", runtimeWindStreakTex, new Color(1.65f, 1.92f, 1.88f, 1f));
+        runtimeRibbonMat = CreateURPWindMaterial("MAT_WWM_FlowingSilkRibbon", runtimeFootRibbonTex, new Color(1.55f, 1.85f, 1.80f, 1f));
+        runtimeStepMistMat = CreateSoftAlphaMistMaterial("MAT_WWM_SprintFootMist", runtimeStepMistTex);
     }
 
     private static Texture2D CreateSilkyWindStreakTexture()
@@ -630,18 +631,21 @@ public class RunWindSlipstream : MonoBehaviour
         for (int y = 0; y < height; y++)
         {
             float ny = ((y / (float)(height - 1)) * 2f) - 1f;
-            // แกนกลางเรียวคม + รัศมีลมโปร่งบาง + เส้นใยลมรองบางๆ ด้านข้าง
-            float razorCore = Mathf.Exp(-ny * ny * 34.0f) * 0.95f;
-            float softVeil = Mathf.Exp(-ny * ny * 7.5f) * 0.42f;
-            float twinWhisper = Mathf.Exp(-Mathf.Pow(Mathf.Abs(ny) - 0.36f, 2f) * 42.0f) * 0.28f;
-
             for (int x = 0; x < width; x++)
             {
                 float nx = x / (float)(width - 1);
-                float headNeedle = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(nx / 0.16f));
-                float tailDissolve = Mathf.Pow(Mathf.Clamp01((1f - nx) / 0.84f), 1.85f);
+                // เส้นพู่กันโค้งอ่อนช้อยเล็กน้อยตามความยาว (Organic Calligraphy Taper)
+                float brushCurve = Mathf.Sin(nx * Mathf.PI * 1.6f) * 0.10f;
+                float cy = ny - brushCurve;
 
-                float alpha = Mathf.Clamp01((razorCore + softVeil + twinWhisper) * headNeedle * tailDissolve);
+                float razorCore = Mathf.Exp(-cy * cy * 36.0f) * 0.96f;
+                float silkyVeil = Mathf.Exp(-cy * cy * 7.8f) * 0.48f;
+                float twinWhisper = Mathf.Exp(-Mathf.Pow(Mathf.Abs(cy) - 0.34f, 2f) * 44.0f) * 0.26f;
+
+                float headNeedle = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(nx / 0.14f));
+                float tailDissolve = Mathf.Pow(Mathf.Clamp01((1f - nx) / 0.86f), 1.75f);
+
+                float alpha = Mathf.Clamp01((razorCore + silkyVeil + twinWhisper) * headNeedle * tailDissolve);
                 pixels[y * width + x] = new Color(1f, 1f, 1f, alpha);
             }
         }
@@ -651,12 +655,12 @@ public class RunWindSlipstream : MonoBehaviour
         return tex;
     }
 
-    private static Texture2D CreateDualFilamentFootRibbonTexture()
+    private static Texture2D CreateDualFilamentSilkRibbonTexture()
     {
         int width = 256;
         int height = 64;
         Texture2D tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
-        tex.name = "T_AAA_DualSilkFootRibbon";
+        tex.name = "T_AAA_DualSilkRibbon";
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.filterMode = FilterMode.Bilinear;
 
@@ -667,15 +671,17 @@ public class RunWindSlipstream : MonoBehaviour
             for (int x = 0; x < width; x++)
             {
                 float nx = x / (float)(width - 1);
-                // เส้นไหมลมคู่ที่พลิ้วคลื่นเล็กน้อยตามความยาวริบบิ้น
-                float wave = Mathf.Sin(nx * Mathf.PI * 3.0f) * 0.12f;
-                float strandA = Mathf.Exp(-Mathf.Pow(ny - (0.26f + wave), 2f) * 32.0f) * 0.82f;
-                float strandB = Mathf.Exp(-Mathf.Pow(ny + (0.26f - wave * 0.7f), 2f) * 36.0f) * 0.65f;
-                float silkyBody = Mathf.Exp(-ny * ny * 5.2f) * 0.34f;
+                // ริบบิ้นผ้าไหมลมคู่ถักทอคลื่นอ่อนช้อย (Silky Twin-Strand Weave)
+                float waveA = Mathf.Sin(nx * Mathf.PI * 3.5f) * 0.14f;
+                float waveB = Mathf.Cos(nx * Mathf.PI * 2.5f) * 0.11f;
+                float strandA = Mathf.Exp(-Mathf.Pow(ny - (0.24f + waveA), 2f) * 34.0f) * 0.88f;
+                float strandB = Mathf.Exp(-Mathf.Pow(ny + (0.24f - waveB), 2f) * 38.0f) * 0.72f;
+                float centralSilk = Mathf.Exp(-ny * ny * 5.8f) * 0.42f;
+                float edgeGuard = 1f - Mathf.SmoothStep(0.76f, 0.98f, Mathf.Abs(ny));
 
-                float lengthFade = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(nx / 0.12f)) *
-                                   Mathf.Pow(Mathf.Clamp01((1f - nx) / 0.88f), 1.45f);
-                float alpha = Mathf.Clamp01((strandA + strandB + silkyBody) * lengthFade);
+                float lengthFade = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(nx / 0.10f)) *
+                                   Mathf.Pow(Mathf.Clamp01((1f - nx) / 0.90f), 1.35f);
+                float alpha = Mathf.Clamp01((strandA + strandB + centralSilk) * edgeGuard * lengthFade);
                 pixels[y * width + x] = new Color(1f, 1f, 1f, alpha);
             }
         }
@@ -685,11 +691,11 @@ public class RunWindSlipstream : MonoBehaviour
         return tex;
     }
 
-    private static Texture2D CreateAerodynamicAirRingTexture()
+    private static Texture2D CreateSoftFootMistTexture()
     {
-        int size = 256;
+        int size = 128;
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        tex.name = "T_AAA_SprintAirRing";
+        tex.name = "T_AAA_SprintFootMist";
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.filterMode = FilterMode.Bilinear;
 
@@ -701,16 +707,16 @@ public class RunWindSlipstream : MonoBehaviour
             {
                 float nx = ((x / (float)(size - 1)) * 2f) - 1f;
                 float r = Mathf.Sqrt(nx * nx + ny * ny);
-                float angle = Mathf.Atan2(ny, nx);
 
-                // วงแหวนแหวกอากาศบางคม + รอยตัดสายลมตามแนวรอบวงให้ดูพริ้วไม่เป็นวงกลมแข็ง
-                float windBreak = 0.65f + 0.35f * Mathf.Sin(angle * 5f + 0.7f) * Mathf.Cos(angle * 3f);
-                float mainRing = Mathf.Exp(-Mathf.Pow(r - 0.74f, 2f) / (2f * 0.036f * 0.036f));
-                float innerTrail = Mathf.Exp(-Mathf.Pow(r - 0.62f, 2f) / (2f * 0.055f * 0.055f)) * 0.38f;
-                float mask = 1f - Mathf.SmoothStep(0.84f, 0.96f, r);
+                float n1 = Mathf.PerlinNoise(nx * 2.4f + 5.3f, ny * 2.4f + 9.1f);
+                float n2 = Mathf.PerlinNoise(nx * 5.2f + 13.7f, ny * 5.2f + 2.6f) * 0.5f;
+                float fbm = (n1 + n2) / 1.5f;
 
-                float alpha = Mathf.Clamp01((mainRing + innerTrail) * windBreak * mask);
-                pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
+                float radial = 1f - Mathf.SmoothStep(0.16f, 0.92f, r - (fbm - 0.5f) * 0.24f);
+                float guard = 1f - Mathf.SmoothStep(0.76f, 0.97f, r);
+                float alpha = Mathf.Clamp01(radial * guard * (0.40f + fbm * 0.72f));
+
+                pixels[y * size + x] = new Color(0.96f, 0.99f, 1.0f, alpha);
             }
         }
 
@@ -719,39 +725,11 @@ public class RunWindSlipstream : MonoBehaviour
         return tex;
     }
 
-    private static Texture2D CreateSoftWindMoteTexture()
+    private static Material CreateURPWindMaterial(string matName, Texture2D tex, Color hdrTint)
     {
-        int size = 64;
-        Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        tex.name = "T_AAA_SoftWindMote";
-        tex.wrapMode = TextureWrapMode.Clamp;
-        tex.filterMode = FilterMode.Bilinear;
-
-        Color[] pixels = new Color[size * size];
-        for (int y = 0; y < size; y++)
-        {
-            float ny = ((y / (float)(size - 1)) * 2f) - 1f;
-            for (int x = 0; x < size; x++)
-            {
-                float nx = ((x / (float)(size - 1)) * 2f) - 1f;
-                float r = Mathf.Sqrt(nx * nx + ny * ny);
-                float glow = Mathf.Exp(-r * r * 6.5f);
-                float star = Mathf.Exp(-(Mathf.Abs(nx) + Mathf.Abs(ny)) * 4.5f) * 0.65f;
-                float mask = 1f - Mathf.SmoothStep(0.75f, 1.0f, r);
-                pixels[y * size + x] = new Color(1f, 1f, 1f, Mathf.Clamp01((glow + star) * mask));
-            }
-        }
-
-        tex.SetPixels(pixels);
-        tex.Apply(false, false);
-        return tex;
-    }
-
-    private static Material CreateURPWindMaterial(string matName, Texture2D tex)
-    {
-        Shader shader = Shader.Find("Sprites/Default");
-        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Particles/Unlit");
+        Shader shader = Shader.Find("Universal Render Pipeline/Particles/Unlit");
         if (shader == null) shader = Shader.Find("Particles/Standard Unlit");
+        if (shader == null) shader = Shader.Find("Sprites/Default");
 
         Material mat = new Material(shader);
         mat.name = matName;
@@ -759,196 +737,233 @@ public class RunWindSlipstream : MonoBehaviour
 
         if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
         if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
-        if (mat.HasProperty("_Color")) mat.SetColor("_Color", Color.white);
-        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
+        if (mat.HasProperty("_Color")) mat.SetColor("_Color", hdrTint);
+        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", hdrTint);
         if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 1f);
+        if (mat.HasProperty("_Blend")) mat.SetFloat("_Blend", 2f); // Additive
+        if (mat.HasProperty("_ColorMode")) mat.SetFloat("_ColorMode", 0f);
         if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", (float)CullMode.Off);
         if (mat.HasProperty("_ZWrite")) mat.SetFloat("_ZWrite", 0f);
+        if (mat.HasProperty("_SrcBlend")) mat.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+        if (mat.HasProperty("_DstBlend")) mat.SetInt("_DstBlend", (int)BlendMode.One);
+        if (mat.HasProperty("_SrcBlendAlpha")) mat.SetInt("_SrcBlendAlpha", (int)BlendMode.One);
+        if (mat.HasProperty("_DstBlendAlpha")) mat.SetInt("_DstBlendAlpha", (int)BlendMode.One);
+        mat.SetOverrideTag("RenderType", "Transparent");
+        mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        mat.EnableKeyword("_BLENDMODE_ADD");
+        mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        mat.DisableKeyword("_ALPHAMODULATE_ON");
+        mat.renderQueue = (int)RenderQueue.Transparent;
+        return mat;
+    }
 
+    private static Material CreateSoftAlphaMistMaterial(string matName, Texture2D tex)
+    {
+        Shader shader = Shader.Find("Sprites/Default");
+        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Particles/Unlit");
+
+        Material mat = new Material(shader);
+        mat.name = matName;
+        mat.mainTexture = tex;
+        mat.color = Color.white;
+        if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
+        if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
+        if (mat.HasProperty("_Color")) mat.SetColor("_Color", Color.white);
+        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
         mat.renderQueue = (int)RenderQueue.Transparent;
         return mat;
     }
 
     // ================================================================================================
-    // LAYER 1: Sleek Aerodynamic Body Wind Slipstream (เส้นลมเรียวคมพริ้วโอบรอบตัว + Noise Turbulence)
+    // LAYER 1: Curving Silky Wind Ribbons (ริบบิ้นสายลมโค้งพริ้วไหวด้วย Particle Trails + Curl Noise)
     // ================================================================================================
-    private void BuildLayer1SilkyBodySlipstream()
+    private void BuildLayer1FlowingSilkRibbons()
     {
-        DestroyChildIfExists(transform, "VFX_Runtime_BodyWindSlipstream");
+        DestroyChildIfExists(transform, "VFX_Runtime_FlowingWindRibbons");
 
-        GameObject slipObj = new GameObject("VFX_Runtime_BodyWindSlipstream");
-        slipObj.transform.SetParent(transform, false);
-        slipObj.transform.localPosition = new Vector3(0f, 1.02f, 1.35f);
-        slipObj.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
-        slipObj.transform.localScale = Vector3.one;
+        float feetY = GetFeetLocalY();
+        GameObject ribObj = new GameObject("VFX_Runtime_FlowingWindRibbons");
+        ribObj.transform.SetParent(transform, false);
+        ribObj.transform.localPosition = new Vector3(0f, feetY + 0.30f, 0.22f);
+        ribObj.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
 
-        bodyWindPS = slipObj.AddComponent<ParticleSystem>();
-        bodyWindPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        flowingRibbonsPS = ribObj.AddComponent<ParticleSystem>();
+        flowingRibbonsPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
         Color activeColor = GetCurrentSelectedWindColor();
 
-        ParticleSystem.MainModule main = bodyWindPS.main;
+        var main = flowingRibbonsPS.main;
         main.duration = 1.0f;
         main.loop = true;
         main.playOnAwake = false;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
-        main.startLifetime = new ParticleSystem.MinMaxCurve(0.20f, 0.30f);
-        main.startSpeed = new ParticleSystem.MinMaxCurve(12f, 18f);
-        // ขนาดเรียวคมสง่างามแบบเกม AAA ไม่หนาเป็นแท่งทึบ
-        main.startSize = new ParticleSystem.MinMaxCurve(0.028f, 0.062f);
-        main.startColor = activeColor;
-        main.gravityModifier = 0f;
-        main.maxParticles = 240;
+        main.startLifetime = new ParticleSystem.MinMaxCurve(0.28f, 0.44f);
+        main.startSpeed = new ParticleSystem.MinMaxCurve(4.2f, 7.6f);
+        main.startSize = new ParticleSystem.MinMaxCurve(0.055f, 0.115f);
+        main.startColor = Color.white;
+        main.gravityModifier = -0.02f;
+        main.maxParticles = 48;
 
-        ParticleSystem.EmissionModule emission = bodyWindPS.emission;
+        var emission = flowingRibbonsPS.emission;
         emission.enabled = false;
-        emission.rateOverTime = new ParticleSystem.MinMaxCurve(windDensity);
-        emission.rateOverDistance = new ParticleSystem.MinMaxCurve(2.5f);
+        emission.rateOverTime = new ParticleSystem.MinMaxCurve(11f);
+        emission.rateOverDistance = new ParticleSystem.MinMaxCurve(1.4f);
 
-        ParticleSystem.ShapeModule shape = bodyWindPS.shape;
+        var shape = flowingRibbonsPS.shape;
         shape.enabled = true;
-        shape.shapeType = ParticleSystemShapeType.Cone;
-        shape.angle = 10f;
-        shape.radius = 0.54f;
-        shape.radiusThickness = 0.92f; // ล้อมโอบขอบลำตัว แก้ม และไหล่โดยไม่บังกลางอก
+        shape.shapeType = ParticleSystemShapeType.Box;
+        shape.scale = new Vector3(0.44f, 0.22f, 0.14f); // กระจุกพริ้วรอบช่วงขาและหน้าแข้ง ไม่ลอยขึ้นบังลำตัว
 
-        ParticleSystem.VelocityOverLifetimeModule vel = bodyWindPS.velocityOverLifetime;
-        vel.enabled = false;
-
-        // เพิ่มความพริ้วไหวของกระแสลม (Organic Air Turbulence) ให้เส้นลมโค้งลู่ไปตามอากาศจริง
-        ParticleSystem.NoiseModule noise = bodyWindPS.noise;
+        // Noise โค้งนุ่มๆ ให้ริบบิ้นลมพริ้วเป็นเส้นโค้งรอบช่วงขา
+        var noise = flowingRibbonsPS.noise;
         noise.enabled = true;
-        noise.strength = new ParticleSystem.MinMaxCurve(0.45f);
-        noise.frequency = 2.0f;
-        noise.scrollSpeed = 1.6f;
+        noise.strength = new ParticleSystem.MinMaxCurve(0.72f);
+        noise.frequency = 1.45f;
+        noise.scrollSpeed = 1.85f;
         noise.damping = true;
         noise.quality = ParticleSystemNoiseQuality.Medium;
 
-        ParticleSystem.ColorOverLifetimeModule col = bodyWindPS.colorOverLifetime;
-        col.enabled = true;
-        col.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 1.0f));
+        var trails = flowingRibbonsPS.trails;
+        trails.enabled = true;
+        trails.mode = ParticleSystemTrailMode.PerParticle;
+        trails.ratio = 1.0f;
+        trails.lifetime = new ParticleSystem.MinMaxCurve(0.55f);
+        trails.minVertexDistance = 0.04f;
+        trails.worldSpace = true;
+        trails.dieWithParticles = false;
+        trails.textureMode = ParticleSystemTrailTextureMode.Stretch;
+        trails.sizeAffectsWidth = true;
+        trails.sizeAffectsLifetime = false;
+        trails.inheritParticleColor = false;
+        trails.widthOverTrail = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
+            new Keyframe(0.0f, 0.20f),
+            new Keyframe(0.20f, 1.00f),
+            new Keyframe(0.65f, 0.48f),
+            new Keyframe(1.0f, 0.00f)
+        ));
+        trails.colorOverLifetime = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.88f));
+        trails.colorOverTrail = new ParticleSystem.MinMaxGradient(BuildTrailTailFadeGradient());
 
-        ParticleSystem.SizeOverLifetimeModule sol = bodyWindPS.sizeOverLifetime;
-        sol.enabled = true;
-        AnimationCurve sizeCurve = new AnimationCurve(
-            new Keyframe(0.0f, 0.25f),
-            new Keyframe(0.22f, 1.0f),
-            new Keyframe(0.75f, 0.72f),
-            new Keyframe(1.0f, 0.05f)
-        );
-        sol.size = new ParticleSystem.MinMaxCurve(1f, sizeCurve);
-
-        ParticleSystemRenderer psRenderer = slipObj.GetComponent<ParticleSystemRenderer>();
-        psRenderer.renderMode = ParticleSystemRenderMode.Stretch;
-        psRenderer.cameraVelocityScale = 0f;
-        psRenderer.velocityScale = 0.08f;
-        psRenderer.lengthScale = 8.5f;
-        psRenderer.sharedMaterial = runtimeStreakMat;
-        psRenderer.shadowCastingMode = ShadowCastingMode.Off;
-        psRenderer.receiveShadows = false;
-        psRenderer.sortingOrder = 5;
+        var psr = ribObj.GetComponent<ParticleSystemRenderer>();
+        psr.renderMode = ParticleSystemRenderMode.None; // โชว์เฉพาะเส้นริบบิ้นพริ้วโค้งล้วนๆ ไม่มีจุดเม็ดหัว
+        psr.trailMaterial = runtimeRibbonMat;
+        psr.shadowCastingMode = ShadowCastingMode.Off;
+        psr.receiveShadows = false;
+        psr.sortingOrder = 6;
     }
 
     // ================================================================================================
-    // LAYER 2: Crisp Sprint Launch Air-Ring & Gust Needles (วงแหวนแหวกอากาศ + เข็มลมตอนเริ่มออกวิ่ง)
+    // LAYER 2: Painterly Aerodynamic Speed Wisps & Launch Gust (เส้นลมพู่กันบางคม + ลมดีดออกตัว)
     // ================================================================================================
-    private void BuildLayer2SprintLaunchAirRingAndGust()
+    private void BuildLayer2BodyWindAndLaunchGust()
     {
-        DestroyChildIfExists(transform, "VFX_Runtime_DashStartBurst");
-        DestroyChildIfExists(transform, "VFX_Runtime_SprintStartAirRing");
+        DestroyChildIfExists(transform, "VFX_Runtime_BodyWindSlipstream");
         DestroyChildIfExists(transform, "VFX_Runtime_SprintStartGust");
 
+        float feetY = GetFeetLocalY();
         Color activeColor = GetCurrentSelectedWindColor();
 
-        // 2A: วงแหวนแหวกอากาศรอบเอวตอนดีดตัวออกวิ่ง
-        GameObject ringObj = new GameObject("VFX_Runtime_SprintStartAirRing");
-        ringObj.transform.SetParent(transform, false);
-        ringObj.transform.localPosition = new Vector3(0f, 0.95f, 0.15f);
-        ringObj.transform.localRotation = Quaternion.identity;
-        ringObj.transform.localScale = Vector3.one;
+        // 2A. เส้นสายลมพู่กันบางคมพริ้วรอบช่วงขา
+        GameObject slipObj = new GameObject("VFX_Runtime_BodyWindSlipstream");
+        slipObj.transform.SetParent(transform, false);
+        slipObj.transform.localPosition = new Vector3(0f, feetY + 0.28f, 0.26f);
+        slipObj.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
 
-        launchAirRingPS = ringObj.AddComponent<ParticleSystem>();
-        launchAirRingPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        bodyWindPS = slipObj.AddComponent<ParticleSystem>();
+        bodyWindPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
-        ParticleSystem.MainModule rMain = launchAirRingPS.main;
-        rMain.duration = 0.35f;
-        rMain.loop = false;
-        rMain.playOnAwake = false;
-        rMain.simulationSpace = ParticleSystemSimulationSpace.World;
-        rMain.startLifetime = new ParticleSystem.MinMaxCurve(0.26f);
-        rMain.startSpeed = new ParticleSystem.MinMaxCurve(0f);
-        rMain.startSize = new ParticleSystem.MinMaxCurve(2.15f);
-        rMain.startColor = activeColor;
-        rMain.gravityModifier = 0f;
-        rMain.maxParticles = 6;
+        var main = bodyWindPS.main;
+        main.duration = 1.0f;
+        main.loop = true;
+        main.playOnAwake = false;
+        main.simulationSpace = ParticleSystemSimulationSpace.World;
+        main.startLifetime = new ParticleSystem.MinMaxCurve(0.20f, 0.32f);
+        main.startSpeed = new ParticleSystem.MinMaxCurve(7.5f, 12.2f);
+        main.startSize = new ParticleSystem.MinMaxCurve(0.018f, 0.036f);
+        main.startColor = Color.white;
+        main.gravityModifier = 0f;
+        main.maxParticles = 160;
 
-        ParticleSystem.EmissionModule rEm = launchAirRingPS.emission;
-        rEm.enabled = false;
+        var emission = bodyWindPS.emission;
+        emission.enabled = false;
+        emission.rateOverTime = new ParticleSystem.MinMaxCurve(windDensity);
+        emission.rateOverDistance = new ParticleSystem.MinMaxCurve(1.8f);
 
-        ParticleSystem.ShapeModule rShape = launchAirRingPS.shape;
-        rShape.enabled = false;
+        var shape = bodyWindPS.shape;
+        shape.enabled = true;
+        shape.shapeType = ParticleSystemShapeType.Box;
+        shape.scale = new Vector3(0.46f, 0.26f, 0.18f); // พริ้วรอบช่วงขาและข้อเท้า
 
-        ParticleSystem.SizeOverLifetimeModule rSol = launchAirRingPS.sizeOverLifetime;
-        rSol.enabled = true;
-        rSol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
-            new Keyframe(0.0f, 0.28f, 0f, 4.8f),
-            new Keyframe(0.45f, 1.05f, 0.9f, 0.6f),
-            new Keyframe(1.0f, 1.38f, 0.2f, 0f)
+        var noise = bodyWindPS.noise;
+        noise.enabled = true;
+        noise.strength = new ParticleSystem.MinMaxCurve(0.32f);
+        noise.frequency = 1.35f;
+        noise.scrollSpeed = 1.4f;
+        noise.damping = true;
+        noise.quality = ParticleSystemNoiseQuality.Medium;
+
+        var col = bodyWindPS.colorOverLifetime;
+        col.enabled = true;
+        col.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.78f));
+
+        var sol = bodyWindPS.sizeOverLifetime;
+        sol.enabled = true;
+        sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
+            new Keyframe(0.0f, 0.15f),
+            new Keyframe(0.20f, 1.0f),
+            new Keyframe(0.75f, 0.62f),
+            new Keyframe(1.0f, 0.0f)
         ));
 
-        ParticleSystem.ColorOverLifetimeModule rCol = launchAirRingPS.colorOverLifetime;
-        rCol.enabled = true;
-        rCol.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.92f));
+        var psr = slipObj.GetComponent<ParticleSystemRenderer>();
+        psr.renderMode = ParticleSystemRenderMode.Stretch;
+        psr.cameraVelocityScale = 0f;
+        psr.velocityScale = 0.065f;
+        psr.lengthScale = 8.2f;
+        psr.sharedMaterial = runtimeStreakMat;
+        psr.shadowCastingMode = ShadowCastingMode.Off;
+        psr.receiveShadows = false;
+        psr.sortingOrder = 5;
 
-        ParticleSystemRenderer rPsr = ringObj.GetComponent<ParticleSystemRenderer>();
-        rPsr.renderMode = ParticleSystemRenderMode.Mesh;
-        rPsr.mesh = runtimeQuadMesh;
-        rPsr.alignment = ParticleSystemRenderSpace.Local;
-        rPsr.sharedMaterial = runtimeAirRingMat;
-        rPsr.shadowCastingMode = ShadowCastingMode.Off;
-        rPsr.receiveShadows = false;
-        rPsr.sortingOrder = 6;
-
-        // 2B: เข็มลมเรียวคมพุ่งถอยหลังตอนดีดตัวออกวิ่ง
+        // 2B. แรงลมดีดออกตัวระดับขา (Launch Gust Wisps — ไม่มีวงแหวนแหวกลม)
         GameObject gustObj = new GameObject("VFX_Runtime_SprintStartGust");
         gustObj.transform.SetParent(transform, false);
-        gustObj.transform.localPosition = new Vector3(0f, 0.85f, 0.20f);
+        gustObj.transform.localPosition = new Vector3(0f, feetY + 0.24f, 0.12f);
         gustObj.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
-        gustObj.transform.localScale = Vector3.one;
 
         launchGustNeedlesPS = gustObj.AddComponent<ParticleSystem>();
         launchGustNeedlesPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
-        ParticleSystem.MainModule gMain = launchGustNeedlesPS.main;
-        gMain.duration = 0.35f;
+        var gMain = launchGustNeedlesPS.main;
+        gMain.duration = 0.30f;
         gMain.loop = false;
         gMain.playOnAwake = false;
         gMain.simulationSpace = ParticleSystemSimulationSpace.World;
-        gMain.startLifetime = new ParticleSystem.MinMaxCurve(0.18f, 0.26f);
-        gMain.startSpeed = new ParticleSystem.MinMaxCurve(9f, 15f);
-        gMain.startSize = new ParticleSystem.MinMaxCurve(0.035f, 0.068f);
-        gMain.startColor = activeColor;
+        gMain.startLifetime = new ParticleSystem.MinMaxCurve(0.18f, 0.28f);
+        gMain.startSpeed = new ParticleSystem.MinMaxCurve(8.0f, 13.0f);
+        gMain.startSize = new ParticleSystem.MinMaxCurve(0.022f, 0.044f);
+        gMain.startColor = Color.white;
         gMain.gravityModifier = 0f;
         gMain.maxParticles = 32;
 
-        ParticleSystem.EmissionModule gEm = launchGustNeedlesPS.emission;
+        var gEm = launchGustNeedlesPS.emission;
         gEm.enabled = false;
 
-        ParticleSystem.ShapeModule gShape = launchGustNeedlesPS.shape;
+        var gShape = launchGustNeedlesPS.shape;
         gShape.enabled = true;
         gShape.shapeType = ParticleSystemShapeType.Cone;
-        gShape.angle = 22f;
-        gShape.radius = 0.42f;
-        gShape.radiusThickness = 0.9f;
+        gShape.angle = 12f;
+        gShape.radius = 0.28f;
+        gShape.radiusThickness = 0.7f;
 
-        ParticleSystem.ColorOverLifetimeModule gCol = launchGustNeedlesPS.colorOverLifetime;
+        var gCol = launchGustNeedlesPS.colorOverLifetime;
         gCol.enabled = true;
-        gCol.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.95f));
+        gCol.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.92f));
 
-        ParticleSystemRenderer gPsr = gustObj.GetComponent<ParticleSystemRenderer>();
+        var gPsr = gustObj.GetComponent<ParticleSystemRenderer>();
         gPsr.renderMode = ParticleSystemRenderMode.Stretch;
         gPsr.cameraVelocityScale = 0f;
-        gPsr.velocityScale = 0.07f;
+        gPsr.velocityScale = 0.06f;
         gPsr.lengthScale = 6.2f;
         gPsr.sharedMaterial = runtimeStreakMat;
         gPsr.shadowCastingMode = ShadowCastingMode.Off;
@@ -957,10 +972,12 @@ public class RunWindSlipstream : MonoBehaviour
     }
 
     // ================================================================================================
-    // LAYER 3: Graceful Dual Ankle Silk Ribbons (ริบบิ้นสายลมไหมคู่พริ้วติดข้อเท้าซ้าย-ขวา)
+    // LAYER 3: Dual Ankle Silk Ribbons + Soft Ground Footstep Mist (ริบบิ้นข้อเท้าคู่ + หมอกฝุ่นเท้า)
     // ================================================================================================
-    private void BuildLayer3DualAnkleSilkRibbons()
+    private void BuildLayer3DualAnkleRibbonsAndFootMist()
     {
+        footTrailRenderers.Clear();
+
         Transform leftFoot = FindDeepChildByName(transform, leftFootBoneName);
         Transform rightFoot = FindDeepChildByName(transform, rightFootBoneName);
 
@@ -976,14 +993,72 @@ public class RunWindSlipstream : MonoBehaviour
         if (leftFoot != null)
         {
             TrailRenderer trL = CreateSilkFootTrailOnBone(leftFoot, "VFX_Runtime_FootWindRibbon_L");
-            if (trL != null && !footTrailRenderers.Contains(trL)) footTrailRenderers.Add(trL);
+            if (trL != null) footTrailRenderers.Add(trL);
         }
 
         if (rightFoot != null)
         {
             TrailRenderer trR = CreateSilkFootTrailOnBone(rightFoot, "VFX_Runtime_FootWindRibbon_R");
-            if (trR != null && !footTrailRenderers.Contains(trR)) footTrailRenderers.Add(trR);
+            if (trR != null) footTrailRenderers.Add(trR);
         }
+
+        // หมอกฝุ่นบางเบาติดพื้นหลังปลายเท้าตอนวิ่ง (เพิ่มน้ำหนักฝีเท้าแบบวิชาตัวเบา)
+        DestroyChildIfExists(transform, "VFX_Runtime_SprintFootMist");
+
+        float feetY = GetFeetLocalY();
+        GameObject mistObj = new GameObject("VFX_Runtime_SprintFootMist");
+        mistObj.transform.SetParent(transform, false);
+        mistObj.transform.localPosition = new Vector3(0f, feetY + 0.12f, -0.12f);
+        mistObj.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+
+        footStepMistPS = mistObj.AddComponent<ParticleSystem>();
+        footStepMistPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+        var mMain = footStepMistPS.main;
+        mMain.duration = 1.0f;
+        mMain.loop = true;
+        mMain.playOnAwake = false;
+        mMain.simulationSpace = ParticleSystemSimulationSpace.World;
+        mMain.startLifetime = new ParticleSystem.MinMaxCurve(0.32f, 0.50f);
+        mMain.startSpeed = new ParticleSystem.MinMaxCurve(0.6f, 1.5f);
+        mMain.startSize = new ParticleSystem.MinMaxCurve(0.28f, 0.48f);
+        mMain.startRotation = new ParticleSystem.MinMaxCurve(0f, Mathf.PI * 2f);
+        mMain.startColor = Color.white;
+        mMain.gravityModifier = -0.04f;
+        mMain.maxParticles = 45;
+
+        var mEm = footStepMistPS.emission;
+        mEm.enabled = false;
+        mEm.rateOverTime = new ParticleSystem.MinMaxCurve(6f);
+        mEm.rateOverDistance = new ParticleSystem.MinMaxCurve(1.9f);
+
+        var mShape = footStepMistPS.shape;
+        mShape.enabled = true;
+        mShape.shapeType = ParticleSystemShapeType.Box;
+        mShape.scale = new Vector3(0.46f, 0.08f, 0.20f);
+
+        var mRot = footStepMistPS.rotationOverLifetime;
+        mRot.enabled = true;
+        mRot.z = new ParticleSystem.MinMaxCurve(-0.85f, 0.85f);
+
+        var mSol = footStepMistPS.sizeOverLifetime;
+        mSol.enabled = true;
+        mSol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
+            new Keyframe(0.0f, 0.42f),
+            new Keyframe(0.45f, 1.00f),
+            new Keyframe(1.0f, 1.48f)
+        ));
+
+        var mCol = footStepMistPS.colorOverLifetime;
+        mCol.enabled = true;
+        mCol.color = new ParticleSystem.MinMaxGradient(BuildFootMistGradient(GetCurrentSelectedWindColor()));
+
+        var mPsr = mistObj.GetComponent<ParticleSystemRenderer>();
+        mPsr.renderMode = ParticleSystemRenderMode.Billboard;
+        mPsr.sharedMaterial = runtimeStepMistMat;
+        mPsr.shadowCastingMode = ShadowCastingMode.Off;
+        mPsr.receiveShadows = false;
+        mPsr.sortingOrder = 4;
     }
 
     private TrailRenderer CreateSilkFootTrailOnBone(Transform footBone, string nodeName)
@@ -992,12 +1067,12 @@ public class RunWindSlipstream : MonoBehaviour
 
         GameObject ribbonObj = new GameObject(nodeName);
         ribbonObj.transform.SetParent(footBone, false);
-        ribbonObj.transform.localPosition = new Vector3(0f, 0.05f, 0f);
+        ribbonObj.transform.localPosition = new Vector3(0f, 0.06f, 0f);
         ribbonObj.transform.localRotation = Quaternion.identity;
         ribbonObj.transform.localScale = Vector3.one;
 
         TrailRenderer trail = ribbonObj.AddComponent<TrailRenderer>();
-        trail.time = 0.26f;
+        trail.time = 0.34f;
         trail.minVertexDistance = 0.015f;
         trail.autodestruct = false;
         trail.emitting = false;
@@ -1008,86 +1083,19 @@ public class RunWindSlipstream : MonoBehaviour
         trail.shadowCastingMode = ShadowCastingMode.Off;
         trail.receiveShadows = false;
         trail.sharedMaterial = runtimeRibbonMat;
-        trail.sortingOrder = 5;
+        trail.sortingOrder = 6;
 
-        // ริบบิ้นเรียวพริ้วสง่างาม (0.13 -> 0.075 -> 0) ไม่หนาเทอะทะ
         AnimationCurve widthCurve = new AnimationCurve(
-            new Keyframe(0.0f, 0.13f),
-            new Keyframe(0.35f, 0.075f),
+            new Keyframe(0.0f, 0.095f),
+            new Keyframe(0.32f, 0.052f),
+            new Keyframe(0.74f, 0.018f),
             new Keyframe(1.0f, 0.0f)
         );
         trail.widthMultiplier = 1.0f;
         trail.widthCurve = widthCurve;
-        trail.colorGradient = BuildWindColorGradient(GetCurrentSelectedWindColor(), 0.82f);
+        trail.colorGradient = BuildWindColorGradient(GetCurrentSelectedWindColor(), 0.92f);
 
         return trail;
-    }
-
-    // ================================================================================================
-    // LAYER 4: Delicate Wind Motes & Ground Air Draft (ละอองลมและประกายอากาศลอยหมุนรอบตัวขณะวิ่ง)
-    // ================================================================================================
-    private void BuildLayer4WindMotesAndAirDraft()
-    {
-        DestroyChildIfExists(transform, "VFX_Runtime_WindMotes");
-
-        GameObject moteObj = new GameObject("VFX_Runtime_WindMotes");
-        moteObj.transform.SetParent(transform, false);
-        moteObj.transform.localPosition = new Vector3(0f, 0.55f, 0.10f);
-        moteObj.transform.localRotation = Quaternion.identity;
-        moteObj.transform.localScale = Vector3.one;
-
-        windMotesPS = moteObj.AddComponent<ParticleSystem>();
-        windMotesPS.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-
-        Color activeColor = GetCurrentSelectedWindColor();
-
-        ParticleSystem.MainModule main = windMotesPS.main;
-        main.duration = 1.0f;
-        main.loop = true;
-        main.playOnAwake = false;
-        main.simulationSpace = ParticleSystemSimulationSpace.World;
-        main.startLifetime = new ParticleSystem.MinMaxCurve(0.35f, 0.62f);
-        main.startSpeed = new ParticleSystem.MinMaxCurve(0.4f, 1.4f);
-        main.startSize = new ParticleSystem.MinMaxCurve(0.032f, 0.072f);
-        main.startColor = activeColor;
-        main.gravityModifier = -0.08f; // ลอยล่องเบาๆ ขึ้นในอากาศ
-        main.maxParticles = 120;
-
-        ParticleSystem.EmissionModule emission = windMotesPS.emission;
-        emission.enabled = false;
-        emission.rateOverTime = new ParticleSystem.MinMaxCurve(18f);
-        emission.rateOverDistance = new ParticleSystem.MinMaxCurve(4.5f);
-
-        ParticleSystem.ShapeModule shape = windMotesPS.shape;
-        shape.enabled = true;
-        shape.shapeType = ParticleSystemShapeType.Box;
-        shape.scale = new Vector3(0.85f, 1.15f, 0.55f);
-
-        ParticleSystem.NoiseModule noise = windMotesPS.noise;
-        noise.enabled = true;
-        noise.strength = new ParticleSystem.MinMaxCurve(0.85f);
-        noise.frequency = 1.8f;
-        noise.scrollSpeed = 1.4f;
-        noise.quality = ParticleSystemNoiseQuality.Medium;
-
-        ParticleSystem.SizeOverLifetimeModule sol = windMotesPS.sizeOverLifetime;
-        sol.enabled = true;
-        sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
-            new Keyframe(0.0f, 0.0f),
-            new Keyframe(0.25f, 1.0f),
-            new Keyframe(1.0f, 0.0f)
-        ));
-
-        ParticleSystem.ColorOverLifetimeModule col = windMotesPS.colorOverLifetime;
-        col.enabled = true;
-        col.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.85f));
-
-        ParticleSystemRenderer psr = moteObj.GetComponent<ParticleSystemRenderer>();
-        psr.renderMode = ParticleSystemRenderMode.Billboard;
-        psr.sharedMaterial = runtimeMoteMat;
-        psr.shadowCastingMode = ShadowCastingMode.Off;
-        psr.receiveShadows = false;
-        psr.sortingOrder = 5;
     }
 
     private Color GetCurrentSelectedWindColor()
@@ -1099,6 +1107,7 @@ public class RunWindSlipstream : MonoBehaviour
     private static Gradient BuildWindColorGradient(Color windColor, float alphaScale)
     {
         Color rgbOnly = new Color(windColor.r, windColor.g, windColor.b, 1f);
+        Color tailTint = Color.Lerp(rgbOnly, new Color(0.55f, 0.90f, 0.96f, 1f), 0.30f);
         float peakAlpha = Mathf.Clamp01(windColor.a * alphaScale);
 
         Gradient grad = new Gradient();
@@ -1106,14 +1115,59 @@ public class RunWindSlipstream : MonoBehaviour
             new GradientColorKey[]
             {
                 new GradientColorKey(Color.white, 0.0f),
-                new GradientColorKey(rgbOnly, 0.35f),
-                new GradientColorKey(rgbOnly, 1.0f)
+                new GradientColorKey(rgbOnly, 0.34f),
+                new GradientColorKey(tailTint, 1.0f)
             },
             new GradientAlphaKey[]
             {
                 new GradientAlphaKey(0.0f, 0.0f),
                 new GradientAlphaKey(peakAlpha, 0.14f),
-                new GradientAlphaKey(peakAlpha * 0.65f, 0.58f),
+                new GradientAlphaKey(peakAlpha * 0.68f, 0.56f),
+                new GradientAlphaKey(0.0f, 1.0f)
+            }
+        );
+        return grad;
+    }
+
+    private static Gradient BuildTrailTailFadeGradient()
+    {
+        Gradient grad = new Gradient();
+        grad.SetKeys(
+            new GradientColorKey[]
+            {
+                new GradientColorKey(Color.white, 0.0f),
+                new GradientColorKey(new Color(0.82f, 0.97f, 0.96f), 0.55f),
+                new GradientColorKey(new Color(0.62f, 0.88f, 0.92f), 1.0f)
+            },
+            new GradientAlphaKey[]
+            {
+                new GradientAlphaKey(0.0f, 0.0f),
+                new GradientAlphaKey(1.0f, 0.14f),
+                new GradientAlphaKey(0.55f, 0.60f),
+                new GradientAlphaKey(0.0f, 1.0f)
+            }
+        );
+        return grad;
+    }
+
+    private static Gradient BuildFootMistGradient(Color windColor)
+    {
+        Color softMist = Color.Lerp(new Color(0.92f, 0.96f, 0.97f), new Color(windColor.r, windColor.g, windColor.b), 0.30f);
+        float peakAlpha = Mathf.Clamp01(windColor.a * 0.42f);
+
+        Gradient grad = new Gradient();
+        grad.SetKeys(
+            new GradientColorKey[]
+            {
+                new GradientColorKey(new Color(0.97f, 1.0f, 0.99f), 0.0f),
+                new GradientColorKey(softMist, 0.55f),
+                new GradientColorKey(new Color(0.76f, 0.85f, 0.88f), 1.0f)
+            },
+            new GradientAlphaKey[]
+            {
+                new GradientAlphaKey(0.0f, 0.0f),
+                new GradientAlphaKey(peakAlpha, 0.18f),
+                new GradientAlphaKey(peakAlpha * 0.45f, 0.62f),
                 new GradientAlphaKey(0.0f, 1.0f)
             }
         );
@@ -1138,41 +1192,33 @@ public class RunWindSlipstream : MonoBehaviour
         lastWindOpacity = windOpacity;
 
         Color activeColor = GetCurrentSelectedWindColor();
-        Gradient streakGrad = BuildWindColorGradient(activeColor, 1.0f);
-        Gradient ribbonGrad = BuildWindColorGradient(activeColor, 0.82f);
+        Gradient streakGrad = BuildWindColorGradient(activeColor, 0.78f);
+        Gradient ribbonGrad = BuildWindColorGradient(activeColor, 0.90f);
+
+        if (flowingRibbonsPS != null)
+        {
+            var trails = flowingRibbonsPS.trails;
+            trails.colorOverLifetime = new ParticleSystem.MinMaxGradient(ribbonGrad);
+        }
 
         if (bodyWindPS != null)
         {
-            ParticleSystem.MainModule main = bodyWindPS.main;
-            main.startColor = activeColor;
-            ParticleSystem.EmissionModule em = bodyWindPS.emission;
+            var em = bodyWindPS.emission;
             em.rateOverTime = new ParticleSystem.MinMaxCurve(windDensity);
-            ParticleSystem.ColorOverLifetimeModule col = bodyWindPS.colorOverLifetime;
+            var col = bodyWindPS.colorOverLifetime;
             col.color = new ParticleSystem.MinMaxGradient(streakGrad);
-        }
-
-        if (launchAirRingPS != null)
-        {
-            ParticleSystem.MainModule main = launchAirRingPS.main;
-            main.startColor = activeColor;
-            ParticleSystem.ColorOverLifetimeModule col = launchAirRingPS.colorOverLifetime;
-            col.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.92f));
         }
 
         if (launchGustNeedlesPS != null)
         {
-            ParticleSystem.MainModule main = launchGustNeedlesPS.main;
-            main.startColor = activeColor;
-            ParticleSystem.ColorOverLifetimeModule col = launchGustNeedlesPS.colorOverLifetime;
-            col.color = new ParticleSystem.MinMaxGradient(streakGrad);
+            var col = launchGustNeedlesPS.colorOverLifetime;
+            col.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.92f));
         }
 
-        if (windMotesPS != null)
+        if (footStepMistPS != null)
         {
-            ParticleSystem.MainModule main = windMotesPS.main;
-            main.startColor = activeColor;
-            ParticleSystem.ColorOverLifetimeModule col = windMotesPS.colorOverLifetime;
-            col.color = new ParticleSystem.MinMaxGradient(BuildWindColorGradient(activeColor, 0.85f));
+            var col = footStepMistPS.colorOverLifetime;
+            col.color = new ParticleSystem.MinMaxGradient(BuildFootMistGradient(activeColor));
         }
 
         for (int i = 0; i < footTrailRenderers.Count; i++)
@@ -1227,12 +1273,10 @@ public class RunWindSlipstream : MonoBehaviour
     {
         if (runtimeStreakMat != null) Destroy(runtimeStreakMat);
         if (runtimeRibbonMat != null) Destroy(runtimeRibbonMat);
-        if (runtimeAirRingMat != null) Destroy(runtimeAirRingMat);
-        if (runtimeMoteMat != null) Destroy(runtimeMoteMat);
+        if (runtimeStepMistMat != null) Destroy(runtimeStepMistMat);
 
         if (runtimeWindStreakTex != null) Destroy(runtimeWindStreakTex);
         if (runtimeFootRibbonTex != null) Destroy(runtimeFootRibbonTex);
-        if (runtimeAirRingTex != null) Destroy(runtimeAirRingTex);
-        if (runtimeWindMoteTex != null) Destroy(runtimeWindMoteTex);
+        if (runtimeStepMistTex != null) Destroy(runtimeStepMistTex);
     }
 }

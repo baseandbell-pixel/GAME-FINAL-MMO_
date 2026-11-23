@@ -169,7 +169,7 @@ public class MMOStaminaPotionVFX : MonoBehaviour
 
         if (controller == null)
         {
-            controller = Instance != null ? Instance : FindFirstObjectByType<MMOStaminaPotionVFX>();
+            controller = Instance != null ? Instance : FindAnyObjectByType<MMOStaminaPotionVFX>();
             if (controller != null)
             {
                 Instance = controller;

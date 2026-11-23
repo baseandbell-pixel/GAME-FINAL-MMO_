@@ -479,6 +479,15 @@ public class PlayerCombat : NetworkBehaviour
             CombatHud.EnsureFor(this);
             EnsureLocalPlayerVFXControllers();
         }
+        else
+        {
+            var remoteGuardBreak = GetComponent<MMOGuardBreakVFX>();
+            if (remoteGuardBreak != null)
+            {
+                remoteGuardBreak.isLocalPlayerOwner = false;
+                remoteGuardBreak.showDebugHUD = false;
+            }
+        }
 
         if (Object.HasStateAuthority)
         {
@@ -526,6 +535,22 @@ public class PlayerCombat : NetworkBehaviour
         {
             heartbeatComboUi = gameObject.AddComponent<MMOHeartbeatComboUI>();
             heartbeatComboUi.countOnAttackInputForTest = false;
+        }
+
+        var guardBreakVfx = GetComponent<MMOGuardBreakVFX>();
+        if (guardBreakVfx == null)
+        {
+            guardBreakVfx = gameObject.AddComponent<MMOGuardBreakVFX>();
+            guardBreakVfx.showDebugHUD = false;
+        }
+        guardBreakVfx.SetAsPrimaryLocalController();
+
+        var weaponHitVfx = GetComponent<MMOWeaponHitImpactVFX>();
+        if (weaponHitVfx == null)
+        {
+            weaponHitVfx = gameObject.AddComponent<MMOWeaponHitImpactVFX>();
+            weaponHitVfx.enableTriggerDetection = false;
+            weaponHitVfx.showDebugHUD = false;
         }
     }
 
@@ -1249,6 +1274,19 @@ public class PlayerCombat : NetworkBehaviour
         }
     }
 
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RPC_BroadcastGuardBreak()
+    {
+        Vector3 shieldPos = transform.position + Vector3.up * 1.15f + transform.forward * 0.85f;
+        var aaaBlockParry = GetComponent<MMOBlockParryController>();
+        if (aaaBlockParry != null && aaaBlockParry.guardVfxMount != null)
+        {
+            shieldPos = aaaBlockParry.guardVfxMount.position;
+        }
+
+        MMOGuardBreakVFX.SpawnGuardBreak(shieldPos, transform.forward, -1f, IsLocallyControlled);
+    }
+
     private void OnStaminaChanged()
     {
         if (!_isSpawned) return;
@@ -1501,6 +1539,7 @@ public class PlayerCombat : NetworkBehaviour
                 if (_capsule != null) _capsule.SpeedMultiplier = 1f;
                 UpdateBlockVfxVisual(false);
                 RPC_BroadcastBlocking(false);
+                RPC_BroadcastGuardBreak();
                 Debug.Log("[PlayerCombat] Guard broken! Stamina depleted from blocking hit.");
             }
         }
@@ -1808,11 +1847,16 @@ public sealed class CombatHud : MonoBehaviour
 
         _localHud.AddTextPopup(enemy.LockPoint, isCrit ? $"CRIT! -{amount}" : $"-{amount}", c, isCrit);
 
+        Vector3 hitPos = enemy.LockPoint != null ? enemy.LockPoint.position : enemy.transform.position + Vector3.up * 1.2f;
         if (isCrit)
         {
-            Vector3 hitPos = enemy.LockPoint != null ? enemy.LockPoint.position : enemy.transform.position + Vector3.up * 1.2f;
             float critScale = comboStep >= 3 ? 1.2f : -1f;
             MMOCriticalHitVFX.SpawnCriticalHit(hitPos, critScale);
+            MMOWeaponHitImpactVFX.FlashEnemy(enemy.gameObject);
+        }
+        else
+        {
+            MMOWeaponHitImpactVFX.SpawnOnMonster(hitPos, enemy.gameObject, enemy.IsBoss ? 1.3f : -1f, registerComboHit: false);
         }
 
         var local = PlayerCombat.Local;

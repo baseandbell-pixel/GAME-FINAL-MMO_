@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using Fusion;
 using UnityEngine;
@@ -43,6 +44,9 @@ public class WorldItem : NetworkBehaviour
     private Vector3 _visualBase;
     private float _claimedAt = -1f;
     private float _lastRequestTime = -10f;
+    private bool _isArcingFromChest;
+    private Coroutine _arcRoutine;
+    private TrailRenderer _activeLootArcTrail;
 
     // one "nearest item" computation per frame, shared by all instances
     private static int s_frame = -1;
@@ -134,8 +138,11 @@ public class WorldItem : NetworkBehaviour
 
         if (visual != null && !Claimed)
         {
-            visual.localPosition = _visualBase + Vector3.up * (Mathf.Sin(Time.time * 2f + transform.position.x) * bobHeight);
-            visual.Rotate(0f, spinSpeed * Time.deltaTime, 0f, Space.World);
+            if (!_isArcingFromChest)
+            {
+                visual.localPosition = _visualBase + Vector3.up * (Mathf.Sin(Time.time * 2f + transform.position.x) * bobHeight);
+            }
+            visual.Rotate(0f, (_isArcingFromChest ? spinSpeed * 2.8f : spinSpeed) * Time.deltaTime, 0f, Space.World);
         }
 
         RefreshPromptTarget();
@@ -143,6 +150,97 @@ public class WorldItem : NetworkBehaviour
 
         var kb = Keyboard.current;
         if (kb != null && kb.eKey.wasPressedThisFrame) RequestPickup();
+    }
+
+    /// <summary>
+    /// สั่งให้ตัวไอเทมลอยโค้งออกจากปากกล่องสมบัติพร้อมเส้นแสงสีตามระดับไอเทม (ItemTier)
+    /// และเมื่อไอเทมตกลงถึงพื้น เส้นแสงจะหยุดปล่อยและค่อยๆ จางหายไปอัตโนมัติ
+    /// </summary>
+    public void LaunchArcFromChest(
+        Vector3 chestMouthWorldPos,
+        ItemTier tier,
+        float launchDelay = 0.14f,
+        float flightDuration = 0.72f,
+        float arcHeight = 1.95f)
+    {
+        if (visual == null) return;
+        if (_arcRoutine != null) StopCoroutine(_arcRoutine);
+        _arcRoutine = StartCoroutine(LootArcFromChestRoutine(chestMouthWorldPos, tier, launchDelay, flightDuration, arcHeight));
+    }
+
+    private IEnumerator LootArcFromChestRoutine(
+        Vector3 chestMouthWorldPos,
+        ItemTier tier,
+        float launchDelay,
+        float flightDuration,
+        float arcHeight)
+    {
+        _isArcingFromChest = true;
+
+        Vector3 startLocalPos = transform.InverseTransformPoint(chestMouthWorldPos);
+        Vector3 endLocalPos = _visualBase;
+        visual.localPosition = startLocalPos;
+
+        if (visualRenderer != null && !Claimed)
+        {
+            visualRenderer.enabled = false;
+        }
+
+        if (launchDelay > 0f)
+        {
+            yield return new WaitForSeconds(launchDelay);
+        }
+
+        if (Claimed || visual == null)
+        {
+            _isArcingFromChest = false;
+            yield break;
+        }
+
+        if (visualRenderer != null)
+        {
+            visualRenderer.enabled = true;
+        }
+
+        // ติดตั้งเส้นแสงสีตามระดับไอเทมไว้ที่ตัวไอเทมขณะลอยกลางอากาศ
+        if (_activeLootArcTrail != null)
+        {
+            Destroy(_activeLootArcTrail.gameObject);
+        }
+        _activeLootArcTrail = MMOTreasureChestController.AttachLootArcTrail(visual, tier, 0.36f);
+        _activeLootArcTrail.Clear();
+        _activeLootArcTrail.emitting = true;
+
+        float elapsed = 0f;
+        float safeDuration = Mathf.Max(0.25f, flightDuration);
+        while (elapsed < safeDuration && !Claimed && visual != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / safeDuration);
+            Vector3 pos = Vector3.Lerp(startLocalPos, endLocalPos, t);
+            pos.y += 4f * arcHeight * t * (1f - t);
+            visual.localPosition = pos;
+            yield return null;
+        }
+
+        if (visual != null)
+        {
+            visual.localPosition = endLocalPos;
+        }
+        _isArcingFromChest = false;
+
+        // เมื่อไอเทมตกลงพื้นแล้ว -> หยุดปล่อยเส้นแสงทันที เพื่อให้เส้นแสงค่อยๆ จางหายไปจนหมด
+        if (_activeLootArcTrail != null)
+        {
+            _activeLootArcTrail.emitting = false;
+            float fadeWait = _activeLootArcTrail.time + 0.12f;
+            GameObject trailGo = _activeLootArcTrail.gameObject;
+            _activeLootArcTrail = null;
+            yield return new WaitForSeconds(fadeWait);
+            if (trailGo != null) Destroy(trailGo);
+        }
+
+        _arcRoutine = null;
     }
 
     private static void RefreshPromptTarget()

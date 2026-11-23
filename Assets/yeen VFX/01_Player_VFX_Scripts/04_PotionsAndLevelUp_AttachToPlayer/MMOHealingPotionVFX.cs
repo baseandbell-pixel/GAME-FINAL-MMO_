@@ -167,7 +167,7 @@ public class MMOHealingPotionVFX : MonoBehaviour
 
         if (controller == null)
         {
-            controller = Instance != null ? Instance : FindFirstObjectByType<MMOHealingPotionVFX>();
+            controller = Instance != null ? Instance : FindAnyObjectByType<MMOHealingPotionVFX>();
             if (controller != null)
             {
                 Instance = controller;
