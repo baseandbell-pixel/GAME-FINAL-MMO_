@@ -465,8 +465,8 @@ public class SandboxWorldSpawner : MonoBehaviour
 
         if (participants.Count == 0 || totalDamage <= 0f) return string.Empty;
 
-        var sb = new StringBuilder(128);
-        // เรียงผู้ทำดาเมจจากมากไปน้อยก่อนประกอบข้อความ รองรับผู้เล่นสูงสุด 10 คนภายใน NetworkString<_128>
+        var sb = new StringBuilder(64);
+        // เรียงผู้ทำดาเมจจากมากไปน้อยก่อนประกอบข้อความรูปแบบกะทัดรัด "raw:pct:top" (รองรับ 8–9 คนภายใน NetworkString<_64> = 260 ไบต์ ต่ำกว่าเพดาน 512 ไบต์ของ Photon Fusion เสมอ)
         participants.Sort((a, b) =>
         {
             float da = ledger.TryGetValue(a, out float va) ? va : 0f;
@@ -479,11 +479,11 @@ public class SandboxWorldSpawner : MonoBehaviour
             PlayerRef p = participants[i];
             if (!ledger.TryGetValue(p, out float dealt) || dealt <= 0f) continue;
 
-            float share = Mathf.Clamp01(dealt / totalDamage);
+            int pct = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(dealt / totalDamage) * 100f), 1, 100);
             int topFlag = p == topDps ? 1 : 0;
-            string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{share.ToString("0.##", CultureInfo.InvariantCulture)}:{topFlag}";
+            string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{pct.ToString(CultureInfo.InvariantCulture)}:{topFlag}";
             int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
-            if (sb.Length + needed > 124) break;
+            if (sb.Length + needed > 60) break;
 
             if (sb.Length > 0) sb.Append(';');
             sb.Append(token);
@@ -493,6 +493,7 @@ public class SandboxWorldSpawner : MonoBehaviour
 
     /// <summary>
     /// แปลงข้อความรายชื่อผู้มีส่วนร่วมจาก RPC กลับมาเป็น Dictionary สำหรับตั้งค่าล็อกสิทธิ์ของ LootChest
+    /// รองรับทั้งรูปแบบเปอร์เซ็นต์จำนวนเต็ม (1..100) และรูปแบบทศนิยมเดิม (0.01..1.00)
     /// </summary>
     public static Dictionary<int, LootChest.ParticipantContribution> ParseContributorPayload(string payload)
     {
@@ -507,14 +508,15 @@ public class SandboxWorldSpawner : MonoBehaviour
             if (parts.Length < 3) continue;
 
             if (int.TryParse(parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int rawEncoded) &&
-                float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float share) &&
+                float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float rawShare) &&
                 int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int topFlag) &&
-                share > 0f)
+                rawShare > 0f)
             {
+                float normalizedShare = rawShare > 1.0f ? Mathf.Clamp01(rawShare / 100f) : Mathf.Clamp01(rawShare);
                 result[rawEncoded] = new LootChest.ParticipantContribution
                 {
                     playerRawEncoded = rawEncoded,
-                    damageShare = Mathf.Clamp01(share),
+                    damageShare = normalizedShare,
                     isTopDps = topFlag == 1
                 };
             }
@@ -637,7 +639,9 @@ public class SandboxWorldSpawner : MonoBehaviour
                 }
                 else if (Time.unscaledTime - camp.ZeroLivingDetectedAt >= 0.8f)
                 {
-                    string fallbackPayload = isMaster ? BuildCampContributorPayload(camp.CampId, isBoss: false) : string.Empty;
+                    // ใช้ตารางดาเมจที่ซิงก์มาจาก StateAuthority (ผ่าน RPC_SyncDamageContribution) ได้บนทุกเครื่องเป็น Fallback
+                    // เพื่อให้ผู้ร่วมตีไม่ถูกล็อกกล่องแม้ Host หลุดกลางไฟต์ ส่วนคนที่ตี 0 ดาเมจยังคงถูกล็อก 100%
+                    string fallbackPayload = BuildCampContributorPayload(camp.CampId, isBoss: false);
                     HandleAuthoritativeCampCleared(camp.CampId, isBossCamp: false, camp.Center, fallbackPayload);
                 }
             }
@@ -687,7 +691,7 @@ public class SandboxWorldSpawner : MonoBehaviour
             else if (Time.unscaledTime - _bossZeroLivingDetectedAt >= 0.8f)
             {
                 Vector3 chestPos = bossArenaCenter + new Vector3(0f, 0f, 2.2f);
-                string fallbackPayload = isMaster ? BuildCampContributorPayload(BossCampId, isBoss: true) : string.Empty;
+                string fallbackPayload = BuildCampContributorPayload(BossCampId, isBoss: true);
                 HandleAuthoritativeCampCleared(BossCampId, isBossCamp: true, chestPos, fallbackPayload);
             }
         }

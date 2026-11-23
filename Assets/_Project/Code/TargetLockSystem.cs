@@ -209,7 +209,7 @@ public class TargetLockSystem : MonoBehaviour
 
     private void OnGUI()
     {
-        if (!IsLocked || Event.current.type != EventType.Repaint) return;
+        if (!IsLocked || GameplayInput.IsBlocked || Event.current.type != EventType.Repaint) return;
         var cam = Camera.main;
         var comp = CurrentTarget as Component;
         if (cam == null || comp == null) return;

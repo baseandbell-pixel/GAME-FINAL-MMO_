@@ -14,11 +14,12 @@ public static class LootDropSystem
     // โอกาสพื้นฐานที่มอนสเตอร์ทั่วไปจะดรอปไอเทม 1 ชิ้นเมื่อตาย (30% — อยู่ในช่วง 25%–35%)
     public const float NormalEnemyDropChance = 0.30f;
 
-    // เกณฑ์ขั้นต่ำการมีส่วนร่วมทำดาเมจในโหมด Co-op (ป้องกันช่องโหว่ 1-Damage Tagging ตอด 1 ดาเมจแล้วรอเปิดกล่องฟรี)
-    public const float NormalMinDamageShare = 0.10f;    // >= 10% ของดาเมจรวม (มอนทั่วไป)
-    public const float NormalMinAbsoluteDamage = 15f;   // หรือ >= 15 ดาเมจจริง
-    public const float BossMinDamageShare = 0.05f;      // >= 5% ของดาเมจรวม (บอส)
-    public const float BossMinAbsoluteDamage = 25f;     // หรือ >= 25 ดาเมจจริง
+    // เกณฑ์ขั้นต่ำการมีส่วนร่วมทำดาเมจในโหมด Co-op (ป้องกันช่องโหว่ 1-Damage Tagging ตอด 1 ทีแล้วรอเปิดกล่องฟรี
+    // แต่ยังเป็นธรรมต่อเพื่อนเลเวลน้อยที่ลงมาช่วยสู้จริงในปาร์ตี้)
+    public const float NormalMinDamageShare = 0.05f;    // >= 5% ของดาเมจรวม (มอนทั่วไป)
+    public const float NormalMinAbsoluteDamage = 10f;   // หรือ >= 10 ดาเมจจริง
+    public const float BossMinDamageShare = 0.02f;      // >= 2% ของดาเมจรวม (บอส)
+    public const float BossMinAbsoluteDamage = 15f;     // หรือ >= 15 ดาเมจจริง
 
     /// <summary>
     /// ตรวจสอบว่าผู้เล่นทำดาเมจถึงเกณฑ์มีส่วนร่วมจริงหรือไม่ (เล่นคนเดียวได้สิทธิ์ 100% เสมอ, Co-op >= 2 คนต้องผ่านเกณฑ์ % หรือดาเมจขั้นต่ำ)

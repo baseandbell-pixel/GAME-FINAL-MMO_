@@ -33,6 +33,10 @@ public class PlayerCapsule : NetworkBehaviour
     [SerializeField] private float overheadNameFontSize = 2.6f;
     [SerializeField] private float overheadNameScale = 0.70f;
     [SerializeField] private Vector3 overheadNameOffset = new Vector3(0f, 2.05f, 0f);
+    [Tooltip("ซ่อนป้ายชื่อบนหัวตัวเอง (สไตล์ Where Winds Meet เพื่อไม่ให้ชื่อบังเป้ากลางจอ; ชื่อเพื่อนคนอื่นยังแสดงปกติ)")]
+    [SerializeField] private bool showLocalPlayerNameplate = false;
+    [Tooltip("ระยะสูงสุดที่จะแสดงป้ายชื่อเพื่อนบนหัวตัวละคร (เมตร) ป้องกันตัวอักษรลอยข้ามภูเขา")]
+    [SerializeField] private float remoteNameplateMaxDistance = 75f;
 
     [Header("Where Winds Meet Grounded Martial-Arts Movement (ความเร็วและน้ำหนักการเคลื่อนที่)")]
     // ความเร็วเดินย่องลอบเร้น / เดินช้า (m/s)
@@ -699,14 +703,35 @@ public class PlayerCapsule : NetworkBehaviour
             ? new Vector3(0f, 2.15f, 0f)
             : overheadNameOffset;
         if (detachNameLabel) _labelTransform.SetParent(null, worldPositionStays: true);
+
+        // ซ่อนป้ายชื่อบนหัวตัวเองเพื่อไม่ให้บังเป้ากลางจอ (ชื่อตัวเองแสดงมุมขวาบนอยู่แล้ว ส่วนชื่อเพื่อนยังแสดงครบ)
+        if (isOwner && !showLocalPlayerNameplate)
+            _labelTransform.gameObject.SetActive(false);
     }
 
     private void LateUpdate()
     {
         if (_labelTransform == null) return;
+        if (isOwner && !showLocalPlayerNameplate)
+        {
+            if (_labelTransform.gameObject.activeSelf)
+                _labelTransform.gameObject.SetActive(false);
+            return;
+        }
+
         _labelTransform.position = transform.position + _labelOffset;
         var cam = Camera.main;
-        if (cam != null) _labelTransform.rotation = cam.transform.rotation;
+        if (cam != null)
+        {
+            _labelTransform.rotation = cam.transform.rotation;
+            if (!isOwner && remoteNameplateMaxDistance > 0f)
+            {
+                float sqrDist = (transform.position - cam.transform.position).sqrMagnitude;
+                bool visible = sqrDist <= remoteNameplateMaxDistance * remoteNameplateMaxDistance;
+                if (_labelTransform.gameObject.activeSelf != visible)
+                    _labelTransform.gameObject.SetActive(visible);
+            }
+        }
     }
 
     private void DestroyDetachedLabel()

@@ -257,12 +257,28 @@ public class MMODodgeSmokeController : MonoBehaviour
             }
         }
 
-        // 3. ตรวจจับการกดปุ่ม C, Left Ctrl หรือ Space บนคีย์บอร์ดทั้งจาก New Input System และ Legacy Input
-        if (enableDirectKeyTrigger && ReadUniversalRollKeyPressed(out string keyName))
+        // 3. ตรวจจับการกดปุ่ม C, Left Ctrl บนคีย์บอร์ดเฉพาะเครื่องเจ้าของตัวละครที่ไม่ได้ซิงก์ผ่าน Fusion Network เท่านั้น
+        // เพื่อป้องกันเมื่อ Host กดปุ่มกลิ้งแล้วตัวละครผู้เล่นคนอื่นในห้องปล่อยควันพร้อมกัน
+        bool hasNetworkCharacterSync = (cachedPlayerCombat != null && cachedPlayerCombat.IsSpawned)
+            || (cachedPlayerCapsule != null && cachedPlayerCapsule.Object != null && cachedPlayerCapsule.Object.IsValid)
+            || (cachedNetCharacter != null && cachedNetCharacter.IsSpawned);
+
+        if (enableDirectKeyTrigger && !hasNetworkCharacterSync && IsLocallyOwnedCharacter() && ReadUniversalRollKeyPressed(out string keyName))
         {
             lastTriggerReason = "Key Pressed [" + keyName + "]";
             TriggerSmokeRoll();
         }
+    }
+
+    private bool IsLocallyOwnedCharacter()
+    {
+        if (cachedPlayerCombat != null && cachedPlayerCombat.IsSpawned)
+            return cachedPlayerCombat.IsLocallyControlled;
+        if (cachedPlayerCapsule != null && cachedPlayerCapsule.Object != null && cachedPlayerCapsule.Object.IsValid)
+            return cachedPlayerCapsule.Object.HasStateAuthority || cachedPlayerCapsule.Object.HasInputAuthority;
+        if (cachedNetCharacter != null && cachedNetCharacter.IsSpawned && cachedNetCharacter.Object != null && cachedNetCharacter.Object.IsValid)
+            return cachedNetCharacter.Object.HasStateAuthority || cachedNetCharacter.Object.HasInputAuthority;
+        return true;
     }
 
     /// <summary>

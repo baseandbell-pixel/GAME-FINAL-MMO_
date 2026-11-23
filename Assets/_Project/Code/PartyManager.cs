@@ -360,6 +360,20 @@ public sealed class PartyManager : MonoBehaviour
                 PartyLeader = PlayerRef.None;
                 _members.Clear();
             }
+            else if (!_members.Contains(PartyLeader))
+            {
+                // โอนตำแหน่งหัวหน้าปาร์ตี้ให้สมาชิกที่มี RawEncoded ต่ำสุดแบบ Deterministic เพื่อให้ทุกเครื่องเห็นหัวหน้าคนเดียวกันทันที
+                PlayerRef nextLeader = _members[0];
+                for (int i = 1; i < _members.Count; i++)
+                {
+                    if (_members[i].RawEncoded < nextLeader.RawEncoded)
+                        nextLeader = _members[i];
+                }
+                PartyLeader = nextLeader;
+                var newLeaderCombat = FindCombatByRef(nextLeader);
+                string newLeaderName = newLeaderCombat != null ? GetDisplayName(newLeaderCombat) : $"Player {nextLeader.PlayerId}";
+                PlayerStatusHud.Instance?.ShowToast($"Party Leader transferred to {newLeaderName}.", new Color(0.95f, 0.82f, 0.32f), 2.5f);
+            }
             PartyChanged?.Invoke();
         }
     }

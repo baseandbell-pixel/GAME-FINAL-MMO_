@@ -285,8 +285,9 @@ public class PlayerSaveManager : MonoBehaviour
             combat.ApplySaveData(loaded);
             inv.RestoreSaveData(loaded);
             TeleportWaystone.RestoreSaveData(loaded);
-            // คำนวณและ Clamp ค่า HP / Stamina ปัจจุบันหลังสวมใส่อุปกรณ์แล้วให้ไม่เกิน MaxHealth / MaxStamina (<= 150) ใหม่
-            combat.ApplySaveHealthAndStamina(loaded.currentHealth, loaded.currentStamina);
+            // เมื่อผู้เล่นกลับเข้าเกมในเขตปลอดภัย (Comfort SafeZone) ให้ฟื้นฟู HP และ Stamina เต็ม 100% ทันที
+            // ป้องกันปัญหาผู้เล่นเพิ่งเข้าห้องมายังไม่ทันโดนตีแต่เลือดแหว่งค้างจากเซสชันก่อน (เช่น 415/441)
+            combat.ApplySaveHealthAndStamina(combat.MaxHealth, combat.MaxStamina);
 
             // ส่งผู้เล่นที่กลับเข้ามาเกิดในเขตปลอดภัย (ใช้พิกัดเมืองหลัก FinalTestv1 เป็น Fallback เสมอ)
             SafeZone safe = SafeZone.Instance ?? SafeZone.EnsureAt(

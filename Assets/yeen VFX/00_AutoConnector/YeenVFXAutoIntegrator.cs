@@ -261,8 +261,9 @@ public sealed class YeenVFXAutoIntegrator : MonoBehaviour
     // ================================================================================================
     private void OnLocalHealthChanged(int current, int max)
     {
-        // ยาฮีล (HealSelf): เลือดเพิ่มขณะที่ยังไม่ตาย (prev > 0) และ MaxHP เท่าเดิม (ไม่ใช่การใส่ชุดเกราะหรืออัป VIT/เลเวลอัพ)
-        if (_lastHealth > 0 && current > _lastHealth && max == _lastMaxHealth && Time.unscaledTime > _suppressPotionVfxUntil)
+        // ยาฮีล (HealSelf): เลือดเพิ่มขณะที่ยังไม่ตาย (prev > 0), MaxHP เท่าเดิม, และไม่ใช่การพักฟื้นอัตโนมัติใน SafeZone
+        bool isSafeRegen = _boundLocalPlayer != null && _boundLocalPlayer.IsSafeZoneRegenTick;
+        if (!isSafeRegen && _lastHealth > 0 && current > _lastHealth && max == _lastMaxHealth && Time.unscaledTime > _suppressPotionVfxUntil)
         {
             try
             {
@@ -433,6 +434,10 @@ public sealed class YeenVFXAutoIntegrator : MonoBehaviour
             else if (_trackedAliveEnemies.Contains(enemy))
             {
                 _trackedAliveEnemies.Remove(enemy);
+                // MonsterEnemyNPC สร้างบ่อเลือดตามสเกลความสูงเองแล้วใน HandleBaseOnDeath (ไม่สร้างซ้ำซ้อน)
+                if (enemy is MonsterEnemyNPC) continue;
+                // ตัดระยะเอฟเฟกต์เลือดมอนตายที่อยู่ไกลข้ามแมปเพื่อลดภาระ GPU/Particle
+                if (!CombatHud.IsWithinCombatVisualRange(enemy.transform.position, enemy.IsBoss)) continue;
                 try
                 {
                     MMOMonsterDeathBloodVFX.SpawnDeathBlood(enemy.transform.position, enemy.IsBoss ? 1.85f : -1f);

@@ -193,14 +193,17 @@ public class MMOBlockParryController : MonoBehaviour
             shieldAbsorbFlashTimer = Mathf.Max(0f, shieldAbsorbFlashTimer - dt * 6.0f);
         }
 
-        // 1. ตรวจจับการกดปุ่มบล็อกค้าง (คลิกขวาเมาส์ / ปุ่ม F / Left Alt) และซิงก์กับ PlayerCombat
-        bool guardInputHeld = ReadUniversalGuardHoldInput();
+        // 1. ตรวจจับสถานะการบล็อกแบบแยกเฉพาะตัวละครนี้ (Multiplayer-Safe):
+        // หากตัวละครถูก Spawn บนเครือข่าย Fusion ให้ยึดค่า Networked PlayerCombat.IsBlocking ของตัวละครนี้เป็นแหล่งความจริงเดียวเท่านั้น
+        // เพื่อป้องกันปัญหาเมื่อ Host กด [F] หรือคลิกขวาแล้วโล่ไปขึ้นบนตัวผู้เล่นคนอื่นในห้องทุกคน
+        bool guardInputHeld = false;
         if (syncWithPlayerCombat && cachedPlayerCombat != null && cachedPlayerCombat.IsSpawned)
         {
-            if (cachedPlayerCombat.IsBlocking && !cachedPlayerCombat.IsDead)
-            {
-                guardInputHeld = true;
-            }
+            guardInputHeld = cachedPlayerCombat.IsBlocking && !cachedPlayerCombat.IsDead;
+        }
+        else if (IsLocallyOwnedForFallbackInput())
+        {
+            guardInputHeld = ReadUniversalGuardHoldInput();
         }
 
         if (guardInputHeld && !wasGuardHeldLastFrame)
@@ -314,6 +317,23 @@ public class MMOBlockParryController : MonoBehaviour
                 }
             }
         }
+    }
+
+    private bool IsLocallyOwnedForFallbackInput()
+    {
+        if (cachedPlayerCombat != null)
+        {
+            if (cachedPlayerCombat.IsSpawned)
+                return cachedPlayerCombat.IsLocallyControlled;
+            if (cachedPlayerCombat.Object != null && cachedPlayerCombat.Object.IsValid)
+                return cachedPlayerCombat.Object.HasStateAuthority || cachedPlayerCombat.Object.HasInputAuthority;
+        }
+
+        var capsule = GetComponentInParent<PlayerCapsule>();
+        if (capsule != null && capsule.Object != null && capsule.Object.IsValid)
+            return capsule.Object.HasStateAuthority || capsule.Object.HasInputAuthority;
+
+        return true;
     }
 
     private bool ReadUniversalGuardHoldInput()

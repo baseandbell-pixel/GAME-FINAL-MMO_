@@ -97,6 +97,7 @@ public class RunWindSlipstream : MonoBehaviour
     private Rigidbody cachedRigidbody;
     private NetworkCharacter cachedNetCharacter;
     private PlayerCapsule cachedPlayerCapsule;
+    private PlayerCombat cachedPlayerCombat;
 
     private Vector3 previousWorldPos;
     private bool hasInitializedPos = false;
@@ -199,6 +200,9 @@ public class RunWindSlipstream : MonoBehaviour
 
         cachedPlayerCapsule = GetComponentInParent<PlayerCapsule>();
         if (cachedPlayerCapsule == null) cachedPlayerCapsule = GetComponentInChildren<PlayerCapsule>(true);
+
+        cachedPlayerCombat = GetComponentInParent<PlayerCombat>();
+        if (cachedPlayerCombat == null) cachedPlayerCombat = GetComponentInChildren<PlayerCombat>(true);
     }
 
     private void CacheAnimatorParameterList()
@@ -250,25 +254,45 @@ public class RunWindSlipstream : MonoBehaviour
         ApplyRealTimeColorAndVisualUpdates(false);
         UpdateRealHorizontalSpeed(dt);
 
-        bool movementKeyPressed;
-        isShiftHeld = DetectUniversalShiftAndMovementInput(out movementKeyPressed);
-        bool isMovingNow = movementKeyPressed || (currentHorizontalSpeed >= minMoveSpeedThreshold);
-
-        string animReason;
-        isPlayingRunAnimation = EvaluateRunAnimationAndNetworkState(out animReason);
-
-        // เดินปกติ (Walk) ต้องไม่ขึ้นเอฟเฟกต์เด็ดขาด จะขึ้นเฉพาะตอนกด Shift วิ่ง หรือ Animator อยู่ในท่าวิ่งจริงเท่านั้น
+        // ตรวจสอบว่าเป็นตัวละครที่ Spawn บนเครือข่าย Fusion หรือไม่ เพื่อแยกเอฟเฟกต์วิ่งเฉพาะตัวละครนี้ (ไม่ไหลไปติดเพื่อนในห้อง)
+        bool hasNetworkCapsule = cachedPlayerCapsule != null && cachedPlayerCapsule.Object != null && cachedPlayerCapsule.Object.IsValid;
         bool shouldActivateWind = false;
 
-        if (isShiftHeld && (requireMovementWithShift ? isMovingNow : true))
+        if (hasNetworkCapsule)
         {
-            shouldActivateWind = true;
-            activeTriggerSource = "Shift Key + Running";
+            bool alive = cachedPlayerCombat == null || !cachedPlayerCombat.IsSpawned || !cachedPlayerCombat.IsDead;
+            bool movingNet = cachedPlayerCapsule.NetworkMove.sqrMagnitude > 0.01f;
+            bool sprintingNet = alive && cachedPlayerCapsule.IsSprinting && movingNet;
+
+            isShiftHeld = sprintingNet;
+            isPlayingRunAnimation = sprintingNet;
+            if (sprintingNet)
+            {
+                shouldActivateWind = true;
+                activeTriggerSource = "PlayerCapsule NetworkSprinting";
+            }
         }
-        else if (triggerOnRunAnimation && isPlayingRunAnimation)
+        else
         {
-            shouldActivateWind = true;
-            activeTriggerSource = animReason;
+            bool isLocal = IsLocallyOwnedPlayer();
+            bool movementKeyPressed = false;
+            isShiftHeld = isLocal && DetectUniversalShiftAndMovementInput(out movementKeyPressed);
+            bool isMovingNow = movementKeyPressed || (currentHorizontalSpeed >= minMoveSpeedThreshold);
+
+            string animReason;
+            isPlayingRunAnimation = EvaluateRunAnimationAndNetworkState(out animReason);
+
+            // เดินปกติ (Walk) ต้องไม่ขึ้นเอฟเฟกต์เด็ดขาด จะขึ้นเฉพาะตอนกด Shift วิ่ง หรือ Animator อยู่ในท่าวิ่งจริงเท่านั้น
+            if (isShiftHeld && (requireMovementWithShift ? isMovingNow : true))
+            {
+                shouldActivateWind = true;
+                activeTriggerSource = "Shift Key + Running";
+            }
+            else if (triggerOnRunAnimation && isPlayingRunAnimation)
+            {
+                shouldActivateWind = true;
+                activeTriggerSource = animReason;
+            }
         }
 
         if (shouldActivateWind)
@@ -518,6 +542,17 @@ public class RunWindSlipstream : MonoBehaviour
                 tr.emitting = true;
             }
         }
+    }
+
+    private bool IsLocallyOwnedPlayer()
+    {
+        if (cachedPlayerCombat != null && cachedPlayerCombat.IsSpawned)
+            return cachedPlayerCombat.IsLocallyControlled;
+        if (cachedPlayerCapsule != null && cachedPlayerCapsule.Object != null && cachedPlayerCapsule.Object.IsValid)
+            return cachedPlayerCapsule.Object.HasStateAuthority || cachedPlayerCapsule.Object.HasInputAuthority;
+        if (cachedNetCharacter != null && cachedNetCharacter.IsSpawned && cachedNetCharacter.Object != null && cachedNetCharacter.Object.IsValid)
+            return cachedNetCharacter.Object.HasStateAuthority || cachedNetCharacter.Object.HasInputAuthority;
+        return true;
     }
 
     private bool DetectUniversalShiftAndMovementInput(out bool movementKeyPressed)

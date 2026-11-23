@@ -25,10 +25,13 @@ public sealed class FloatingDamagePopup : MonoBehaviour
     private const float Lifetime = 1.05f;
 
     /// <summary>
-    /// สร้างตัวเลขดาเมจลอยเหนือจุดปะทะ
+    /// สร้างตัวเลขดาเมจลอยเหนือจุดปะทะ (ซ่อนอัตโนมัติหากอยู่ไกลเกินระยะมองเห็นของผู้เล่นเครื่องนี้)
     /// </summary>
-    public static FloatingDamagePopup Spawn(Vector3 worldPos, int amount, bool isCrit, int comboStep = 1)
+    public static FloatingDamagePopup Spawn(Vector3 worldPos, int amount, bool isCrit, int comboStep = 1, bool isBoss = false, PlayerRef attacker = default)
     {
+        if (!CombatHud.IsWithinCombatVisualRange(worldPos, isBoss, attacker))
+            return null;
+
         var go = new GameObject(isCrit ? $"FloatingCritPopup_{amount}" : $"FloatingDamagePopup_{amount}");
         Vector2 jitter = UnityEngine.Random.insideUnitCircle * 0.25f;
         go.transform.position = worldPos + new Vector3(jitter.x, 0.35f, jitter.y);
@@ -40,9 +43,13 @@ public sealed class FloatingDamagePopup : MonoBehaviour
 
     /// <summary>
     /// สร้างข้อความแจ้งเตือนพิเศษบนโลก 3D (เช่น PERFECT PARRY!, STAGGERED!, ท่าเตือนของบอส)
+    /// ซ่อนอัตโนมัติหากอยู่ไกลเกินระยะมองเห็นของผู้เล่นเครื่องนี้
     /// </summary>
-    public static FloatingDamagePopup SpawnWarning(Vector3 worldPos, string text, Color color)
+    public static FloatingDamagePopup SpawnWarning(Vector3 worldPos, string text, Color color, bool isBoss = false)
     {
+        if (!CombatHud.IsWithinCombatVisualRange(worldPos, isBoss))
+            return null;
+
         var go = new GameObject("FloatingWarningPopup");
         go.transform.position = worldPos;
         var popup = go.AddComponent<FloatingDamagePopup>();
@@ -149,7 +156,11 @@ public sealed class CombatHud : MonoBehaviour
         public Color color;
         public bool isCrit;
         public float startedAt;
+        public float maxVisibleDistance;
     }
+
+    public const float NormalDamageVisualRange = 30f;
+    public const float BossDamageVisualRange = 65f;
 
     private const float PopupLifetime = 1.05f;
     private const float ComboTimeout = 2.5f;
@@ -160,6 +171,32 @@ public sealed class CombatHud : MonoBehaviour
     private int _lastHealth = -1;
     private int _combo;
     private float _lastComboTime = -100f;
+
+    /// <summary>
+    /// ตรวจสอบว่าจุดเกิดดาเมจอยู่ในระยะมองเห็นของผู้เล่นเครื่องนี้หรือไม่ (ป้องกันเห็น UI ดาเมจเพื่อนที่อยู่ห่าง 500–800 เมตร)
+    /// </summary>
+    public static bool IsWithinCombatVisualRange(Vector3 worldPos, bool isBoss = false, PlayerRef attacker = default)
+    {
+        float maxDist = isBoss ? BossDamageVisualRange : NormalDamageVisualRange;
+        var local = PlayerCombat.Local;
+        if (local != null && local.IsSpawned)
+        {
+            if (attacker != PlayerRef.None && local.Runner != null && local.Runner.IsRunning && local.Runner.LocalPlayer == attacker)
+                return true;
+
+            Vector3 diff = worldPos - local.transform.position;
+            diff.y = 0f;
+            return diff.sqrMagnitude <= maxDist * maxDist;
+        }
+
+        var cam = Camera.main;
+        if (cam != null)
+        {
+            Vector3 diff = worldPos - cam.transform.position;
+            return diff.sqrMagnitude <= maxDist * maxDist;
+        }
+        return true;
+    }
 
     /// <summary>
     /// ตรวจสอบและสร้าง CombatHud พร้อม PlayerStatusHud ให้กับผู้เล่นฝั่งเครื่องนี้
@@ -193,17 +230,22 @@ public sealed class CombatHud : MonoBehaviour
     }
 
     /// <summary>
-    /// แจ้งเตือนเมื่อศัตรูได้รับดาเมจเพื่อแสดง Popup และอัปเดตตัวนับ Combo
+    /// แจ้งเตือนเมื่อศัตรูได้รับดาเมจเพื่อแสดง Popup และอัปเดตตัวนับ Combo (คัดกรองระยะไกลเพื่อไม่ให้เห็นดาเมจข้ามแมป)
     /// </summary>
     public static void NotifyEnemyDamaged(EnemyNPC enemy, int amount, PlayerRef attacker, bool isCrit = false, int comboStep = 1)
     {
         if (_localHud == null || enemy == null || amount <= 0) return;
 
+        Transform anchor = enemy.LockPoint != null ? enemy.LockPoint : enemy.transform;
+        if (!IsWithinCombatVisualRange(anchor.position, enemy.IsBoss, attacker))
+            return;
+
         Color c = isCrit
             ? (comboStep >= 3 ? new Color(1f, 0.42f, 0.10f) : new Color(1f, 0.82f, 0.12f))
             : new Color(1f, 0.94f, 0.72f);
 
-        _localHud.AddTextPopup(enemy.LockPoint, isCrit ? $"CRIT! -{amount}" : $"-{amount}", c, isCrit);
+        float maxVis = enemy.IsBoss ? BossDamageVisualRange : NormalDamageVisualRange;
+        _localHud.AddTextPopup(anchor, isCrit ? $"CRIT! -{amount}" : $"-{amount}", c, isCrit, maxVis);
 
         var local = PlayerCombat.Local;
         if (local != null && local.Runner != null && local.Runner.LocalPlayer == attacker)
@@ -276,9 +318,17 @@ public sealed class CombatHud : MonoBehaviour
         AddTextPopup(transform, "GUARD BROKEN!", new Color(1f, 0.28f, 0.14f), isCrit: true);
     }
 
-    private void AddTextPopup(Transform target, string label, Color color, bool isCrit)
+    private void AddTextPopup(Transform target, string label, Color color, bool isCrit, float maxVisibleDistance = NormalDamageVisualRange)
     {
-        _popups.Add(new Popup { target = target, label = label, isCrit = isCrit, color = color, startedAt = Time.unscaledTime });
+        _popups.Add(new Popup
+        {
+            target = target,
+            label = label,
+            isCrit = isCrit,
+            color = color,
+            startedAt = Time.unscaledTime,
+            maxVisibleDistance = maxVisibleDistance
+        });
     }
 
     // ตรวจสอบว่าควรแสดงเป้าเล็งกลางจอหรือไม่ (ซ่อนอัตโนมัติเมื่อเปิดแผนที่โลกหรือหน้าต่าง UI)
@@ -326,7 +376,8 @@ public sealed class CombatHud : MonoBehaviour
             if (popup.target == null) continue;
             float t = Mathf.Clamp01((Time.unscaledTime - popup.startedAt) / PopupLifetime);
             Vector3 screen = cam.WorldToScreenPoint(popup.target.position + Vector3.up * (1.5f + t * .9f));
-            if (screen.z <= 0f) continue;
+            float maxVis = popup.maxVisibleDistance > 0f ? popup.maxVisibleDistance : NormalDamageVisualRange;
+            if (screen.z <= 0f || screen.z > maxVis) continue;
 
             GUI.color = new Color(popup.color.r, popup.color.g, popup.color.b, 1f - t);
             GUIStyle style = new GUIStyle(GUI.skin.label)

@@ -1098,6 +1098,10 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler, IWorldInterac
 
     // ------------------------------------------------------------------ 1. local input & stamina tick
 
+    // แฟล็กแจ้งผู้ฟัง (เช่น YeenVFXAutoIntegrator) ว่าการเพิ่ม HP รอบนี้มาจากการพักฟื้นอัตโนมัติใน SafeZone ไม่ใช่การดื่มยาเลือด
+    public bool IsSafeZoneRegenTick { get; private set; }
+    private float _safeZoneHpRegenCarry;
+
     public bool IsLocallyControlled =>
         Object.HasInputAuthority || (Runner != null && Runner.GameMode == GameMode.Shared && Object.HasStateAuthority);
 
@@ -1111,6 +1115,32 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler, IWorldInterac
         if (inSafe && (IsWeaponDrawn || IsBlocking))
         {
             SetAuthorityWeaponDrawn(false);
+        }
+
+        // ฟื้นฟู HP อัตโนมัติอย่างนุ่มนวลขณะพักอยู่ในเขตปลอดภัย (SafeZone Sanctuary Regen: +15% MaxHP/วิ)
+        if (inSafe && !IsDead && NetworkHealth < MaxHealth)
+        {
+            float healPerSec = Mathf.Max(10f, MaxHealth * 0.15f);
+            _safeZoneHpRegenCarry += healPerSec * Runner.DeltaTime;
+            int wholeHeal = Mathf.FloorToInt(_safeZoneHpRegenCarry);
+            if (wholeHeal > 0)
+            {
+                _safeZoneHpRegenCarry -= wholeHeal;
+                IsSafeZoneRegenTick = true;
+                try
+                {
+                    NetworkHealth = Mathf.Min(MaxHealth, NetworkHealth + wholeHeal);
+                    HealthChanged?.Invoke(NetworkHealth, MaxHealth);
+                }
+                finally
+                {
+                    IsSafeZoneRegenTick = false;
+                }
+            }
+        }
+        else
+        {
+            _safeZoneHpRegenCarry = 0f;
         }
 
         TickStaminaRegen(Runner.DeltaTime);
@@ -2430,7 +2460,7 @@ public class PlayerCombat : NetworkBehaviour, IClassCombatHandler, IWorldInterac
                 _respawnRoutine = null;
                 yield break;
             }
-            if (IsLocallyControlled && coopMode && elapsed >= 1.0f)
+            if (IsLocallyControlled && coopMode && elapsed >= 1.5f)
             {
                 var kb = Keyboard.current;
                 if (kb != null && kb.rKey.wasPressedThisFrame && !GameplayInput.IsBlocked)

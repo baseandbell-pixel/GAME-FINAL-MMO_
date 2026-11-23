@@ -397,9 +397,26 @@ public class MonsterEnemyNPC : EnemyNPC
         float dmgMult = (cfg != null ? cfg.damageMultiplier : 1.0f) * globalDmgMult;
         int defBonus = cfg != null ? cfg.defenseBonus : 0;
 
-        MaxHealth = Mathf.Max(20, Mathf.RoundToInt(MaxHealth * hpMult));
-        AttackDamage = Mathf.Max(2, Mathf.RoundToInt(AttackDamage * dmgMult));
-        Defense = Mathf.Max(0, Defense + defBonus);
+        // บันทึกตัวคูณประจำสายพันธุ์ลงบน EnemyNPC ฐาน เพื่อไม่ให้สูญหายเวลาบอสสเกล Co-op หรือ Reset กลับ 1x
+        _speciesHealthMultiplier = hpMult;
+        _speciesDamageMultiplier = dmgMult;
+        _speciesDefenseBonus = defBonus;
+
+        int coopCount = (IsBoss && IsSpawned) ? Mathf.Max(1, CoopPeakPlayerCount) : 1;
+        int lvl = Mathf.Clamp(ScaledLevel > 0 ? ScaledLevel : (IsBoss ? 25 : 2), 1, PlayerCombat.MaxLevel);
+        int baseHp, baseAtk, baseDef;
+        if (IsBoss)
+            ComputeBossBaseStats(lvl, out baseHp, out baseAtk, out baseDef, out _);
+        else
+            ComputeNormalEnemyBaseStats(lvl, out baseHp, out baseAtk, out baseDef, out _);
+
+        float coopHp = IsBoss ? ComputeCoopBossHealthMultiplier(coopCount) : 1f;
+        float coopAtk = IsBoss ? ComputeCoopBossAttackMultiplier(coopCount) : 1f;
+        float coopDef = IsBoss ? ComputeCoopBossDefenseMultiplier(coopCount) : 1f;
+
+        MaxHealth = Mathf.Max(20, Mathf.RoundToInt(baseHp * hpMult * coopHp));
+        AttackDamage = Mathf.Max(2, Mathf.RoundToInt(baseAtk * dmgMult * coopAtk));
+        Defense = Mathf.Max(0, Mathf.RoundToInt(baseDef * coopDef) + defBonus);
 
         if (cfg != null)
         {
@@ -453,7 +470,7 @@ public class MonsterEnemyNPC : EnemyNPC
         if (IsBoss)
         {
             ComputeBossBaseStats(lvl, out _, out _, out baseDef, out _);
-            baseDef *= Mathf.Max(1, CoopPeakPlayerCount);
+            baseDef = Mathf.RoundToInt(baseDef * ComputeCoopBossDefenseMultiplier(Mathf.Max(1, CoopPeakPlayerCount)));
         }
         else
         {
@@ -1070,7 +1087,9 @@ public class MonsterEnemyNPC : EnemyNPC
 
         FaceInstant(target.transform.position);
         Vector3 slamCenter = Vector3.Lerp(transform.position, target.transform.position, 0.35f);
-        SnapToGround(ref slamCenter, searchUp: 4.0f, searchDown: 15.0f);
+        // แปลงความสูงเป็นระดับพื้นดินจริง (หัก GetGroundPivotHeight ออก) เพื่อให้วงแดงเตือนทาบพื้นพอดีไม่ลอยกลางอากาศระดับหัวคน
+        float floorRefY = transform.position.y - GetGroundPivotHeight();
+        slamCenter.y = SandboxWorldSpawner.SampleGroundY(slamCenter, floorRefY);
 
         _bossSlamRoutine = StartCoroutine(BossSlamAuthorityRoutine(slamCenter));
     }
@@ -1154,7 +1173,8 @@ public class MonsterEnemyNPC : EnemyNPC
         _hyperArmorUntil = Time.time + bossCleaveTelegraphSeconds + 0.50f;
 
         Vector3 groundCenter = transform.position;
-        SnapToGround(ref groundCenter, searchUp: 3.0f, searchDown: 12.0f);
+        float floorRefY = transform.position.y - GetGroundPivotHeight();
+        groundCenter.y = SandboxWorldSpawner.SampleGroundY(groundCenter, floorRefY);
         _bossSlamRoutine = StartCoroutine(BossCleaveAuthorityRoutine(groundCenter));
     }
 
@@ -1435,11 +1455,14 @@ public class MonsterEnemyNPC : EnemyNPC
         animatorBridge?.SetDead(true);
         PlayClip(animatorBridge?.Config?.deathClip);
 
-        // Trigger teammate's Death Blood Pool VFX scaled to monster height!
-        float modelHeight = animatorBridge?.Config != null ? Mathf.Max(0.8f, animatorBridge.Config.targetWorldHeight) : 2.15f;
-        float bloodScale = Mathf.Clamp(modelHeight / 2.15f, 0.55f, 1.55f);
-        Vector3 bloodPos = new Vector3(transform.position.x, transform.position.y - GetGroundPivotHeight() + 0.05f, transform.position.z);
-        MMOMonsterDeathBloodVFX.SpawnDeathBlood(bloodPos, bloodScale);
+        // Trigger teammate's Death Blood Pool VFX scaled to monster height (เฉพาะระยะใกล้เพื่อไม่ให้กินสเปกเมื่อเพื่อนฆ่ามอนไกลข้ามแมป)
+        if (CombatHud.IsWithinCombatVisualRange(transform.position, IsBoss))
+        {
+            float modelHeight = animatorBridge?.Config != null ? Mathf.Max(0.8f, animatorBridge.Config.targetWorldHeight) : 2.15f;
+            float bloodScale = Mathf.Clamp(modelHeight / 2.15f, 0.55f, 1.55f);
+            Vector3 bloodPos = new Vector3(transform.position.x, transform.position.y - GetGroundPivotHeight() + 0.05f, transform.position.z);
+            MMOMonsterDeathBloodVFX.SpawnDeathBlood(bloodPos, bloodScale);
+        }
 
         MonsterSystemManager.NotifyMonsterKilled(this, killer);
     }
@@ -1800,7 +1823,7 @@ public class MonsterEnemyNPC : EnemyNPC
         BaseTelegraphNameProp?.SetValue(this, "GROUND SLAM");
         BaseTelegraphDurationProp?.SetValue(this, safeDur);
         BaseTelegraphEndTimeProp?.SetValue(this, Time.time + safeDur);
-        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "SLAM!", new Color(1.0f, 0.22f, 0.12f, 1f));
+        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "SLAM!", new Color(1.0f, 0.22f, 0.12f, 1f), isBoss: IsBoss);
         if (_slamVfxRoutine != null) StopCoroutine(_slamVfxRoutine);
         _slamVfxRoutine = StartCoroutine(BossSlamTelegraphRoutine(groundCenter, radius, duration));
     }
@@ -1824,7 +1847,7 @@ public class MonsterEnemyNPC : EnemyNPC
         BaseTelegraphNameProp?.SetValue(this, "360° CLEAVE");
         BaseTelegraphDurationProp?.SetValue(this, safeDur);
         BaseTelegraphEndTimeProp?.SetValue(this, Time.time + safeDur);
-        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition() + Vector3.up * 0.65f, "CLEAVE!", new Color(1.0f, 0.32f, 0.12f, 1f));
+        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition() + Vector3.up * 0.65f, "CLEAVE!", new Color(1.0f, 0.32f, 0.12f, 1f), isBoss: IsBoss);
         if (_slamVfxRoutine != null) StopCoroutine(_slamVfxRoutine);
         _slamVfxRoutine = StartCoroutine(BossSlamTelegraphRoutine(groundCenter, radius, duration));
     }
@@ -1885,7 +1908,7 @@ public class MonsterEnemyNPC : EnemyNPC
     {
         animatorBridge?.SetPersistentEnrageGlow(true);
         animatorBridge?.SetSpeedScale(1.18f);
-        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "ENRAGE!", new Color(1.0f, 0.14f, 0.14f, 1f));
+        FloatingDamagePopup.SpawnWarning(GetOverheadPopupPosition(), "ENRAGE!", new Color(1.0f, 0.14f, 0.14f, 1f), isBoss: IsBoss);
     }
 
     /// <summary>
@@ -1906,9 +1929,45 @@ public class MonsterEnemyNPC : EnemyNPC
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_NotifyMonsterZoneCleared(int clearedZoneSignature, NetworkString<_128> contributorPayload)
+    public void RPC_NotifyMonsterZoneCleared(int clearedZoneSignature, NetworkString<_64> contributorPayload)
     {
         MonsterSpawnZone.HandleAuthoritativeZoneCleared(clearedZoneSignature, contributorPayload.ToString());
+    }
+
+    protected override void OnRemoteDamageContributionSynced(PlayerRef attacker, float delta)
+    {
+        // ซิงก์ดาเมจสะสมรายโซนบนทุกเครื่องแบบเรียลไทม์ (ป้องกันข้อมูลขาดตอนหากเกิด Host Migration หรือ RPC แคมป์เคลียร์ล่าช้า)
+        if (ZoneSignature != 0 && attacker != PlayerRef.None && delta > 0f)
+        {
+            MonsterSpawnZone.RecordZoneDamageFromAuthority(ZoneSignature, attacker, delta);
+        }
+    }
+
+    public override void StateAuthorityChanged()
+    {
+        base.StateAuthorityChanged();
+        if (!IsSpawned || Object == null || !Object.IsValid) return;
+
+        // ปิด NavMeshAgent เสมอสำหรับ MonsterEnemyNPC (ป้องกันสไลด์/จมพื้นหลังรับช่วง StateAuthority)
+        var nav = GetComponent<UnityEngine.AI.NavMeshAgent>();
+        if (nav != null && nav.enabled) nav.enabled = false;
+
+        if (Object.HasStateAuthority)
+        {
+            // คำนวณตัวคูณสายพันธุ์ซ้ำโดยคงเลือดปัจจุบันไว้ (แก้บั๊ก MaxHealth/Defense เพี้ยนหลัง Host ออกจากห้อง)
+            _speciesStatsApplied = false;
+            ApplySpeciesStatMultipliers();
+            if (IsBoss)
+            {
+                int mult = Mathf.Max(1, CoopPeakPlayerCount);
+                NetworkMaxHealth = Mathf.Max(NetworkMaxHealth, MaxHealth);
+                MaxHealth = NetworkMaxHealth;
+                if (CurrentHealth > MaxHealth) CurrentHealth = MaxHealth;
+            }
+            _baseDefense = GetCanonicalBaseDefense();
+            if (State == NpcState.Dead && _deathStamp <= 0f)
+                _deathStamp = Time.time;
+        }
     }
 
     private void OnGuardVisualStateChanged()

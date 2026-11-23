@@ -95,6 +95,10 @@ public class MonsterSpawnZone : MonoBehaviour
     private int _zoneSignature;
     private bool _initialized;
     private bool _initialSpawnDone;
+    private bool _wasMasterLastFrame;
+    private bool _seenNonMasterFrame;
+    private float _masterTakeoverReadyAt = -1f;
+    private float _nextInitialSpawnRetryAt = -1f;
     private bool _campWaveWaiting;
     private float _campWaveRespawnAt;
     private float _nonMasterWaitStart = -1f;
@@ -115,7 +119,7 @@ public class MonsterSpawnZone : MonoBehaviour
     public int ZoneMaxLevel => Mathf.Max(ZoneMinLevel, Mathf.Max(zoneMinLevel, zoneMaxLevel));
     public bool ShowOnWorldMap => showOnWorldMap;
     public bool IsBossZone => monsterPrefab is MonsterEnemyNPC mNpc && mNpc.IsConfiguredAsBoss;
-    public bool IsZoneCleared => _everSawLivingMonster && GetNetworkLivingCount() == 0;
+    public bool IsZoneCleared => (_everSawLivingMonster || _campWaveWaiting || _zoneClearRewarded) && GetNetworkLivingCount() == 0;
 
     /// <summary>
     /// Deterministic Camp number resolution: uses explicit <see cref="campNumber"/> if > 0;
@@ -251,14 +255,18 @@ public class MonsterSpawnZone : MonoBehaviour
                                 custom.StartsWith("แคมป์") ||
                                 custom.StartsWith("บอส"));
 
+        string bossTitle = mob.StartsWith("Boss", System.StringComparison.OrdinalIgnoreCase)
+            ? mob
+            : $"Boss {mob}";
+
         string title = customHasPrefix
             ? custom
-            : (IsBossZone ? $"Boss {mob}" : $"Camp {num} {mob}");
+            : (IsBossZone ? bossTitle : $"Camp {num} {mob}");
 
         if (IsZoneCleared && NextRespawnRemainingSeconds > 0.5f)
             return customHasPrefix
                 ? $"{custom} ({GetFormattedRespawnTime()})"
-                : (IsBossZone ? $"Boss {mob} ({GetFormattedRespawnTime()})" : $"Camp {num} ({GetFormattedRespawnTime()})");
+                : (IsBossZone ? $"{bossTitle} ({GetFormattedRespawnTime()})" : $"Camp {num} ({GetFormattedRespawnTime()})");
 
         string lvlTag = ZoneMinLevel == ZoneMaxLevel ? $"Lv.{ZoneMinLevel}" : $"Lv.{ZoneMinLevel}-{ZoneMaxLevel}";
         return $"{title} ({lvlTag})";
@@ -274,7 +282,7 @@ public class MonsterSpawnZone : MonoBehaviour
         {
             MonsterSpawnZone z = All[i];
             if (z == null || !z.isActiveAndEnabled || !z.IsBossZone) continue;
-            if (!z.IsZoneCleared || z.NextRespawnRemainingSeconds <= 0.5f) continue;
+            if (z.GetNetworkLivingCount() > 0 || z.NextRespawnRemainingSeconds <= 0.5f) continue;
 
             float dist = Vector2.Distance(
                 new Vector2(playerPos.x, playerPos.z),
@@ -282,7 +290,11 @@ public class MonsterSpawnZone : MonoBehaviour
             // ขยายระยะตรวจจับแบนเนอร์นับถอยหลังบอสให้ครอบคลุมลานบอสขนาดใหญ่บนแผนที่ FinalTestv1
             if (dist <= Mathf.Max(60f, z.TerritoryRadius + 10f))
             {
-                bannerText = $"Boss {z.ResolvedDisplayName} respawns in {z.GetFormattedRespawnTime()}";
+                string displayName = z.ResolvedDisplayName;
+                string title = displayName.StartsWith("Boss", System.StringComparison.OrdinalIgnoreCase)
+                    ? displayName
+                    : $"Boss {displayName}";
+                bannerText = $"{title} respawns in {z.GetFormattedRespawnTime()}";
                 return true;
             }
         }
@@ -452,6 +464,10 @@ public class MonsterSpawnZone : MonoBehaviour
         TickZoneClearRewardTracker(local, mgr);
 
         bool isMaster = runner.IsSharedModeMasterClient;
+        bool promotedMidSession = isMaster && !_wasMasterLastFrame && _seenNonMasterFrame;
+        if (!isMaster) _seenNonMasterFrame = true;
+        _wasMasterLastFrame = isMaster;
+
         if (!isMaster)
         {
             if (!allowNonMasterFallbackSpawn) return;
@@ -478,26 +494,65 @@ public class MonsterSpawnZone : MonoBehaviour
         {
             _actingAsFallbackSpawner = false;
             _nonMasterWaitStart = -1f;
+
+            if (promotedMidSession)
+            {
+                // เว้นจังหวะ 0.40 วินาทีให้ Photon Fusion โอนสิทธิ์ MasterClientObject ที่ยังมีชีวิตอยู่มาครบก่อนตรวจสอบ
+                // แก้ปัญหาเมื่อ Host ออกห้องแล้วบอสไม่เกิดหรือ runner.Spawn ล้มเหลวในเฟรมแรกที่รับช่วงต่อ
+                _masterTakeoverReadyAt = Time.time + 0.40f;
+                _initialSpawnDone = false;
+                _nextInitialSpawnRetryAt = -1f;
+                Debug.Log($"[MonsterSpawnZone] '{name}' (Boss={IsBossZone}) MasterClient handoff detected -> verifying live monsters & respawn timer in 0.40s.");
+            }
+
+            if (_masterTakeoverReadyAt > 0f && Time.time < _masterTakeoverReadyAt)
+                return;
+            _masterTakeoverReadyAt = -1f;
         }
 
         if (!_initialSpawnDone)
         {
-            _initialSpawnDone = true;
-
-            // Host-Migration Safeguard: adopt any already-spawned monsters belonging to this zone first!
+            // Host-Migration Safeguard: รับช่วงมอนสเตอร์ที่ยังมีชีวิตอยู่จริงในโซนนี้ก่อนเสมอ (ไม่นับศพที่รอสลาย)
             int adopted = AdoptExistingZoneMonsters();
 
             if (adopted > 0)
             {
-                if (verboseLogs) Debug.Log($"[MonsterSpawnZone] '{name}' adopted {adopted} existing monsters after Master Client handoff (zero duplicates).");
-                // Only fill genuinely empty slots (if any died before handoff, respawn timer will handle them naturally)
+                _initialSpawnDone = true;
+                _campWaveWaiting = false;
+                if (verboseLogs) Debug.Log($"[MonsterSpawnZone] '{name}' adopted {adopted} living monsters after Master Client handoff (zero duplicates).");
                 return;
             }
 
+            // หากแคมป์/บอสเพิ่งถูกเคลียร์จริงก่อน Host ออกและยังมีเวลานับถอยหลังเหลืออยู่ ให้สืบทอดเวลานับถอยหลังต่อทันทีแทนการรีเซ็ตใหม่
+            if (_zoneClearRewarded && _clientEstimatedRespawnAt > Time.time + 1.0f)
+            {
+                _initialSpawnDone = true;
+                _campWaveWaiting = true;
+                _campWaveRespawnAt = _clientEstimatedRespawnAt;
+                Debug.Log($"[MonsterSpawnZone] '{name}' inherited remaining respawn timer ({_campWaveRespawnAt - Time.time:0.0}s) after MasterClient handoff.");
+                return;
+            }
+
+            if (_nextInitialSpawnRetryAt > 0f && Time.time < _nextInitialSpawnRetryAt)
+                return;
+
+            int spawnedCount = 0;
             for (int i = 0; i < _slots.Count; i++)
             {
-                if (_slots[i].ActiveInstance == null)
-                    TrySpawnIntoSlot(runner, _slots[i], ignoreAntiPopIn: true);
+                if (_slots[i].ActiveInstance == null && TrySpawnIntoSlot(runner, _slots[i], ignoreAntiPopIn: true))
+                    spawnedCount++;
+            }
+
+            if (spawnedCount > 0)
+            {
+                _initialSpawnDone = true;
+                _campWaveWaiting = false;
+                _nextInitialSpawnRetryAt = -1f;
+            }
+            else
+            {
+                // หาก runner.Spawn ยังไม่พร้อมในเฟรมรับช่วงต่อ ให้ลองใหม่ใน 1.0 วินาที (ห้ามข้ามไปรอคูลดาวน์บอส 3-4 นาที!)
+                _nextInitialSpawnRetryAt = Time.time + 1.0f;
             }
             return;
         }
@@ -563,18 +618,18 @@ public class MonsterSpawnZone : MonoBehaviour
             return db.CompareTo(da);
         });
 
-        // รองรับผู้เล่นช่วยตีพร้อมกันสูงสุด 10 คนภายใน NetworkString<_128> (ไม่เกินขีดจำกัด 512 ไบต์ของ Photon Fusion)
-        var sb = new StringBuilder(128);
+        // ใช้รูปแบบกะทัดรัด "raw:pct:top" (รองรับ 8–9 คนภายใน NetworkString<_64> = 260 ไบต์ ต่ำกว่าขีดจำกัด 512 ไบต์ของ Photon Fusion เสมอ)
+        var sb = new StringBuilder(64);
         for (int i = 0; i < participants.Count; i++)
         {
             PlayerRef p = participants[i];
             if (!ledger.TryGetValue(p, out float dealt) || dealt <= 0f) continue;
 
-            float share = Mathf.Clamp01(dealt / totalDamage);
+            int pct = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(dealt / totalDamage) * 100f), 1, 100);
             int topFlag = p == topDps ? 1 : 0;
-            string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{share.ToString("0.##", CultureInfo.InvariantCulture)}:{topFlag}";
+            string token = $"{p.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{pct.ToString(CultureInfo.InvariantCulture)}:{topFlag}";
             int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
-            if (sb.Length + needed > 124) break;
+            if (sb.Length + needed > 60) break;
 
             if (sb.Length > 0) sb.Append(';');
             sb.Append(token);
@@ -634,9 +689,9 @@ public class MonsterSpawnZone : MonoBehaviour
         if (Time.unscaledTime - _zeroLivingDetectedAt < 0.65f)
             return;
 
-        NetworkRunner runner = localPlayer != null ? localPlayer.Runner : null;
-        bool isMaster = runner != null && runner.IsRunning && runner.IsSharedModeMasterClient;
-        string fallbackPayload = isMaster ? BuildZoneContributorPayload(_zoneSignature, IsBossZone) : string.Empty;
+        // ใช้ตารางดาเมจที่ซิงก์มาจาก StateAuthority (ผ่าน RPC_SyncDamageContribution) เป็น Fallback ได้บนทุกเครื่อง
+        // เพื่อให้ผู้ร่วมตีไม่ถูกล็อกกล่องแม้ RPC แคมป์เคลียร์ล่าช้าหรือ Host หลุดกลางไฟต์ (ส่วนผู้เล่นที่ตี 0 ดาเมจยังคงถูกล็อก 100%)
+        string fallbackPayload = BuildZoneContributorPayload(_zoneSignature, IsBossZone);
         HandleZoneClearedInternal(fallbackPayload);
     }
 
@@ -651,6 +706,12 @@ public class MonsterSpawnZone : MonoBehaviour
         _clientEstimatedRespawnAt = Time.time + Mathf.Max(2f, avgRespawn);
 
         var contributors = SandboxWorldSpawner.ParseContributorPayload(contributorPayload);
+        if (contributors.Count == 0)
+        {
+            string syncedLocalPayload = BuildZoneContributorPayload(_zoneSignature, IsBossZone);
+            if (!string.IsNullOrEmpty(syncedLocalPayload))
+                contributors = SandboxWorldSpawner.ParseContributorPayload(syncedLocalPayload);
+        }
 
         PlayerCombat localPlayer = PlayerCombat.Local;
         PlayerRef localRef = PlayerRef.None;
@@ -673,15 +734,14 @@ public class MonsterSpawnZone : MonoBehaviour
         // 1. Spawn teammate's LootChest at zone center & configure real participant permissions (unlocks for fighters, locks out freeloaders!)
         if (spawnRewardChestOnZoneClear)
         {
-            Vector3 groundedCenter = ProjectPointOntoGround(transform.position);
-            float groundY = groundedCenter.y - 1.2f;
+            Vector3 clearChestPos = ResolveClearChestPosition(transform.position, isBoss);
             WorldItem itemPrefab = mgr != null ? mgr.sharedWorldItemPrefab : null;
             // Use unique per-zone key derived from _zoneSignature (never collides with SandboxWorldSpawner Camps 1-4/99 or duplicate campNumbers!)
             int chestCampKey = 100000 + (_zoneSignature & 0x0FFFFFFF);
-            _activeRewardChest = LootChest.SpawnAt(new Vector3(transform.position.x, groundY, transform.position.z), chestCampKey, itemPrefab, isBossChest: isBoss, replaceExisting: true);
+            _activeRewardChest = LootChest.SpawnAt(clearChestPos, chestCampKey, itemPrefab, isBossChest: isBoss, replaceExisting: true);
             if (_activeRewardChest != null)
             {
-                _activeRewardChest.transform.position = new Vector3(transform.position.x, groundY, transform.position.z);
+                _activeRewardChest.transform.position = clearChestPos;
                 _activeRewardChest.ConfigureParticipation(contributors);
             }
         }
@@ -711,7 +771,10 @@ public class MonsterSpawnZone : MonoBehaviour
                 localPlayer.AddGold(goldReward, $"Camp {campNum} ({ResolvedDisplayName})");
             }
 
-            string banner = isBoss ? $"BOSS {ResolvedDisplayName.ToUpper()} CLEARED!" : $"CAMP {campNum} CLEARED!";
+            string cleanBossName = ResolvedDisplayName.StartsWith("Boss", System.StringComparison.OrdinalIgnoreCase)
+                ? ResolvedDisplayName.ToUpper()
+                : $"BOSS {ResolvedDisplayName.ToUpper()}";
+            string banner = isBoss ? $"{cleanBossName} CLEARED!" : $"CAMP {campNum} CLEARED!";
             FloatingDamagePopup.SpawnWarning(localPlayer.transform.position + Vector3.up * 2.4f, banner, new Color(1.0f, 0.85f, 0.20f, 1f));
         }
 
@@ -725,7 +788,8 @@ public class MonsterSpawnZone : MonoBehaviour
         for (int i = 0; i < EnemyNPC.All.Count; i++)
         {
             MonsterEnemyNPC m = EnemyNPC.All[i] as MonsterEnemyNPC;
-            if (m == null || !m.IsSpawned) continue;
+            // รับช่วงเฉพาะมอนสเตอร์ที่ยังมีชีวิตอยู่จริง (ไม่นับศพที่รอเวลาสลาย เพื่อป้องกันบอสไม่เกิดหลัง Host ออก)
+            if (m == null || !m.IsSpawned || !m.IsAlive) continue;
             if (m.ZoneSignature != _zoneSignature) continue;
 
             int sIdx = m.ZoneSlotIndex;
@@ -827,16 +891,29 @@ public class MonsterSpawnZone : MonoBehaviour
         }
         else if (now >= _campWaveRespawnAt)
         {
-            if (IsAnyPlayerTooClose(transform.position, antiPopInPlayerRadius))
+            // สำหรับโซนบอส: ห้ามบล็อกการเกิดใหม่ถาวรเมื่อผู้เล่นยืนรอในลานบอส (ให้ขยับจุดเกิดไปด้านข้างอย่างปลอดภัยใน TrySpawnIntoSlot แทน)
+            if (!IsBossZone && IsAnyPlayerTooClose(transform.position, antiPopInPlayerRadius))
             {
                 _campWaveRespawnAt = now + antiPopInRetryDelay;
                 return;
             }
 
+            int spawnedAny = 0;
             for (int i = 0; i < _slots.Count; i++)
-                TrySpawnIntoSlot(runner, _slots[i], ignoreAntiPopIn: false);
+            {
+                if (TrySpawnIntoSlot(runner, _slots[i], ignoreAntiPopIn: IsBossZone))
+                    spawnedAny++;
+            }
 
-            _campWaveWaiting = false;
+            if (spawnedAny > 0)
+            {
+                _campWaveWaiting = false;
+            }
+            else
+            {
+                // หากยังเสกไม่ได้ในเฟรมนี้ ให้ลองใหม่อีก 1.5 วินาที (ไม่วนกลับไปนับถอยหลัง 3-4 นาทีใหม่)
+                _campWaveRespawnAt = now + Mathf.Max(1.5f, antiPopInRetryDelay);
+            }
         }
     }
 
@@ -846,6 +923,12 @@ public class MonsterSpawnZone : MonoBehaviour
         if (!ignoreAntiPopIn && IsAnyPlayerTooClose(slot.AnchorPosition, antiPopInPlayerRadius)) return false;
 
         Vector3 spawnPos = slot.AnchorPosition;
+        // หากเป็นบอสและมีผู้เล่นยืนทับจุดกลางลานบอสพอดี ให้ขยับจุดเกิดบอสห่างผู้เล่น ~7.5 เมตรภายในลานบอสแทนการยกเลิกการเกิด
+        if (IsBossZone && IsAnyPlayerTooClose(spawnPos, antiPopInPlayerRadius))
+        {
+            spawnPos = ResolveSafeBossPerimeterSpawn(spawnPos);
+        }
+
         if (SafeZone.IsPointInAnySafeZone(spawnPos, 1.0f)) return false;
 
         int scaleLvl = ResolveSpawnLevel();
@@ -901,6 +984,112 @@ public class MonsterSpawnZone : MonoBehaviour
             if (diff.sqrMagnitude <= sqrMin) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// ค้นหาจุดเกิดที่ปลอดภัยภายในลานบอส (ห่างจากผู้เล่นที่ยืนรอ ~7.5m) เพื่อให้บอสเกิดใหม่ได้เสมอโดยไม่ทับหัวผู้เล่น
+    /// </summary>
+    private Vector3 ResolveSafeBossPerimeterSpawn(Vector3 centerAnchor)
+    {
+        float ringRadius = Mathf.Clamp(Mathf.Max(antiPopInPlayerRadius + 2.0f, 7.5f), 6.5f, Mathf.Max(8f, territoryRadius * 0.65f));
+        Vector3 bestPos = centerAnchor;
+        float bestNearestPlayerSqr = -1f;
+
+        const int candidates = 8;
+        for (int i = 0; i < candidates; i++)
+        {
+            float ang = (i / (float)candidates) * Mathf.PI * 2f;
+            Vector3 probe = new Vector3(
+                centerAnchor.x + Mathf.Cos(ang) * ringRadius,
+                centerAnchor.y,
+                centerAnchor.z + Mathf.Sin(ang) * ringRadius);
+            probe = ProjectPointOntoGround(probe);
+            if (SafeZone.IsPointInAnySafeZone(probe, 1.0f)) continue;
+
+            float nearestSqr = float.MaxValue;
+            for (int p = 0; p < PlayerCombat.All.Count; p++)
+            {
+                PlayerCombat player = PlayerCombat.All[p];
+                if (player == null || !player.IsSpawned || player.IsDead) continue;
+                Vector3 d = player.transform.position - probe;
+                d.y = 0f;
+                if (d.sqrMagnitude < nearestSqr) nearestSqr = d.sqrMagnitude;
+            }
+
+            if (nearestSqr > bestNearestPlayerSqr)
+            {
+                bestNearestPlayerSqr = nearestSqr;
+                bestPos = probe;
+            }
+        }
+
+        return bestPos;
+    }
+
+    private static readonly Collider[] s_chestProbeBuf = new Collider[24];
+
+    /// <summary>
+    /// หาจุดวางกล่องสมบัติที่โล่งและไม่ทับกองไฟ/วงหิน/เต็นท์กลางแคมป์ (รองรับทั้ง TerrainCollider และ MeshCollider ขนาดใหญ่แบบ FinalTestv1)
+    /// </summary>
+    public Vector3 ResolveClearChestPosition(Vector3 center, bool isBoss)
+    {
+        float centerFloorY = SandboxWorldSpawner.SampleGroundY(center, center.y);
+        Vector3 centerFloor = new Vector3(center.x, centerFloorY, center.z);
+        if (isBoss || IsSpotClearForChest(centerFloor))
+            return centerFloor;
+
+        float[] rings = { 3.5f, 4.8f, 6.2f };
+        for (int r = 0; r < rings.Length; r++)
+        {
+            float rad = rings[r];
+            for (int i = 0; i < 8; i++)
+            {
+                float ang = (i / 8f) * Mathf.PI * 2f + 0.39f;
+                Vector3 probe = new Vector3(center.x + Mathf.Cos(ang) * rad, centerFloorY, center.z + Mathf.Sin(ang) * rad);
+                float floorY = SandboxWorldSpawner.SampleGroundY(probe, centerFloorY);
+                probe.y = floorY;
+                if (SafeZone.IsPointInAnySafeZone(probe, 1.0f)) continue;
+                if (IsSpotClearForChest(probe))
+                    return probe;
+            }
+        }
+        return centerFloor;
+    }
+
+    private static bool IsSpotClearForChest(Vector3 floorPos)
+    {
+        // ยกจุดศูนย์กลางทรงกลมขึ้น +1.05m รัศมี 0.80m (ขอบล่างอยู่ที่ +0.25m เหนือพื้น)
+        // เพื่อไม่ให้ไปชนแผ่นพื้น MeshCollider (1_Terrain_Base) ที่แบนราบ แต่จับกองไฟ/หิน/เสา/เต็นท์ที่นูนขึ้นมาจากพื้นได้ 100%
+        Vector3 checkCenter = new Vector3(floorPos.x, floorPos.y + 1.05f, floorPos.z);
+        int count = Physics.OverlapSphereNonAlloc(checkCenter, 0.80f, s_chestProbeBuf, ~0, QueryTriggerInteraction.Collide);
+        for (int i = 0; i < count; i++)
+        {
+            Collider col = s_chestProbeBuf[i];
+            if (col == null) continue;
+            if (col is TerrainCollider) continue;
+            if (col.GetComponentInParent<PlayerCombat>() != null) continue;
+            if (col.GetComponentInParent<EnemyNPC>() != null) continue;
+            if (col.GetComponentInParent<LootChest>() != null) continue;
+            if (col.GetComponentInParent<WorldItem>() != null) continue;
+            if (col.GetComponentInParent<LocalPersonalLoot>() != null) continue;
+            return false;
+        }
+
+        // เช็กซ้ำระยะกว้าง 2.2m เฉพาะวัตถุกองไฟ (Bonfire / Campfire) เพื่อให้กล่องวางห่างขอบวงหินกองไฟสวยงาม
+        int fireCount = Physics.OverlapSphereNonAlloc(new Vector3(floorPos.x, floorPos.y + 0.7f, floorPos.z), 2.2f, s_chestProbeBuf, ~0, QueryTriggerInteraction.Collide);
+        for (int i = 0; i < fireCount; i++)
+        {
+            Collider col = s_chestProbeBuf[i];
+            if (col == null) continue;
+            string n = col.name;
+            if (n.IndexOf("Bonfire", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n.IndexOf("Campfire", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n.IndexOf("Fire", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private int ResolveSpawnLevel()

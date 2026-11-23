@@ -3,76 +3,81 @@ using UnityEngine.InputSystem;
 
 public enum CameraMode
 {
-    /// <summary>Original fixed-offset follow camera (default, unchanged behaviour).</summary>
+    /// <summary>Original fixed-offset follow camera.</summary>
     Legacy,
-    /// <summary>Over-the-shoulder orbit camera driven by the mouse.</summary>
+    /// <summary>Smooth Wuxia third-person orbit camera (Where Winds Meet style).</summary>
     FreeLook,
-    /// <summary>Camera keeps the player and the locked target in frame.</summary>
-    TargetLock,
-    Tactical
+    /// <summary>Camera keeps both the player and the locked target smoothly framed.</summary>
+    TargetLock
 }
 
 /// <summary>
-/// Third-person camera. Legacy mode is the original smoothed follow camera. Enabling "useActionCamera" switches to an
-/// Action-RPG over-the-shoulder camera with mouse look, collision avoidance and a target-lock mode.
-///
-/// In action mode the camera also becomes the movement frame (PlayerCapsule.MovementReference) so WASD is camera-relative,
-/// and it owns the cursor: locked while playing, freed while a UI is open (GameplayInput) or after pressing Escape
-/// (click the game view to capture it again).
+/// กล้องมุมมองบุคคลที่ 3 สไตล์ Action-RPG กำลังภายใน (Where Winds Meet Style):
+///   - นำโหมดมุมมองสูง (Top-Down / Tactical [V]) ออกถาวร เพื่อคงมุมกล้องแอ็กชันที่สมจริงและลื่นไหลตลอดการเล่น
+///   - หมุนกล้องด้วยเมาส์แบบ Smooth Exponential Damping (ตอบสนองไวแต่เนียนตา ไม่มีอาการสั่นกระตุก)
+///   - ซูมระยะกล้องเข้า-ออกได้อย่างอิสระด้วยลูกกลิ้งเมาส์ (Scroll Wheel: 3.2m – 7.6m)
+///   - เอฟเฟกต์กล้องถอยและเปิดมุมมอง FOV กว้างขึ้นอย่างนุ่มนวลขณะวิ่ง Sprint เพื่อให้ความรู้สึกพุ่งทะยานเหมือน Where Winds Meet
+///   - แยกความนุ่มนวลแกนราบ/แกนตั้ง (Steadicam) พร้อมระบบกันทะลุกำแพงและพื้นเนิน (SphereCast Anti-Clip)
 /// </summary>
 public class PlayerFollowCamera : MonoBehaviour
 {
-    // ---------------- legacy (kept exactly as before) ----------------
+    // ---------------- legacy (kept for non-action fallback only) ----------------
     public Transform target;
     public Vector3 offset = new Vector3(0f, 8f, -8f);
     public float smoothing = 8f;
 
-    // ---------------- action camera ----------------
-    [Header("Action camera")]
-    public bool useActionCamera = false;
-    [Min(0.5f)] public float distance = 4.5f;
-    public float minDistance = 1.2f;
-    public float maxDistance = 8f;
-    public float pivotHeight = 1.6f;
-    [Tooltip("Positive = camera sits over the right shoulder.")]
-    public float shoulderOffset = 0.65f;
-    public float pivotSmoothTime = 0.06f;
+    // ---------------- Where Winds Meet action camera ----------------
+    [Header("Where Winds Meet Action Camera")]
+    public bool useActionCamera = true;
+    [Min(1.5f)] public float distance = 5.2f;
+    [Min(1.5f)] public float minDistance = 3.2f;
+    [Min(3.5f)] public float maxDistance = 7.6f;
+    [Tooltip("ความเร็วในการซูมระยะกล้องด้วยลูกกลิ้งเมาส์ (Scroll Wheel)")]
+    public float scrollZoomSpeed = 0.55f;
+    public float zoomSmoothSpeed = 10f;
+    [Tooltip("ความสูงจุดศูนย์กลางกล้องเหนือเท้าตัวละคร (1.48m จัดเฟรมสไตล์กำลังภายใน เห็นเต็มตัวและขอบฟ้าชัดเจน)")]
+    public float pivotHeight = 1.48f;
+    [Tooltip("เยื้องไหล่ขวาเล็กน้อยเพื่อให้ดาบใหญ่ไม่บังเป้ากลางจอ แต่ยังดูสมดุลไม่เอียง")]
+    public float shoulderOffset = 0.24f;
+    public float pivotSmoothTime = 0.065f;
+    public float verticalSmoothTime = 0.11f;
 
-    [Header("Free look")]
-    public float mouseSensitivity = 0.12f;
+    [Header("Free Look Orbit")]
+    public float mouseSensitivity = 0.11f;
     public bool invertY = false;
-    public float minPitch = -25f;
-    public float maxPitch = 65f;
-    public float defaultPitch = 15f;
-    [Tooltip("Optional ARPG style: rotate only while Right Mouse is held. Off keeps continuous free-look after the cursor is captured.")]
+    public float minPitch = -18f;
+    public float maxPitch = 56f;
+    public float defaultPitch = 13f;
+    [Tooltip("ความเนียนในการหมุนกล้องตามเมาส์ (ค่าสูง = ไวและคม แต่นุ่มนวลไม่มีไมโครกระตุก)")]
+    public float rotationSmoothSpeed = 24f;
+    [Tooltip("Optional ARPG style: rotate only while Right Mouse is held. Off keeps continuous free-look after cursor capture.")]
     public bool holdRightMouseToLook = false;
 
-    [Header("Tactical 2.5D")]
-    public Key tacticalToggleKey = Key.V;
-    [Min(12f)] public float tacticalHeight = 20f;
-    [Min(8f)] public float tacticalDistance = 16f;
-    [Range(30f, 80f)] public float tacticalPitch = 58f;
+    [Header("Dynamic Sprint Framing (ถอยกล้อง + เปิด FOV ตอนวิ่ง)")]
+    [Tooltip("ระยะถอยกล้องเพิ่มขณะวิ่ง Sprint (เมตร)")]
+    public float sprintDistanceBonus = 0.85f;
+    [Tooltip("มุมมอง FOV พื้นฐานขณะเดินปกติ")]
+    public float baseFov = 60f;
+    [Tooltip("มุมมอง FOV ที่เปิดกว้างขึ้นขณะวิ่ง Sprint (องศา)")]
+    public float sprintFovBonus = 5.5f;
+    public float sprintFramingSpeed = 5.5f;
 
-    [Header("Target lock")]
-    public float lockRotateSpeed = 6f;
-    public float lockPitch = 18f;
-    [Tooltip("Extra camera distance per metre between player and target, so both stay in frame.")]
-    public float lockDistancePerMetre = 0.35f;
+    [Header("Target Lock")]
+    public float lockRotateSpeed = 7.5f;
+    public float lockPitch = 15f;
+    [Tooltip("Extra camera distance per metre between player and target so both stay cleanly framed.")]
+    public float lockDistancePerMetre = 0.28f;
 
-    [Header("Collision")]
-    public float collisionRadius = 0.25f;
+    [Header("Collision & Ground Clearance")]
+    public float collisionRadius = 0.28f;
     public LayerMask collisionMask = ~0;
-    public float zoomOutSpeed = 6f;
+    public float zoomOutSpeed = 6.5f;
 
     [Header("Combat Camera Shake (แรงสั่นกล้องขณะต่อสู้)")]
-    // ความถี่การสั่นของกล้อง (ยิ่งสูงยิ่งสั่นถี่ให้ความรู้สึกปะทะรุนแรง)
     [SerializeField] private float shakeFrequency = 28f;
-    // ระยะเยื้องตำแหน่งสูงสุดของแรงสั่นกล้อง (เมตร)
     [SerializeField] private float maxShakeOffset = 0.45f;
-    // มุมเอียงแกน Z สูงสุดขณะกล้องสั่น (องศา)
     [SerializeField] private float maxShakeRollDegrees = 2.5f;
 
-    // อ้างอิงกล้องหลักที่กำลังทำงานอยู่ เพื่อให้ระบบต่อสู้เรียกสั่งสั่นกล้องได้ทันที
     public static PlayerFollowCamera Active { get; private set; }
 
     public bool LookEnabled { get; set; } = true;
@@ -86,16 +91,22 @@ public class PlayerFollowCamera : MonoBehaviour
         }
     }
 
+    private Camera _camera;
     private Transform _lockTarget;
-    private float _yaw, _pitch, _currentDistance;
-    private Vector3 _smoothPivot, _pivotVelocity;
+    private float _yaw, _pitch;
+    private float _targetYaw, _targetPitch;
+    private float _desiredZoomDistance;
+    private float _smoothedZoomDistance;
+    private float _currentDistance;
+    private float _sprintBlend;
+    private Vector3 _smoothPivot;
+    private float _pivotVelX, _pivotVelY, _pivotVelZ;
     private bool _initialised;
     private bool _cursorLocked, _manualUnlock;
-    private bool _tacticalMode;
     private CameraMode _loggedMode = CameraMode.Legacy;
     private PlayerCapsule _boundCapsule;
     private Transform _boundTarget;
-    private readonly RaycastHit[] _hits = new RaycastHit[8];
+    private readonly RaycastHit[] _hits = new RaycastHit[12];
 
     // ตัวแปรภายในสำหรับระบบสั่นกล้อง (ลบค่าเยื้องเดิมออกก่อนคำนวณเฟรมถัดไปเพื่อป้องกันกล้องไหล)
     private float _shakeIntensity;
@@ -135,7 +146,6 @@ public class PlayerFollowCamera : MonoBehaviour
         }
         else
         {
-            // หากมีแรงสั่นเดิมที่แรงกว่าอยู่ ให้ยืดเวลาเล็กน้อยโดยไม่ลดความแรงเดิม
             _shakeRemaining = Mathf.Max(_shakeRemaining, duration * 0.6f);
         }
     }
@@ -144,19 +154,25 @@ public class PlayerFollowCamera : MonoBehaviour
     public void SetLockTarget(Transform lockTarget)
     {
         _lockTarget = lockTarget;
-        if (_lockTarget != null && _tacticalMode)
+        if (_lockTarget == null)
         {
-            _tacticalMode = false;
-            Debug.Log("[ActionCamera] Tactical mode exited for target lock.");
+            _targetYaw = _yaw;
+            _targetPitch = Mathf.Clamp(_pitch, minPitch, maxPitch);
         }
         LogModeIfChanged();
     }
 
     // ------------------------------------------------------------------ unity
 
+    private void Awake()
+    {
+        _camera = GetComponent<Camera>();
+    }
+
     private void OnEnable()
     {
         Active = this;
+        if (_camera == null) _camera = GetComponent<Camera>();
     }
 
     private void OnDisable()
@@ -176,7 +192,7 @@ public class PlayerFollowCamera : MonoBehaviour
     {
         if (target == null) return;
 
-        // ล้างค่าเยื้องจากแรงสั่นเฟรมก่อนออกก่อนคำนวณตำแหน่งกล้องใหม่ (ป้องกันการไหลในโหมด Legacy / Tactical)
+        // ล้างค่าเยื้องจากแรงสั่นเฟรมก่อนออกก่อนคำนวณตำแหน่งกล้องใหม่ (ป้องกันกล้องไหล)
         if (_lastAppliedShakeOffset != Vector3.zero)
         {
             transform.position -= _lastAppliedShakeOffset;
@@ -208,7 +224,7 @@ public class PlayerFollowCamera : MonoBehaviour
 
         _shakeRemaining = Mathf.Max(0f, _shakeRemaining - dt);
         float progress = _shakeRemaining / _shakeDuration;
-        float damper = progress * progress; // ลดทอนแบบโค้งกำลังสองให้นุ่มนวลตอนจบ
+        float damper = progress * progress;
         float strength = _shakeIntensity * damper;
 
         float t = Time.unscaledTime * shakeFrequency + _shakeSeed;
@@ -234,39 +250,70 @@ public class PlayerFollowCamera : MonoBehaviour
         transform.LookAt(target.position + Vector3.up);
     }
 
-    // ------------------------------------------------------------------ action camera
+    // ------------------------------------------------------------------ Where Winds Meet action camera
 
     private void ActionUpdate()
     {
         float dt = Time.deltaTime;
+        if (dt <= 0.00001f) return;
+
         Vector3 rawPivot = target.position + Vector3.up * pivotHeight;
 
         if (!_initialised)
         {
-            _yaw = target.eulerAngles.y;
-            _pitch = defaultPitch;
+            _yaw = _targetYaw = target.eulerAngles.y;
+            _pitch = _targetPitch = Mathf.Clamp(defaultPitch, minPitch, maxPitch);
             _smoothPivot = rawPivot;
-            _currentDistance = distance;
+            _desiredZoomDistance = Mathf.Clamp(distance, minDistance, maxDistance);
+            _smoothedZoomDistance = _desiredZoomDistance;
+            _currentDistance = _desiredZoomDistance;
+            _sprintBlend = 0f;
             _initialised = true;
-            Debug.Log("[ActionCamera] Initialised behind target.");
+            Debug.Log("[ActionCamera] Initialised Where Winds Meet third-person camera behind target.");
         }
 
-        _smoothPivot = Vector3.SmoothDamp(_smoothPivot, rawPivot, ref _pivotVelocity, pivotSmoothTime);
-
-        var keyboard = Keyboard.current;
-        if (keyboard != null && keyboard[tacticalToggleKey].wasPressedThisFrame && _lockTarget == null)
+        // หากตัวละครวาร์ปข้ามระยะไกล (> 18 เมตร เช่น ใช้หินเทเลพอร์ตหรือเกิดใหม่) ให้ย้ายจุดหมุนกล้องตามทันทีไม่บินทะลุภูเขา
+        if ((rawPivot - _smoothPivot).sqrMagnitude > 18f * 18f)
         {
-            _tacticalMode = !_tacticalMode;
-            Debug.Log($"[ActionCamera] Tactical 2.5D mode {(_tacticalMode ? "enabled" : "disabled")} via {tacticalToggleKey}.");
+            _smoothPivot = rawPivot;
+            _pivotVelX = _pivotVelY = _pivotVelZ = 0f;
+            _currentDistance = _smoothedZoomDistance;
         }
 
-        if (_tacticalMode)
+        // แยกความนุ่มนวลแกนราบ (ตอบสนองไว) กับแกนตั้ง (นุ่มนวลลดแรงกระแทกเวลาขึ้นเนิน/กระโดด)
+        float sx = Mathf.SmoothDamp(_smoothPivot.x, rawPivot.x, ref _pivotVelX, pivotSmoothTime);
+        float sy = Mathf.SmoothDamp(_smoothPivot.y, rawPivot.y, ref _pivotVelY, verticalSmoothTime);
+        float sz = Mathf.SmoothDamp(_smoothPivot.z, rawPivot.z, ref _pivotVelZ, pivotSmoothTime);
+        _smoothPivot = new Vector3(sx, sy, sz);
+
+        // ซูมเข้า-ออกด้วยลูกกลิ้งเมาส์ (Scroll Wheel) เมื่อไม่ได้เปิดหน้าต่าง UI
+        var mouse = Mouse.current;
+        if (mouse != null && LookEnabled && !GameplayInput.IsBlocked)
         {
-            TacticalUpdate(rawPivot, dt);
-            return;
+            float scrollY = mouse.scroll.ReadValue().y;
+            if (Mathf.Abs(scrollY) > 0.01f)
+            {
+                float step = Mathf.Sign(scrollY) * scrollZoomSpeed;
+                _desiredZoomDistance = Mathf.Clamp(_desiredZoomDistance - step, minDistance, maxDistance);
+            }
+        }
+        _smoothedZoomDistance = Mathf.Lerp(_smoothedZoomDistance, _desiredZoomDistance, 1f - Mathf.Exp(-zoomSmoothSpeed * dt));
+
+        // ตรวจจับการวิ่ง Sprint เพื่อถอยกล้องและเปิด FOV กว้างขึ้นอย่างนุ่มนวลสไตล์ Where Winds Meet
+        bool isSprintingNow = _boundCapsule != null
+            && _boundCapsule.IsSprinting
+            && _boundCapsule.NetworkMove.sqrMagnitude > 0.01f
+            && _lockTarget == null;
+        float sprintTarget = isSprintingNow ? 1f : 0f;
+        _sprintBlend = Mathf.Lerp(_sprintBlend, sprintTarget, 1f - Mathf.Exp(-sprintFramingSpeed * dt));
+
+        if (_camera != null)
+        {
+            float wantedFov = baseFov + sprintFovBonus * _sprintBlend;
+            _camera.fieldOfView = Mathf.Lerp(_camera.fieldOfView, wantedFov, 1f - Mathf.Exp(-sprintFramingSpeed * dt));
         }
 
-        float desiredDistance = distance;
+        float desiredDistance = _smoothedZoomDistance + sprintDistanceBonus * _sprintBlend;
 
         if (_lockTarget != null)
         {
@@ -278,30 +325,38 @@ public class PlayerFollowCamera : MonoBehaviour
             {
                 float wantedYaw = Mathf.Atan2(flat.x, flat.z) * Mathf.Rad2Deg;
                 _yaw = Mathf.LerpAngle(_yaw, wantedYaw, t);
+                _targetYaw = _yaw;
             }
             _pitch = Mathf.Lerp(_pitch, lockPitch, t);
-            desiredDistance = Mathf.Clamp(distance + toTarget.magnitude * lockDistancePerMetre, minDistance, maxDistance + 4f);
+            _targetPitch = _pitch;
+            desiredDistance = Mathf.Clamp(_smoothedZoomDistance + toTarget.magnitude * lockDistancePerMetre, minDistance, maxDistance + 3.0f);
         }
-        else if (_cursorLocked && LookEnabled && !GameplayInput.IsBlocked)
+        else
         {
-            var mouse = Mouse.current;
-            if (mouse != null && (!holdRightMouseToLook || mouse.rightButton.isPressed))
+            if (_cursorLocked && LookEnabled && !GameplayInput.IsBlocked && mouse != null && (!holdRightMouseToLook || mouse.rightButton.isPressed))
             {
                 Vector2 delta = mouse.delta.ReadValue();
-                _yaw += delta.x * mouseSensitivity;
-                _pitch += (invertY ? delta.y : -delta.y) * mouseSensitivity;
-                _pitch = Mathf.Clamp(_pitch, minPitch, maxPitch);
+                _targetYaw += delta.x * mouseSensitivity;
+                _targetPitch += (invertY ? delta.y : -delta.y) * mouseSensitivity;
+                _targetPitch = Mathf.Clamp(_targetPitch, minPitch, maxPitch);
             }
+
+            float rotT = 1f - Mathf.Exp(-rotationSmoothSpeed * dt);
+            _yaw = Mathf.LerpAngle(_yaw, _targetYaw, rotT);
+            _pitch = Mathf.Lerp(_pitch, _targetPitch, rotT);
         }
 
         Quaternion rot = Quaternion.Euler(_pitch, _yaw, 0f);
         Vector3 right = rot * Vector3.right;
         Vector3 back = rot * Vector3.back;
 
-        Vector3 origin = _smoothPivot + right * shoulderOffset;
+        // เมื่อเงยกล้องต่ำกว่าแนวระนาบ ให้ยกจุดหมุนขึ้นเล็กน้อยเพื่อให้เงยชมภูเขา/บอสได้ลื่นโดยกล้องไม่จมพื้นหญ้า
+        float lowPitchLift = _pitch < 2f ? Mathf.InverseLerp(2f, minPitch, _pitch) * 0.18f : 0f;
+        Vector3 origin = _smoothPivot + Vector3.up * lowPitchLift + right * shoulderOffset;
+
         float resolved = ResolveDistance(origin, back, desiredDistance);
 
-        // Pull in instantly when blocked (no clipping), ease back out when the way is clear.
+        // ดึงเข้าทันทีเมื่อติดกำแพง/เนิน (กันทะลุ 100%) และค่อยๆ คืนระยะอย่างนุ่มนวลเมื่อโล่ง
         if (resolved < _currentDistance) _currentDistance = resolved;
         else _currentDistance = Mathf.Lerp(_currentDistance, resolved, 1f - Mathf.Exp(-zoomOutSpeed * dt));
 
@@ -310,7 +365,7 @@ public class PlayerFollowCamera : MonoBehaviour
 
         if (_lockTarget != null)
         {
-            Vector3 lookAt = Vector3.Lerp(_smoothPivot, _lockTarget.position, 0.4f);
+            Vector3 lookAt = Vector3.Lerp(_smoothPivot, _lockTarget.position, 0.38f);
             Vector3 dir = lookAt - position;
             transform.rotation = dir.sqrMagnitude > 0.0001f ? Quaternion.LookRotation(dir, Vector3.up) : rot;
         }
@@ -318,22 +373,6 @@ public class PlayerFollowCamera : MonoBehaviour
         {
             transform.rotation = rot;
         }
-    }
-
-    private void TacticalUpdate(Vector3 rawPivot, float dt)
-    {
-        var mouse = Mouse.current;
-        if (_cursorLocked && LookEnabled && !GameplayInput.IsBlocked && mouse != null)
-        {
-            // Tactical camera keeps a high pitch but permits full map rotation.
-            _yaw += mouse.delta.ReadValue().x * mouseSensitivity;
-        }
-
-        Quaternion rotation = Quaternion.Euler(tacticalPitch, _yaw, 0f);
-        Vector3 desired = rawPivot + Vector3.up * tacticalHeight + rotation * Vector3.back * tacticalDistance;
-        transform.position = Vector3.Lerp(transform.position, desired, 1f - Mathf.Exp(-12f * dt));
-        Vector3 dir = rawPivot - transform.position;
-        transform.rotation = dir.sqrMagnitude > .001f ? Quaternion.LookRotation(dir, Vector3.up) : rotation;
     }
 
     private float ResolveDistance(Vector3 origin, Vector3 direction, float desired)
@@ -345,13 +384,15 @@ public class PlayerFollowCamera : MonoBehaviour
         {
             var hit = _hits[i];
             if (hit.collider == null) continue;
-            if (hit.distance <= 0f) continue;                                   // origin already inside: ignore
-            if (hit.collider.transform.IsChildOf(target)) continue;             // never collide with the followed player
-            if (hit.collider.attachedRigidbody != null) continue;               // dynamic/kinematic bodies (players, NPCs) don't push the camera
+            if (hit.distance <= 0f) continue;
+            if (hit.collider.transform.IsChildOf(target)) continue;
+            if (hit.collider.attachedRigidbody != null) continue;
+            if (hit.collider.GetComponentInParent<EnemyNPC>() != null) continue;
+            if (hit.collider.GetComponentInParent<PlayerCombat>() != null) continue;
             if (hit.distance < closest) closest = hit.distance;
         }
 
-        if (closest < desired) closest = Mathf.Max(closest - 0.05f, 0.3f);
+        if (closest < desired) closest = Mathf.Max(closest - 0.06f, 0.45f);
         return closest;
     }
 
@@ -412,9 +453,9 @@ public class PlayerFollowCamera : MonoBehaviour
 
     private void LogModeIfChanged()
     {
-        var m = _tacticalMode ? CameraMode.Tactical : Mode;
+        var m = Mode;
         if (m == _loggedMode) return;
-        Debug.Log($"[ActionCamera] Mode {_loggedMode} -> {m}" + (m == CameraMode.TargetLock ? $" (target={_lockTarget.name})" : ""));
+        Debug.Log($"[ActionCamera] Mode {_loggedMode} -> {m}" + (m == CameraMode.TargetLock && _lockTarget != null ? $" (target={_lockTarget.name})" : ""));
         _loggedMode = m;
     }
 }

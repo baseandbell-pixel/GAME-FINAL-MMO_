@@ -348,6 +348,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     private readonly List<BossDamageEntry> _syncedBossDamageBoard = new List<BossDamageEntry>(6);
     // ชื่อจำลองเสริมเฉพาะสำหรับทดสอบ Multi-player Damage Meter ใน Play Mode
     private readonly Dictionary<int, string> _simulatedNameOverrides = new Dictionary<int, string>();
+    // ตัวคูณสายพันธุ์ของคลาสลูก (MonsterEnemyNPC) เพื่อคงค่าพลังที่ถูกต้องเมื่อบอสสเกล Co-op หรือ Reset กลับ 1x
+    protected float _speciesHealthMultiplier = 1f;
+    protected float _speciesDamageMultiplier = 1f;
+    protected int _speciesDefenseBonus = 0;
 
     // ------------------------------------------------------------------ วงจรการทำงาน (Lifecycle)
 
@@ -602,6 +606,21 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     /// <summary>
+    /// ตัวคูณ Co-op สำหรับบอสแบบสมดุล MMORPG:
+    ///   - HP เพิ่มสูงตามจำนวนผู้เล่น (+85% ต่อคน: 1x, 1.85x, 2.70x, 3.55x) เพื่อความมันส์ในการรุมสู้
+    ///   - ATK เพิ่มอย่างพอเหมาะ (+15% ต่อคน) ไม่ให้บอสตี One-shot ทันทีเมื่อเล่น 3–4 คน
+    ///   - DEF เพิ่มเล็กน้อย (+10% ต่อคน) เพื่อไม่ให้เพื่อนเลเวลน้อยตีเข้าแค่ -1 จนอดเปิดกล่องบอส
+    /// </summary>
+    public static float ComputeCoopBossHealthMultiplier(int coopPlayerCount)
+        => 1f + Mathf.Max(0, coopPlayerCount - 1) * 0.85f;
+
+    public static float ComputeCoopBossAttackMultiplier(int coopPlayerCount)
+        => 1f + Mathf.Max(0, coopPlayerCount - 1) * 0.15f;
+
+    public static float ComputeCoopBossDefenseMultiplier(int coopPlayerCount)
+        => 1f + Mathf.Max(0, coopPlayerCount - 1) * 0.10f;
+
+    /// <summary>
     /// กำหนดค่าพลังของมอนสเตอร์และบอสตามเลเวลคงที่ประจำพื้นที่ (3-Tier Zone-Based Level สำหรับ Lv.1–30)
     /// พารามิเตอร์ preserveCurrentHealth ใช้เมื่อโอนย้าย StateAuthority เพื่อไม่ให้เลือดเดิมถูกรีเซ็ตกลับเต็ม 100%
     /// </summary>
@@ -625,10 +644,16 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             maxDamagePerHit = 900;
         }
 
-        int mult = (IsBoss && IsSpawned) ? Mathf.Max(1, CoopPeakPlayerCount) : 1;
-        MaxHealth = _baseMaxHealth * mult;
-        AttackDamage = _baseAttackDamage * mult;
-        Defense = _baseDefense * mult;
+        int coopCount = (IsBoss && IsSpawned) ? Mathf.Max(1, CoopPeakPlayerCount) : 1;
+        MaxHealth = IsBoss
+            ? Mathf.Max(20, Mathf.RoundToInt(_baseMaxHealth * _speciesHealthMultiplier * ComputeCoopBossHealthMultiplier(coopCount)))
+            : Mathf.Max(20, Mathf.RoundToInt(_baseMaxHealth * _speciesHealthMultiplier));
+        AttackDamage = IsBoss
+            ? Mathf.Max(2, Mathf.RoundToInt(_baseAttackDamage * _speciesDamageMultiplier * ComputeCoopBossAttackMultiplier(coopCount)))
+            : Mathf.Max(2, Mathf.RoundToInt(_baseAttackDamage * _speciesDamageMultiplier));
+        Defense = IsBoss
+            ? Mathf.Max(0, Mathf.RoundToInt(_baseDefense * ComputeCoopBossDefenseMultiplier(coopCount)) + _speciesDefenseBonus)
+            : Mathf.Max(0, _baseDefense + _speciesDefenseBonus);
 
         if (Object != null && Object.IsValid && Object.HasStateAuthority)
             NetworkMaxHealth = MaxHealth;
@@ -655,10 +680,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             ComputeBossBaseStats(lvl, out _baseMaxHealth, out _baseAttackDamage, out _baseDefense, out experienceReward);
         }
 
-        int mult = Mathf.Max(1, CoopPeakPlayerCount);
-        MaxHealth = _baseMaxHealth * mult;
-        AttackDamage = _baseAttackDamage * mult;
-        Defense = _baseDefense * mult;
+        int coopCount = Mathf.Max(1, CoopPeakPlayerCount);
+        MaxHealth = Mathf.Max(20, Mathf.RoundToInt(_baseMaxHealth * _speciesHealthMultiplier * ComputeCoopBossHealthMultiplier(coopCount)));
+        AttackDamage = Mathf.Max(2, Mathf.RoundToInt(_baseAttackDamage * _speciesDamageMultiplier * ComputeCoopBossAttackMultiplier(coopCount)));
+        Defense = Mathf.Max(0, Mathf.RoundToInt(_baseDefense * ComputeCoopBossDefenseMultiplier(coopCount)) + _speciesDefenseBonus);
     }
 
     /// <summary>
@@ -1000,10 +1025,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         float hpFraction = Mathf.Clamp01(CurrentHealth / prevMax);
 
         CoopPeakPlayerCount = newMultiplier;
-        MaxHealth = _baseMaxHealth * newMultiplier;
+        MaxHealth = Mathf.Max(20, Mathf.RoundToInt(_baseMaxHealth * _speciesHealthMultiplier * ComputeCoopBossHealthMultiplier(newMultiplier)));
         NetworkMaxHealth = MaxHealth;
-        AttackDamage = _baseAttackDamage * newMultiplier;
-        Defense = _baseDefense * newMultiplier;
+        AttackDamage = Mathf.Max(2, Mathf.RoundToInt(_baseAttackDamage * _speciesDamageMultiplier * ComputeCoopBossAttackMultiplier(newMultiplier)));
+        Defense = Mathf.Max(0, Mathf.RoundToInt(_baseDefense * ComputeCoopBossDefenseMultiplier(newMultiplier)) + _speciesDefenseBonus);
         CurrentHealth = Mathf.Clamp(Mathf.RoundToInt(MaxHealth * hpFraction), 1, MaxHealth);
 
         Debug.Log($"[EnemyNPC] BOSS ON-HIT CO-OP SCALING UP -> {newMultiplier}x (UniqueAttackers={uniqueAttackerCount}): HP={CurrentHealth}/{MaxHealth} ({hpFraction * 100f:0}%), ATK={AttackDamage}, DEF={Defense}.");
@@ -1027,10 +1052,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         IsBossRegenerating = false;
         _bossResetPending = false;
         _bossRegenTickTimer = 0f;
-        MaxHealth = _baseMaxHealth;
-        NetworkMaxHealth = _baseMaxHealth;
-        AttackDamage = _baseAttackDamage;
-        Defense = _baseDefense;
+        MaxHealth = Mathf.Max(20, Mathf.RoundToInt(_baseMaxHealth * _speciesHealthMultiplier));
+        NetworkMaxHealth = MaxHealth;
+        AttackDamage = Mathf.Max(2, Mathf.RoundToInt(_baseAttackDamage * _speciesDamageMultiplier));
+        Defense = Mathf.Max(0, _baseDefense + _speciesDefenseBonus);
         CurrentHealth = MaxHealth;
         _uniqueDamageDealers.Clear();
         _simulatedAliveParticipants.Clear();
@@ -1213,7 +1238,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     /// ทำงานอัตโนมัติเมื่อ Photon Fusion โอนย้าย StateAuthority ของมอนสเตอร์หรือบอสตัวนี้มายังเครื่องปัจจุบัน (หรือโอนออก)
     /// รักษาค่า CurrentHealth, Co-op Scaling และเปิดระบบ AI / NavMesh ต่อได้ทันทีโดยไม่ค้างและไม่รีเซ็ตเลือด
     /// </summary>
-    public void StateAuthorityChanged()
+    public virtual void StateAuthorityChanged()
     {
         if (!IsSpawned || Object == null || !Object.IsValid) return;
 
@@ -1222,7 +1247,19 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             AuthorityTakeoverCount++;
             // คงค่าเลือดปัจจุบันไว้ห้ามรีเซ็ตเต็ม 100% เมื่อรับช่วง StateAuthority ต่อจาก Host เดิม
             ApplyZoneLevel(Mathf.Max(1, ScaledLevel), preserveCurrentHealth: true);
-            if (IsBoss) ApplyCoopStatsFromPeak();
+            if (IsBoss)
+            {
+                ApplyCoopStatsFromPeak();
+                // กู้คืนรายชื่อผู้กำลังร่วมสู้บอสจาก _damageDealtMap ที่ซิงก์ไว้ (กันบอสเข้าใจผิดว่า 0 คนแล้วเริ่มนับ Reset 10 วิตอน Host หลุดกลางไฟต์)
+                foreach (var kv in _damageDealtMap)
+                {
+                    if (kv.Key != PlayerRef.None && kv.Value > 0f)
+                        _uniqueDamageDealers.Add(kv.Key);
+                }
+                if (_uniqueDamageDealers.Count > UniqueBossAttackerCount)
+                    UniqueBossAttackerCount = _uniqueDamageDealers.Count;
+                RebuildBossDamageBoardFromMap();
+            }
 
             TryInitNavMeshAgent();
             _hasPatrolPoint = false;
@@ -2196,6 +2233,11 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     /// <summary>
+    /// ฮุกสำหรับคลาสลูก (เช่น MonsterEnemyNPC) เพื่อซิงก์ดาเมจสะสมรายโซนบนทุกเครื่องแบบเรียลไทม์
+    /// </summary>
+    protected virtual void OnRemoteDamageContributionSynced(PlayerRef attacker, float delta) { }
+
+    /// <summary>
     /// ซิงก์ยอดดาเมจสะสมรายบุคคลของมอนสเตอร์/บอสตัวนี้ไปยังทุกเครื่อง (เก็บสำรองไว้รองรับกรณี Host หลุดกลางไฟต์)
     /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
@@ -2210,6 +2252,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             float delta = cumulativeDamage - prev;
             _damageDealtMap[attacker] = cumulativeDamage;
             SandboxWorldSpawner.Instance?.RecordCampDamage(CampId, IsBoss, attacker, delta);
+            OnRemoteDamageContributionSynced(attacker, delta);
+
+            // อัปเดตตาราง Damage Meter ของบอสบนเครื่อง Remote ทันทีจากแพ็กเก็ต 8 ไบต์นี้เป็นระบบสำรองอีกชั้น
+            if (IsBoss)
+            {
+                RebuildBossDamageBoardFromMap();
+            }
         }
     }
 
@@ -2225,10 +2274,50 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
     }
 
     /// <summary>
-    /// บีบอัดตารางดาเมจบอสเป็นข้อความขนาดเล็ก ("raw:dmg;...") รองรับสูงสุด 10 ผู้เล่น (124 ตัวอักษร) แล้วส่งผ่าน RPC ไปยังทุกเครื่อง
+    /// สร้างตารางอันดับดาเมจบอสจาก _damageDealtMap ฝั่งเครื่องนี้โดยตรง (ทำงานทันทีโดยไม่ต้องรอ RPC ย้อนกลับ)
+    /// </summary>
+    private void RebuildBossDamageBoardFromMap()
+    {
+        _syncedBossDamageBoard.Clear();
+        if (_damageDealtMap.Count == 0) return;
+
+        var list = new List<KeyValuePair<PlayerRef, float>>(_damageDealtMap);
+        list.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+        float totalDamage = 0f;
+        for (int i = 0; i < list.Count; i++)
+            if (list[i].Value > 0f) totalDamage += list[i].Value;
+
+        if (totalDamage <= 0f) return;
+
+        int localRaw = (Runner != null && Runner.IsRunning && Runner.LocalPlayer != PlayerRef.None)
+            ? Runner.LocalPlayer.RawEncoded
+            : -1;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (list[i].Value <= 0f) continue;
+            int rawEnc = list[i].Key.RawEncoded;
+            int dmg = Mathf.Max(1, Mathf.RoundToInt(list[i].Value));
+            _syncedBossDamageBoard.Add(new BossDamageEntry
+            {
+                playerRawEncoded = rawEnc,
+                playerName = ResolvePlayerDisplayName(rawEnc),
+                damageDealt = dmg,
+                damageShare = Mathf.Clamp01(list[i].Value / totalDamage),
+                isLocalPlayer = rawEnc == localRaw
+            });
+        }
+    }
+
+    /// <summary>
+    /// บีบอัดตารางดาเมจบอสเป็นข้อความกะทัดรัด ("raw:dmg;...") ภายใน NetworkString&lt;_64&gt; (260 ไบต์ ต่ำกว่าขีดจำกัด 512 ไบต์ของ Photon Fusion 2 RPC)
+    /// พร้อมอัปเดตฝั่ง Authority ทันทีและกระจายไปยังทุกเครื่อง
     /// </summary>
     private void BroadcastBossDamageBoard()
     {
+        RebuildBossDamageBoardFromMap();
+
         if (_damageDealtMap.Count == 0)
         {
             RPC_SyncBossDamageBoard(default);
@@ -2238,13 +2327,13 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         var list = new List<KeyValuePair<PlayerRef, float>>(_damageDealtMap);
         list.Sort((a, b) => b.Value.CompareTo(a.Value));
 
-        var sb = new StringBuilder(128);
+        var sb = new StringBuilder(64);
         for (int i = 0; i < list.Count; i++)
         {
             int dmgInt = Mathf.Max(1, Mathf.RoundToInt(list[i].Value));
             string token = $"{list[i].Key.RawEncoded.ToString(CultureInfo.InvariantCulture)}:{dmgInt.ToString(CultureInfo.InvariantCulture)}";
             int needed = (sb.Length > 0 ? 1 : 0) + token.Length;
-            if (sb.Length + needed > 124) break;
+            if (sb.Length + needed > 60) break;
             if (sb.Length > 0) sb.Append(';');
             sb.Append(token);
         }
@@ -2254,9 +2343,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
     /// <summary>
     /// รับข้อมูลตารางอันดับดาเมจของบอสบนทุกเครื่อง (Host และ Client) และแปลงเป็นรายการพร้อมชื่อผู้เล่น + % ดาเมจ
+    /// ใช้ NetworkString&lt;_64&gt; (260 ไบต์) เพื่อไม่ให้เกินขีดจำกัด 512 ไบต์ของ Photon Fusion 2 RPC
     /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_SyncBossDamageBoard(NetworkString<_128> payload)
+    public void RPC_SyncBossDamageBoard(NetworkString<_64> payload)
     {
         _syncedBossDamageBoard.Clear();
         string rawStr = payload.ToString();
@@ -2492,7 +2582,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             if (_hasIsStaggeredParam) animator.SetBool(IsStaggeredParam, true);
         }
         Vector3 popupPos = LockPoint != null ? LockPoint.position + Vector3.up * 0.75f : transform.position + Vector3.up * 2.1f;
-        FloatingDamagePopup.SpawnWarning(popupPos, "STAGGERED!", new Color(1f, 0.84f, 0.18f, 1f));
+        FloatingDamagePopup.SpawnWarning(popupPos, "STAGGERED!", new Color(1f, 0.84f, 0.18f, 1f), isBoss: IsBoss);
         Staggered?.Invoke(this, durationSeconds);
     }
 
@@ -2652,10 +2742,10 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
 
     /// <summary>
     /// กระจายผลสรุปการเคลียร์แคมป์/บอสพร้อมรายชื่อผู้ร่วมทำดาเมจจาก State Authority ไปยังทุกเครื่องเพื่อสร้างและล็อกสิทธิ์ LootChest
-    /// ใช้ NetworkString&lt;_128&gt; เพื่อรองรับผู้เล่นช่วยตีสูงสุด 10 คนโดยยังต่ำกว่าขีดจำกัด 512 ไบต์ของ Photon Fusion 2 RPC เสมอ
+    /// ใช้ NetworkString&lt;_64&gt; (260 ไบต์) เพื่อไม่ให้เกินขีดจำกัด 512 ไบต์ของ Photon Fusion 2 RPC
     /// </summary>
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_NotifyCampCleared(int clearedCampId, NetworkBool isBossCamp, Vector3 chestPos, NetworkString<_128> contributorPayload)
+    public void RPC_NotifyCampCleared(int clearedCampId, NetworkBool isBossCamp, Vector3 chestPos, NetworkString<_64> contributorPayload)
     {
         SandboxWorldSpawner.Instance?.HandleAuthoritativeCampCleared(clearedCampId, isBossCamp, chestPos, contributorPayload.ToString());
     }
@@ -2668,7 +2758,8 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
         Damaged?.Invoke(this, damage, isCrit);
         if (!_flashing && gameObject.activeInHierarchy) StartCoroutine(FlashRoutine());
 
-        FloatingDamagePopup.Spawn(LockPoint != null ? LockPoint.position : transform.position + Vector3.up * 1.4f, damage, isCrit, comboStep);
+        Vector3 hitPos = LockPoint != null ? LockPoint.position : transform.position + Vector3.up * 1.4f;
+        FloatingDamagePopup.Spawn(hitPos, damage, isCrit, comboStep, isBoss: IsBoss, attacker: attacker);
         CombatHud.NotifyEnemyDamaged(this, damage, attacker, isCrit, comboStep);
     }
 
@@ -2736,7 +2827,7 @@ public class EnemyNPC : NetworkBehaviour, ILockTarget, IStateAuthorityChanged
             BossAttackPattern.ShockwaveSpinAoE => "! 360° SHOCKWAVE !",
             _ => "! DARK VOLLEY !"
         };
-        FloatingDamagePopup.SpawnWarning(transform.position + Vector3.up * 3.1f, warnText, new Color(1f, 0.32f, 0.15f, 1f));
+        FloatingDamagePopup.SpawnWarning(transform.position + Vector3.up * 3.1f, warnText, new Color(1f, 0.32f, 0.15f, 1f), isBoss: true);
 
         var disc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         disc.name = "BossTelegraphRing";
