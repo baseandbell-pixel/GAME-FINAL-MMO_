@@ -51,7 +51,7 @@ public class Tool_05_Fix_SprintWind_BodySlipstream_OnPlayer : EditorWindow
         else
         {
             // ค้นหาทุกตัวละครใน Scene ที่มีกระดูก Bip001 L Foot หรือมี SimpleSprintTrail
-            SimpleSprintTrail[] existingTrails = Object.FindObjectsByType<SimpleSprintTrail>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            SimpleSprintTrail[] existingTrails = Object.FindObjectsByType<SimpleSprintTrail>(FindObjectsInactive.Include);
             for (int i = 0; i < existingTrails.Length; i++)
             {
                 if (existingTrails[i] != null && existingTrails[i].gameObject.scene.IsValid())

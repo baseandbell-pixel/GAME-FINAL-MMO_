@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
@@ -64,7 +65,7 @@ public class MMOTreasureChestController : MonoBehaviour
     [Tooltip("Layer 3 (0.15s - 2.00s): ละอองดาวสีขาวอมทองลอยควงสว่านขึ้นด้านบน (Burst 25 + Rate over Time 24)")]
     public ParticleSystem l3FloatingGoldenSparkles;
 
-    [Tooltip("Layer 4 (0.20s - 0.85s): แสงแฟลชประกายดาว 4 แฉกขนาดใหญ่ HDR intensity 4.8x ระเบิดกลางกล่อง")]
+    [Tooltip("Layer 4 (0.20s - 0.85s): แสงแฟลชประกายดาว 4 แฉกขนาดใหญ่สีทอง HDR ระเบิดกลางกล่อง")]
     public ParticleSystem l4TreasureStarFlash;
 
     [Tooltip("ไฟ Point Light สีทองเสริมภายในหีบสมบัติ")]
@@ -86,15 +87,17 @@ public class MMOTreasureChestController : MonoBehaviour
     private Vector3 initialLidEuler;
     private bool hasSavedInitialLidEuler = false;
 
-    // แคชทรัพยากร Procedural ระดับ Runtime เพื่อใช้ร่วมกันทุกกล่องสมบัติ (Zero Allocation ซ้ำซ้อน)
+    // แคชทรัพยากร Procedural ระดับ Runtime เพื่อใช้ร่วมกันทุกกล่องสมบัติ (เอฟเฟกต์เปิดกล่องสีทอง + วัสดุเส้นแสงตามไอเทม)
     private static Mesh s_RuntimeLightConeMesh;
     private static Texture2D s_RuntimeGodRaysTex;
     private static Texture2D s_RuntimeSparkleStarTex;
     private static Texture2D s_RuntimeShockwaveRingTex;
+    private static Texture2D s_RuntimeStreakRibbonTex;
     private static Material s_RuntimeMatShockwave;
     private static Material s_RuntimeMatLightCone;
     private static Material s_RuntimeMatSparkles;
     private static Material s_RuntimeMatStarFlash;
+    private static Material s_RuntimeMatLootArcTrail;
 
     private void Awake()
     {
@@ -200,8 +203,7 @@ public class MMOTreasureChestController : MonoBehaviour
     }
 
     /// <summary>
-    /// ตรวจสอบและสร้างโหนดเอฟเฟกต์แสงทองทั้ง 4 เลเยอร์ให้อัตโนมัติตอน Runtime หากกล่องสมบัติยังไม่มี
-    /// (แก้ปัญหาเปิดกล่องจริงในเกมแล้วเอฟเฟกต์ไม่ขึ้น 100%)
+    /// ตรวจสอบและสร้างโหนดเอฟเฟกต์เปิดกล่องสีทอง 4 เลเยอร์ให้อัตโนมัติตอน Runtime หากกล่องสมบัติยังไม่มี
     /// </summary>
     public void EnsureVFXRigBuilt()
     {
@@ -341,10 +343,17 @@ public class MMOTreasureChestController : MonoBehaviour
     }
 
     /// <summary>
-    /// กฎเหล็กข้อที่ 2: ฟังก์ชัน Public สำหรับสั่งเปิดกล่องสมบัติและจุดระเบิดเอฟเฟกต์แสงทองทั้ง 4 เลเยอร์
-    /// สามารถเรียกใช้จากสคริปต์ระบบเกม (เช่น LootChest ปุ่ม [E] หรือเควสต์) ได้ทันที
+    /// ฟังก์ชัน Public สำหรับสั่งเปิดกล่องสมบัติด้วยแสงสีทอง (คงเมธอดนี้ไว้เพื่อความเข้ากันได้)
     /// </summary>
-    [ContextMenu("เปิดกล่องสมบัติและปล่อยแสงทอง (Trigger Open Chest)")]
+    public void TriggerOpenChestForLoot(ItemTier highestTier, IList<ItemTier> droppedTiers = null)
+    {
+        TriggerOpenChest();
+    }
+
+    /// <summary>
+    /// ฟังก์ชัน Public สำหรับสั่งเปิดกล่องสมบัติและจุดระเบิดเอฟเฟกต์แสงสีทอง 4 เลเยอร์
+    /// </summary>
+    [ContextMenu("เปิดกล่องสมบัติและปล่อยแสงสีทอง (Trigger Open Chest)")]
     public void TriggerOpenChest()
     {
         EnsureVFXRigBuilt();
@@ -484,7 +493,7 @@ public class MMOTreasureChestController : MonoBehaviour
             l2CoreGoldenLightCone.Play(true);
         }
 
-        // Layer 3: Floating Golden Sparkles (ละอองดาวสีขาวอมทอง HDR: Burst 25 เม็ดตอนเปิด + Rate over Time 24 ต่อเนื่อง)
+        // Layer 3: Floating Golden Sparkles (ละอองดาวสีทองลอยควงสว่านขึ้นด้านบน)
         if (l3FloatingGoldenSparkles != null)
         {
             l3FloatingGoldenSparkles.gameObject.SetActive(true);
@@ -500,7 +509,7 @@ public class MMOTreasureChestController : MonoBehaviour
             }
         }
 
-        // Layer 4: Treasure Star Flash (แสงแฟลชประกายดาว 4 แฉกขนาดใหญ่ HDR intensity 4.8x ระเบิดจ้าตรงกลางกล่อง)
+        // Layer 4: Treasure Star Flash (แสงแฟลชประกายดาว 4 แฉกสีทองขนาดใหญ่ระเบิดจ้าตรงกลางกล่อง)
         if (l4TreasureStarFlash != null)
         {
             l4TreasureStarFlash.gameObject.SetActive(true);
@@ -509,6 +518,104 @@ public class MMOTreasureChestController : MonoBehaviour
             l4TreasureStarFlash.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
             l4TreasureStarFlash.Play(true);
         }
+    }
+
+    /// <summary>
+    /// คืนค่าสีเส้นแสงประจำระดับไอเทมสำหรับเส้นหางตอนไอเทมลอยออกจากกล่อง
+    /// Normal = ขาวเงิน, Rare = ฟ้า, Epic = ม่วง, Legendary = ทอง
+    /// </summary>
+    public static Color GetTierVfxColor(ItemTier tier)
+    {
+        switch (tier)
+        {
+            case ItemTier.Rare:
+                return new Color(0.18f, 0.72f, 1.00f, 1f); // ฟ้าสดใส (Rare)
+            case ItemTier.Epic:
+                return new Color(0.82f, 0.24f, 1.00f, 1f); // ม่วงเจิดจ้า (Epic)
+            case ItemTier.Legendary:
+                return new Color(1.00f, 0.78f, 0.14f, 1f); // ทองอร่าม (Legendary)
+            default:
+                return new Color(0.88f, 0.94f, 1.00f, 1f); // ขาวเงินสะอาด (Normal)
+        }
+    }
+
+    /// <summary>
+    /// สร้าง/ดึง Material สำหรับ TrailRenderer เส้นแสงสีตามระดับไอเทมที่ลอยตามตัวไอเทมตอนกระเด็นออกจากกล่อง
+    /// </summary>
+    public static Material GetOrCreateLootArcTrailMaterial()
+    {
+        EnsureRuntimeSharedAssets();
+        return s_RuntimeMatLootArcTrail;
+    }
+
+    /// <summary>
+    /// สร้าง TrailRenderer เส้นแสงสีตามระดับไอเทม (พร้อมจางหายเมื่อสั่ง emitting = false ตอนตกพื้น)
+    /// </summary>
+    public static TrailRenderer AttachLootArcTrail(Transform parent, ItemTier tier, float trailLifetime = 0.36f)
+    {
+        GameObject trailObj = new GameObject("VFX_ItemLootArcTrail_" + tier);
+        trailObj.transform.SetParent(parent, false);
+        trailObj.transform.localPosition = Vector3.zero;
+        trailObj.transform.localRotation = Quaternion.identity;
+
+        TrailRenderer tr = trailObj.AddComponent<TrailRenderer>();
+        tr.time = trailLifetime;
+        tr.minVertexDistance = 0.02f;
+        tr.autodestruct = false;
+        tr.emitting = false;
+        tr.numCornerVertices = 6;
+        tr.numCapVertices = 4;
+        tr.alignment = LineAlignment.View;
+        tr.textureMode = LineTextureMode.Stretch;
+        tr.shadowCastingMode = ShadowCastingMode.Off;
+        tr.receiveShadows = false;
+        tr.sharedMaterial = GetOrCreateLootArcTrailMaterial();
+        tr.sortingOrder = 15;
+
+        tr.widthMultiplier = 1.0f;
+        tr.widthCurve = new AnimationCurve(
+            new Keyframe(0.0f, 0.14f),
+            new Keyframe(0.28f, 0.085f),
+            new Keyframe(0.72f, 0.032f),
+            new Keyframe(1.0f, 0.0f));
+
+        Color tierColor = GetTierVfxColor(tier);
+        Color brightHead = Color.Lerp(tierColor, Color.white, 0.45f);
+        Gradient grad = new Gradient();
+        grad.SetKeys(
+            new GradientColorKey[]
+            {
+                new GradientColorKey(brightHead, 0.0f),
+                new GradientColorKey(tierColor, 0.25f),
+                new GradientColorKey(tierColor, 1.0f)
+            },
+            new GradientAlphaKey[]
+            {
+                new GradientAlphaKey(1.0f, 0.0f),
+                new GradientAlphaKey(0.88f, 0.40f),
+                new GradientAlphaKey(0.0f, 1.0f)
+            });
+        tr.colorGradient = grad;
+
+        return tr;
+    }
+
+    /// <summary>
+    /// ตัวสำรองสำหรับโหมดออฟไลน์ที่ไอเทมเข้ากระเป๋าตรงโดยไม่ Spawn WorldItem:
+    /// สร้างลูกแก้วแสงลอยโค้งออกจากปากกล่องพร้อมเส้นสีตามระดับไอเทม แล้วจางหายทันทีเมื่อตกลงพื้น
+    /// </summary>
+    public static void SpawnStandaloneLootArc(
+        Vector3 startWorldPos,
+        Vector3 landWorldPos,
+        ItemTier tier,
+        float launchDelay = 0.14f,
+        float flightDuration = 0.72f,
+        float arcHeight = 1.95f)
+    {
+        GameObject host = new GameObject("VFX_StandaloneLootArc_" + tier);
+        host.transform.position = startWorldPos;
+        var runner = host.AddComponent<LootArcStandaloneRunner>();
+        runner.Launch(startWorldPos, landWorldPos, tier, launchDelay, flightDuration, arcHeight);
     }
 
     private IEnumerator CloseChestSequenceRoutine()
@@ -742,21 +849,30 @@ public class MMOTreasureChestController : MonoBehaviour
         {
             s_RuntimeShockwaveRingTex = BuildRuntimeShockwaveRingTexture(256, 256);
         }
+        if (s_RuntimeStreakRibbonTex == null)
+        {
+            s_RuntimeStreakRibbonTex = BuildRuntimeStreakRibbonTexture(256, 64);
+        }
+        // เอฟเฟกต์ตัวกล่องยังคงเป็นสีทองอร่าม HDR ทั้ง 4 เลเยอร์ ส่วน s_RuntimeMatLootArcTrail เป็นสีขาว HDR กลางๆ เพื่อรับสีเส้นตามระดับไอเทม
         if (s_RuntimeMatShockwave == null)
         {
-            s_RuntimeMatShockwave = CreateRuntimeURPAdditiveMaterial(s_RuntimeShockwaveRingTex, new Color(1.6f, 1.25f, 0.55f, 1f));
+            s_RuntimeMatShockwave = CreateRuntimeURPAdditiveMaterial(s_RuntimeShockwaveRingTex, new Color(2.8f, 2.05f, 0.62f, 1f));
         }
         if (s_RuntimeMatLightCone == null)
         {
-            s_RuntimeMatLightCone = CreateRuntimeURPAdditiveMaterial(s_RuntimeGodRaysTex, new Color(2.4f, 1.75f, 0.52f, 1f));
+            s_RuntimeMatLightCone = CreateRuntimeURPAdditiveMaterial(s_RuntimeGodRaysTex, new Color(2.6f, 1.90f, 0.56f, 1f));
         }
         if (s_RuntimeMatSparkles == null)
         {
-            s_RuntimeMatSparkles = CreateRuntimeURPAdditiveMaterial(s_RuntimeSparkleStarTex, new Color(1.8f, 1.55f, 0.85f, 1f));
+            s_RuntimeMatSparkles = CreateRuntimeURPAdditiveMaterial(s_RuntimeSparkleStarTex, new Color(3.0f, 2.35f, 0.95f, 1f));
         }
         if (s_RuntimeMatStarFlash == null)
         {
-            s_RuntimeMatStarFlash = CreateRuntimeURPAdditiveMaterial(s_RuntimeSparkleStarTex, new Color(2.2f, 1.85f, 1.0f, 1f));
+            s_RuntimeMatStarFlash = CreateRuntimeURPAdditiveMaterial(s_RuntimeSparkleStarTex, new Color(3.6f, 2.85f, 1.15f, 1f));
+        }
+        if (s_RuntimeMatLootArcTrail == null)
+        {
+            s_RuntimeMatLootArcTrail = CreateRuntimeURPAdditiveMaterial(s_RuntimeStreakRibbonTex, new Color(3.2f, 3.2f, 3.2f, 1f));
         }
     }
 
@@ -822,10 +938,7 @@ public class MMOTreasureChestController : MonoBehaviour
             float topFade = 1.0f - SmoothStep(0.32f, 1.0f, v);
             float alpha = Mathf.Clamp01(bottomFade * Mathf.Pow(topFade, 1.45f));
 
-            Color ringColor = Color.Lerp(
-                new Color(1.0f, 0.95f, 0.78f, alpha),
-                new Color(1.0f, 0.76f, 0.25f, alpha),
-                v);
+            Color ringColor = new Color(1.0f, 1.0f, 1.0f, alpha);
 
             for (int rStep = 0; rStep <= radialSegments; rStep++)
             {
@@ -903,12 +1016,7 @@ public class MMOTreasureChestController : MonoBehaviour
                                    + rayFine * 0.30f;
 
                 float intensity = Mathf.Clamp01(rayPattern * verticalMask * 1.15f);
-                Color col = Color.Lerp(
-                    new Color(1.0f, 0.72f, 0.18f, intensity),
-                    new Color(1.0f, 0.96f, 0.78f, intensity),
-                    Mathf.Clamp01(intensity * 1.15f));
-                col.a = intensity;
-                pixels[y * width + x] = col;
+                pixels[y * width + x] = new Color(1.0f, 1.0f, 1.0f, intensity);
             }
         }
 
@@ -947,12 +1055,7 @@ public class MMOTreasureChestController : MonoBehaviour
                 float diagSpikeB = Mathf.Exp(-d2 * 28.0f) * Mathf.Exp(-d1 * 6.5f) * 0.32f;
 
                 float value = Mathf.Clamp01((core + halo + (horizontalSpike + verticalSpike) * 0.95f + diagSpikeA + diagSpikeB) * edgeMask);
-                Color col = Color.Lerp(
-                    new Color(1.0f, 0.80f, 0.32f, value),
-                    new Color(1.0f, 0.99f, 0.94f, value),
-                    Mathf.Pow(value, 0.75f));
-                col.a = value;
-                pixels[y * width + x] = col;
+                pixels[y * width + x] = new Color(1.0f, 1.0f, 1.0f, value);
             }
         }
 
@@ -984,12 +1087,36 @@ public class MMOTreasureChestController : MonoBehaviour
                 float outerCutoff = 1.0f - SmoothStep(0.88f, 0.99f, dist);
 
                 float value = Mathf.Clamp01((mainRing + innerTrail + outerHalo) * energyRipple * outerCutoff);
-                Color col = Color.Lerp(
-                    new Color(1.0f, 0.70f, 0.15f, value),
-                    new Color(1.0f, 0.96f, 0.76f, value),
-                    Mathf.Pow(mainRing, 1.3f));
-                col.a = value;
-                pixels[y * width + x] = col;
+                pixels[y * width + x] = new Color(1.0f, 1.0f, 1.0f, value);
+            }
+        }
+
+        tex.SetPixels(pixels);
+        tex.Apply();
+        return tex;
+    }
+
+    private static Texture2D BuildRuntimeStreakRibbonTexture(int width, int height)
+    {
+        Texture2D tex = new Texture2D(width, height, TextureFormat.RGBA32, false);
+        tex.name = "T_TierLootStreakRibbon_Runtime";
+        tex.wrapMode = TextureWrapMode.Clamp;
+
+        Color[] pixels = new Color[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            float ny = ((float)y / (height - 1)) * 2f - 1f;
+            float sharpCore = Mathf.Exp(-ny * ny * 26.0f);
+            float softGlow = Mathf.Exp(-ny * ny * 5.2f) * 0.55f;
+            float edgeGuard = 1f - SmoothStep(0.75f, 0.98f, Mathf.Abs(ny));
+
+            for (int x = 0; x < width; x++)
+            {
+                float nx = (float)x / (width - 1);
+                float headFade = SmoothStep(0.0f, 0.14f, nx);
+                float tailFade = Mathf.Pow(1f - SmoothStep(0.18f, 1.0f, nx), 1.35f);
+                float val = Mathf.Clamp01((sharpCore + softGlow) * edgeGuard * headFade * tailFade);
+                pixels[y * width + x] = new Color(1.0f, 1.0f, 1.0f, val);
             }
         }
 
@@ -1015,7 +1142,7 @@ public class MMOTreasureChestController : MonoBehaviour
         main.startSpeed = 0f;
         main.startSize = 3.2f;
         main.startRotation = new ParticleSystem.MinMaxCurve(0f, Mathf.PI * 2f);
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(4.0f, 2.85f, 0.72f, 1f));
+        main.startColor = Color.white;
         main.simulationSpace = ParticleSystemSimulationSpace.Local;
         main.maxParticles = 4;
 
@@ -1083,7 +1210,7 @@ public class MMOTreasureChestController : MonoBehaviour
         main.startSizeX = 1.25f;
         main.startSizeY = 3.55f;
         main.startSizeZ = 1.25f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(3.2f, 2.35f, 0.72f, 1f));
+        main.startColor = Color.white;
         main.simulationSpace = ParticleSystemSimulationSpace.Local;
         main.maxParticles = 4;
 
@@ -1161,11 +1288,9 @@ public class MMOTreasureChestController : MonoBehaviour
         main.playOnAwake = false;
         main.startLifetime = new ParticleSystem.MinMaxCurve(1.25f, 1.85f);
         main.startSpeed = new ParticleSystem.MinMaxCurve(0.25f, 0.75f);
-        main.startSize = new ParticleSystem.MinMaxCurve(0.11f, 0.28f);
+        main.startSize = new ParticleSystem.MinMaxCurve(0.11f, 0.26f);
         main.startRotation = new ParticleSystem.MinMaxCurve(0f, Mathf.PI * 2f);
-        main.startColor = new ParticleSystem.MinMaxGradient(
-            new Color(3.6f, 2.95f, 1.35f, 1f),
-            new Color(4.4f, 3.85f, 2.15f, 1f));
+        main.startColor = Color.white;
         main.simulationSpace = ParticleSystemSimulationSpace.World;
         main.maxParticles = 140;
 
@@ -1248,7 +1373,7 @@ public class MMOTreasureChestController : MonoBehaviour
         main.startLifetime = 0.65f;
         main.startSpeed = 0f;
         main.startSize = 2.6f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(4.8f, 3.9f, 1.8f, 1f));
+        main.startColor = Color.white;
         main.simulationSpace = ParticleSystemSimulationSpace.Local;
         main.maxParticles = 2;
 
@@ -1324,5 +1449,45 @@ public class MMOTreasureChestController : MonoBehaviour
         }
 
         return null;
+    }
+}
+
+/// <summary>
+/// ตัววิ่งเส้นโค้งพาราโบลาสำหรับไอเทมที่ลอยออกจากกล่องในโหมดออฟไลน์ (ไม่มี WorldItem)
+/// เมื่อตกลงพื้นจะหยุดปล่อยเส้นแสงแล้วค่อยๆ จางหายไปเองอย่างสะอาด
+/// </summary>
+public class LootArcStandaloneRunner : MonoBehaviour
+{
+    public void Launch(Vector3 startPos, Vector3 endPos, ItemTier tier, float delay, float duration, float arcHeight)
+    {
+        StartCoroutine(FlyAndFadeRoutine(startPos, endPos, tier, delay, duration, arcHeight));
+    }
+
+    private IEnumerator FlyAndFadeRoutine(Vector3 startPos, Vector3 endPos, ItemTier tier, float delay, float duration, float arcHeight)
+    {
+        transform.position = startPos;
+        if (delay > 0f) yield return new WaitForSeconds(delay);
+
+        TrailRenderer trail = MMOTreasureChestController.AttachLootArcTrail(transform, tier, 0.36f);
+        trail.Clear();
+        trail.emitting = true;
+
+        float elapsed = 0f;
+        float safeDur = Mathf.Max(0.25f, duration);
+        while (elapsed < safeDur)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / safeDur);
+            Vector3 pos = Vector3.Lerp(startPos, endPos, t);
+            pos.y += 4f * arcHeight * t * (1f - t);
+            transform.position = pos;
+            yield return null;
+        }
+
+        transform.position = endPos;
+        trail.emitting = false; // ตกลงพื้นแล้ว -> หยุดปล่อยเส้นแสงให้ค่อยๆ จางหายไปจนหมด
+
+        yield return new WaitForSeconds(trail.time + 0.12f);
+        Destroy(gameObject);
     }
 }

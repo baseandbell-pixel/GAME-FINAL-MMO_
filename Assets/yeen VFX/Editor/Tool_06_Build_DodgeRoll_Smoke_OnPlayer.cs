@@ -156,21 +156,19 @@ public class Tool_06_Build_DodgeRoll_Smoke_OnPlayer : EditorWindow
         // --------------------------------------------------------------------------------------------
         GameObject l1Obj = new GameObject("L1_Launch_SmokeBurst");
         l1Obj.transform.SetParent(vfxRoot.transform, false);
-        l1Obj.transform.localPosition = new Vector3(0f, 0.15f, 0f);
-        l1Obj.transform.localRotation = Quaternion.Euler(90f, 0f, 0f); // วางวงกลมขนานกับพื้น
+        l1Obj.transform.localPosition = new Vector3(0f, 0.12f, 0f);
+        l1Obj.transform.localRotation = Quaternion.Euler(90f, 0f, 0f); // วางวงกลมขนานกับพื้นระดับข้อเท้า
         l1Obj.transform.localScale = Vector3.one;
 
         ParticleSystem l1PS = l1Obj.AddComponent<ParticleSystem>();
         ConfigureLayer1LaunchSmokeBurst(l1PS, smokeMat);
 
         // --------------------------------------------------------------------------------------------
-        // LAYER 2 (0.02s - 0.42s): Main Action / Rolling Smoke Trail
-        // กลุ่มเมฆควันขาวต่อเนื่อง (World Space, Rate over Time = 35, Rate over Distance = 12,
-        // Rotation over Lifetime ให้ก้อนควันม้วนตัว, Size over Lifetime ขยายตัวออกขณะจางหาย)
+        // LAYER 2 (0.02s - 0.42s): Main Action / Rolling Smoke Trail (ระดับขา/ข้อเท้า)
         // --------------------------------------------------------------------------------------------
         GameObject l2Obj = new GameObject("L2_Rolling_SmokeTrail");
         l2Obj.transform.SetParent(vfxRoot.transform, false);
-        l2Obj.transform.localPosition = new Vector3(0f, 0.55f, 0f); // ระดับเอว/ลำตัวขณะม้วนตัวกลิ้ง
+        l2Obj.transform.localPosition = new Vector3(0f, 0.24f, 0f); // ระดับหน้าแข้ง/ข้อเท้าขณะกลิ้ง
         l2Obj.transform.localRotation = Quaternion.identity;
         l2Obj.transform.localScale = Vector3.one;
 
@@ -178,26 +176,23 @@ public class Tool_06_Build_DodgeRoll_Smoke_OnPlayer : EditorWindow
         ConfigureLayer2RollingSmokeTrail(l2PS, smokeMat);
 
         // --------------------------------------------------------------------------------------------
-        // LAYER 3 (0.05s - 0.35s): Secondary Elements / Wind Speed Streaks
-        // โหมด Stretched Billboard (Velocity Scale = 0.06, Length Scale = 4.5, World Space)
-        // ปล่อยเส้นสายลมสีขาวโปร่งใสแหวกมวลควันไปด้านหลัง
+        // LAYER 3 (0.05s - 0.35s): Secondary Elements / Wind Speed Streaks (ระดับขา)
         // --------------------------------------------------------------------------------------------
         GameObject l3Obj = new GameObject("L3_Wind_SpeedStreaks");
         l3Obj.transform.SetParent(vfxRoot.transform, false);
-        l3Obj.transform.localPosition = new Vector3(0f, 0.65f, 0.35f);
-        l3Obj.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // เป่าเส้นลมแหวกควันไปด้านหลังตัวละคร
+        l3Obj.transform.localPosition = new Vector3(0f, 0.26f, 0.28f);
+        l3Obj.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // เป่าเส้นลมแหวกควันไปด้านหลังระดับขา
         l3Obj.transform.localScale = Vector3.one;
 
         ParticleSystem l3PS = l3Obj.AddComponent<ParticleSystem>();
         ConfigureLayer3WindSpeedStreaks(l3PS, windStreakMat);
 
         // --------------------------------------------------------------------------------------------
-        // LAYER 4 (0.42s - 0.85s): Impact & Residual / Recovery Smoke Ring
-        // กลุ่มควันจางๆ (Burst 10 ก้อน, World Space) กระจายตัวออกรอบตัวหลังกลิ้งจบและลุกขึ้นยืน
+        // LAYER 4 (0.42s - 0.85s): Impact & Residual / Recovery Smoke Ring (ระดับข้อเท้า)
         // --------------------------------------------------------------------------------------------
         GameObject l4Obj = new GameObject("L4_Recovery_SmokeRing");
         l4Obj.transform.SetParent(vfxRoot.transform, false);
-        l4Obj.transform.localPosition = new Vector3(0f, 0.25f, 0f);
+        l4Obj.transform.localPosition = new Vector3(0f, 0.15f, 0f);
         l4Obj.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
         l4Obj.transform.localScale = Vector3.one;
 

@@ -40,6 +40,13 @@ public class MMOBlockParryController : MonoBehaviour
     [Tooltip("โหนดแม่ของเอฟเฟกต์โล่ป้องกัน (ตั้งอยู่ด้านหน้าอกตัวละคร)")]
     public Transform guardVfxMount;
 
+    /// <summary>
+    /// GameObject หลักของม่านโล่ป้องกัน (ใช้ร่วมกับ MMOGuardBreakVFX เพื่อสั่งปิดโล่ทันทีเมื่อโดนตีบล็อคแตก)
+    /// </summary>
+    public GameObject guardBarrierGroup => guardVfxMount != null
+        ? guardVfxMount.gameObject
+        : (guardShieldDomeTransform != null ? guardShieldDomeTransform.gameObject : null);
+
     [Tooltip("3D Mesh รูปโล่โค้งป้องกันด้านหน้าตัวละคร (L1_GuardShieldShape_Mesh)")]
     public Transform guardShieldDomeTransform;
     public MeshRenderer guardShieldDomeRenderer;
@@ -57,7 +64,7 @@ public class MMOBlockParryController : MonoBehaviour
     [SerializeField] private float currentShieldScaleFactor = 0f;
     [SerializeField] private int totalBlockedHits = 0;
 
-    private Vector3 defaultShieldLocalScale = new Vector3(1.12f, 1.28f, 1.0f);
+    private Vector3 defaultShieldLocalScale = new Vector3(1.18f, 1.18f, 1.0f);
     private Vector3 defaultShieldLocalPos = Vector3.zero;
     private float shieldAbsorbFlashTimer = 0f;
     private float absorbCooldownTimer = 0f;
@@ -89,9 +96,9 @@ public class MMOBlockParryController : MonoBehaviour
         }
         else if (guardShieldDomeRenderer.sharedMaterial == null ||
                  guardShieldDomeRenderer.sharedMaterial.mainTexture == null ||
-                 guardShieldDomeRenderer.sharedMaterial.mainTexture.name != "T_HeraldicEnergyShield_512")
+                 guardShieldDomeRenderer.sharedMaterial.mainTexture.name != "T_CircularEnergyShield_512")
         {
-            // อัปเกรด Material และ Mesh ให้เป็นรูปโล่คมชัดทันที
+            // อัปเกรด Material และ Mesh ให้เป็นโล่วงกลมคมชัดทันที
             ApplySculptedShieldVisualToExistingRenderer();
         }
 
@@ -100,7 +107,7 @@ public class MMOBlockParryController : MonoBehaviour
             defaultShieldLocalScale = guardShieldDomeTransform.localScale;
             if (defaultShieldLocalScale.sqrMagnitude < 0.001f)
             {
-                defaultShieldLocalScale = new Vector3(1.12f, 1.28f, 1.0f);
+                defaultShieldLocalScale = new Vector3(1.18f, 1.18f, 1.0f);
             }
             defaultShieldLocalPos = guardShieldDomeTransform.localPosition;
             guardShieldDomeTransform.localScale = Vector3.zero;
@@ -193,9 +200,9 @@ public class MMOBlockParryController : MonoBehaviour
             shieldAbsorbFlashTimer = Mathf.Max(0f, shieldAbsorbFlashTimer - dt * 6.0f);
         }
 
-        // 1. ตรวจจับสถานะการบล็อกแบบแยกเฉพาะตัวละครนี้ (Multiplayer-Safe):
+        // 1. ตรวจสอบสถานะการบล็อกของตัวละครนี้ (Multiplayer-Safe):
         // หากตัวละครถูก Spawn บนเครือข่าย Fusion ให้ยึดค่า Networked PlayerCombat.IsBlocking ของตัวละครนี้เป็นแหล่งความจริงเดียวเท่านั้น
-        // เพื่อป้องกันปัญหาเมื่อ Host กด [F] หรือคลิกขวาแล้วโล่ไปขึ้นบนตัวผู้เล่นคนอื่นในห้องทุกคน
+        // เพื่อป้องกันปัญหาเมื่อ Host กด [F] หรือคลิกขวาแล้วโล่ไปขึ้นบนตัวผู้เล่นคนอื่นในห้องทุกคน รวมถึงเคารพ SafeZone/Stamina/ชักดาบ
         bool guardInputHeld = false;
         if (syncWithPlayerCombat && cachedPlayerCombat != null && cachedPlayerCombat.IsSpawned)
         {
@@ -222,12 +229,33 @@ public class MMOBlockParryController : MonoBehaviour
         UpdateGuardShieldVisualAnimation(dt);
     }
 
+    private bool IsLocallyOwnedForFallbackInput()
+    {
+        if (cachedPlayerCombat != null)
+        {
+            if (cachedPlayerCombat.IsSpawned)
+                return cachedPlayerCombat.IsLocallyControlled;
+            if (cachedPlayerCombat.Object != null && cachedPlayerCombat.Object.IsValid)
+                return cachedPlayerCombat.Object.HasStateAuthority || cachedPlayerCombat.Object.HasInputAuthority;
+        }
+
+        var capsule = GetComponentInParent<PlayerCapsule>();
+        if (capsule != null && capsule.Object != null && capsule.Object.IsValid)
+            return capsule.Object.HasStateAuthority || capsule.Object.HasInputAuthority;
+
+        return true;
+    }
+
     public void SetGuardStanceActive(bool active)
     {
         isGuarding = active;
 
         if (active)
         {
+            if (guardVfxMount != null && !guardVfxMount.gameObject.activeSelf)
+            {
+                guardVfxMount.gameObject.SetActive(true);
+            }
             if (guardShieldDomeRenderer != null) guardShieldDomeRenderer.enabled = true;
             if (guardShieldGlowRenderer != null) guardShieldGlowRenderer.enabled = true;
         }
@@ -319,23 +347,6 @@ public class MMOBlockParryController : MonoBehaviour
         }
     }
 
-    private bool IsLocallyOwnedForFallbackInput()
-    {
-        if (cachedPlayerCombat != null)
-        {
-            if (cachedPlayerCombat.IsSpawned)
-                return cachedPlayerCombat.IsLocallyControlled;
-            if (cachedPlayerCombat.Object != null && cachedPlayerCombat.Object.IsValid)
-                return cachedPlayerCombat.Object.HasStateAuthority || cachedPlayerCombat.Object.HasInputAuthority;
-        }
-
-        var capsule = GetComponentInParent<PlayerCapsule>();
-        if (capsule != null && capsule.Object != null && capsule.Object.IsValid)
-            return capsule.Object.HasStateAuthority || capsule.Object.HasInputAuthority;
-
-        return true;
-    }
-
     private bool ReadUniversalGuardHoldInput()
     {
         bool heldNew = false;
@@ -393,22 +404,25 @@ public class MMOBlockParryController : MonoBehaviour
     {
         EnsureRuntimeShieldAssets();
 
+        Transform visual = transform.Find("CharacterVisual");
+        float feetY = visual != null ? visual.localPosition.y : 0f;
+
         if (guardVfxMount == null)
         {
             GameObject rootObj = new GameObject("VFX_AAA_GuardAndParry_Root");
             rootObj.transform.SetParent(transform, false);
-            rootObj.transform.localPosition = new Vector3(0f, 1.05f, 0.65f);
+            rootObj.transform.localPosition = new Vector3(0f, feetY + 1.12f, 0.72f);
             rootObj.transform.localRotation = Quaternion.identity;
             rootObj.transform.localScale = Vector3.one;
             guardVfxMount = rootObj.transform;
         }
 
-        // โหนดหลัก: รูปโล่พลังงานโค้ง 3 มิติชัดเจน
+        // โหนดหลัก: โล่พลังงานทรงกลมโค้ง 3 มิติ (Circular Energy Barrier Disc)
         GameObject shieldObj = new GameObject("L1_GuardShieldShape_Mesh");
         shieldObj.transform.SetParent(guardVfxMount, false);
         shieldObj.transform.localPosition = Vector3.zero;
         shieldObj.transform.localRotation = Quaternion.identity;
-        shieldObj.transform.localScale = new Vector3(1.12f, 1.28f, 1.0f);
+        shieldObj.transform.localScale = new Vector3(1.18f, 1.18f, 1.0f);
 
         MeshFilter mf = shieldObj.AddComponent<MeshFilter>();
         mf.sharedMesh = runtimeShieldMesh;
@@ -420,12 +434,12 @@ public class MMOBlockParryController : MonoBehaviour
         guardShieldDomeRenderer.sortingOrder = 12;
         guardShieldDomeTransform = shieldObj.transform;
 
-        // โหนดรอง: แสงเรืองขอบด้านหลังรูปโล่เพื่อขับทรงโล่ให้โดดเด่นขึ้น
+        // โหนดรอง: แสงเรืองขอบวงกลมด้านหลังเพื่อขับทรงโล่วงกลมให้โดดเด่นขึ้น
         GameObject glowObj = new GameObject("L1_GuardShieldGlow_Back");
         glowObj.transform.SetParent(guardVfxMount, false);
         glowObj.transform.localPosition = new Vector3(0f, 0f, -0.02f);
         glowObj.transform.localRotation = Quaternion.identity;
-        glowObj.transform.localScale = new Vector3(1.20f, 1.37f, 1.0f);
+        glowObj.transform.localScale = new Vector3(1.28f, 1.28f, 1.0f);
 
         MeshFilter glowMf = glowObj.AddComponent<MeshFilter>();
         glowMf.sharedMesh = runtimeShieldMesh;
@@ -442,12 +456,27 @@ public class MMOBlockParryController : MonoBehaviour
     {
         EnsureRuntimeShieldAssets();
 
-        MeshFilter mf = guardShieldDomeTransform.GetComponent<MeshFilter>();
-        if (mf != null)
+        if (guardShieldDomeTransform != null)
         {
-            mf.sharedMesh = runtimeShieldMesh;
+            guardShieldDomeTransform.localScale = new Vector3(1.18f, 1.18f, 1.0f);
+            MeshFilter mf = guardShieldDomeTransform.GetComponent<MeshFilter>();
+            if (mf != null) mf.sharedMesh = runtimeShieldMesh;
         }
-        guardShieldDomeRenderer.sharedMaterial = runtimeShieldMat;
+        if (guardShieldDomeRenderer != null)
+        {
+            guardShieldDomeRenderer.sharedMaterial = runtimeShieldMat;
+        }
+
+        if (guardShieldGlowTransform != null)
+        {
+            guardShieldGlowTransform.localScale = new Vector3(1.28f, 1.28f, 1.0f);
+            MeshFilter glowMf = guardShieldGlowTransform.GetComponent<MeshFilter>();
+            if (glowMf != null) glowMf.sharedMesh = runtimeShieldMesh;
+        }
+        if (guardShieldGlowRenderer != null)
+        {
+            guardShieldGlowRenderer.sharedMaterial = runtimeShieldGlowMat;
+        }
     }
 
     private void EnsureRuntimeShieldAssets()
@@ -475,58 +504,84 @@ public class MMOBlockParryController : MonoBehaviour
     }
 
     /// <summary>
-    /// สร้าง 3D Mesh แผ่นโค้งรองรับรูปโล่ (Vertex Color = White เต็ม 1.0 เพื่อให้ขอบรูปโล่จาก SDF Texture คมชัดทุกมุม)
+    /// สร้าง 3D Mesh โล่พลังงานทรงวงกลมโค้ง (Circular Dome Disc) แท้ๆ ไม่มีมุมสี่เหลี่ยม
     /// </summary>
     public static Mesh CreateCurvedShieldMesh()
     {
-        int cols = 24;
-        int rows = 24;
-        float width = 1.18f;
-        float height = 1.38f;
-        float curvatureDepth = 0.22f;
+        const int radialSegments = 48;
+        const int ringCount = 10;
+        const float maxRadius = 0.68f;
+        const float curvatureDepth = 0.20f;
 
-        Vector3[] vertices = new Vector3[(cols + 1) * (rows + 1)];
-        Vector2[] uvs = new Vector2[vertices.Length];
-        Color[] colors = new Color[vertices.Length];
-        int[] triangles = new int[cols * rows * 6];
+        int vertCount = 1 + ringCount * radialSegments;
+        Vector3[] vertices = new Vector3[vertCount];
+        Vector2[] uvs = new Vector2[vertCount];
+        Color[] colors = new Color[vertCount];
 
-        int vIdx = 0;
-        for (int r = 0; r <= rows; r++)
+        // จุดศูนย์กลางโดมวงกลม
+        vertices[0] = new Vector3(0f, 0f, curvatureDepth);
+        uvs[0] = new Vector2(0.5f, 0.5f);
+        colors[0] = Color.white;
+
+        int vIdx = 1;
+        for (int ring = 1; ring <= ringCount; ring++)
         {
-            float v = r / (float)rows;
-            float ny = (v - 0.5f) * 2f;
-            for (int c = 0; c <= cols; c++)
+            float rFrac = ring / (float)ringCount;
+            float rWorld = rFrac * maxRadius;
+            float zOffset = (1f - rFrac * rFrac) * curvatureDepth;
+
+            for (int seg = 0; seg < radialSegments; seg++)
             {
-                float u = c / (float)cols;
-                float nx = (u - 0.5f) * 2f;
+                float angle = (seg / (float)radialSegments) * Mathf.PI * 2f;
+                float cosA = Mathf.Cos(angle);
+                float sinA = Mathf.Sin(angle);
 
-                // โค้งรับด้านหน้าเล็กน้อยเหมือนโล่จริง
-                float bend = Mathf.Clamp01(nx * nx * 0.75f + ny * ny * 0.25f);
-                float zOffset = (1f - bend) * curvatureDepth;
-
-                vertices[vIdx] = new Vector3(nx * (width * 0.5f), ny * (height * 0.5f), zOffset);
-                uvs[vIdx] = new Vector2(u, v);
+                vertices[vIdx] = new Vector3(cosA * rWorld, sinA * rWorld, zOffset);
+                uvs[vIdx] = new Vector2(0.5f + cosA * rFrac * 0.5f, 0.5f + sinA * rFrac * 0.5f);
                 colors[vIdx] = Color.white;
                 vIdx++;
             }
         }
 
+        int triCount = radialSegments + (ringCount - 1) * radialSegments * 2;
+        int[] triangles = new int[triCount * 3];
         int tIdx = 0;
-        for (int r = 0; r < rows; r++)
+
+        // วงในสุดเชื่อมกับจุดศูนย์กลาง
+        for (int seg = 0; seg < radialSegments; seg++)
         {
-            for (int c = 0; c < cols; c++)
+            int cur = 1 + seg;
+            int nxt = 1 + ((seg + 1) % radialSegments);
+            triangles[tIdx++] = 0;
+            triangles[tIdx++] = nxt;
+            triangles[tIdx++] = cur;
+        }
+
+        // วงชั้นนอกเชื่อมต่อกันจนเต็มแผ่นวงกลม
+        for (int ring = 1; ring < ringCount; ring++)
+        {
+            int innerStart = 1 + (ring - 1) * radialSegments;
+            int outerStart = 1 + ring * radialSegments;
+            for (int seg = 0; seg < radialSegments; seg++)
             {
-                int i0 = r * (cols + 1) + c;
-                int i1 = i0 + 1;
-                int i2 = i0 + (cols + 1);
-                int i3 = i2 + 1;
-                triangles[tIdx++] = i0; triangles[tIdx++] = i2; triangles[tIdx++] = i1;
-                triangles[tIdx++] = i1; triangles[tIdx++] = i2; triangles[tIdx++] = i3;
+                int nextSeg = (seg + 1) % radialSegments;
+                int i0 = innerStart + seg;
+                int i1 = innerStart + nextSeg;
+                int o0 = outerStart + seg;
+                int o1 = outerStart + nextSeg;
+
+                triangles[tIdx++] = i0;
+                triangles[tIdx++] = i1;
+                triangles[tIdx++] = o1;
+
+                triangles[tIdx++] = i0;
+                triangles[tIdx++] = o1;
+                triangles[tIdx++] = o0;
             }
         }
 
         Mesh m = new Mesh();
-        m.name = "Mesh_GuardShieldShape";
+        m.name = "Mesh_CircularGuardShield";
         m.vertices = vertices;
         m.uv = uvs;
         m.colors = colors;
@@ -537,51 +592,22 @@ public class MMOBlockParryController : MonoBehaviour
     }
 
     /// <summary>
-    /// ฟังก์ชันคณิตศาสตร์คำนวณระยะขอบ "รูปทรงโล่อัศวิน (Heraldic Heater Shield SDF)"
-    /// ค่า < 0 อยู่ภายในรูปโล่, ค่า = 0 คือเส้นขอบรูปโล่พอดี, ค่า > 0 อยู่ภายนอกรูปโล่
+    /// ฟังก์ชันคณิตศาสตร์คำนวณระยะขอบ "โล่วงกลมพลังงาน (Circular Shield SDF)"
+    /// ค่า < 0 อยู่ภายในวงกลม, ค่า = 0 คือเส้นขอบวงกลมพอดี, ค่า > 0 อยู่ภายนอกวงกลม
     /// </summary>
     public static float EvaluateShieldSDF(float nx, float ny)
     {
-        float ax = Mathf.Abs(nx);
-
-        // ความกว้างของรูปโล่ในแต่ละความสูง ny (-0.88 = ปลายแหลมล่าง, +0.86 = ขอบโค้งบน)
-        float halfWidth = GetShieldHalfWidthAtY(ny);
-        float eps = 0.005f;
-        float dwDy = (GetShieldHalfWidthAtY(ny + eps) - GetShieldHalfWidthAtY(ny - eps)) / (2f * eps);
-        float dSide = (ax - halfWidth) / Mathf.Sqrt(1f + dwDy * dwDy);
-
-        // ขอบบนของโล่โค้งมนสง่างาม (Arched Crown)
-        float crownArch = 0.84f - 0.10f * (ax * ax / (0.76f * 0.76f));
-        float dTop = ny - crownArch;
-
-        // ปลายแหลมด้านล่างของโล่
-        float dBottom = -0.88f - ny;
-
-        return Mathf.Max(dSide, Mathf.Max(dTop, dBottom));
-    }
-
-    private static float GetShieldHalfWidthAtY(float ny)
-    {
-        if (ny <= -0.88f) return 0f;
-
-        if (ny < 0.14f)
-        {
-            float u = Mathf.Clamp01((ny + 0.88f) / 1.02f);
-            return 0.74f * Mathf.Pow(Mathf.Sin(u * Mathf.PI * 0.5f), 0.76f);
-        }
-
-        float v = Mathf.Clamp01((ny - 0.14f) / 0.70f);
-        return Mathf.Lerp(0.74f, 0.78f, v);
+        return Mathf.Sqrt(nx * nx + ny * ny) - 0.86f;
     }
 
     /// <summary>
-    /// วาด Texture "รูปโล่พลังงานอัศวิน (Heraldic Energy Shield)" ความละเอียดสูง 512x512 px
-    /// มีขอบโล่เรืองแสง 2 ชั้นคมกริบ, ตารางรังผึ้งพลังงานโปร่งแสงภายใน และตราสัญลักษณ์โล่เรืองแสงตรงกลาง
+    /// วาด Texture "โล่พลังงานวงกลม (Circular Energy Shield)" ความละเอียดสูง 512x512 px
+    /// มีขอบวงกลมเรืองแสง 2 ชั้นคมกริบ, ตารางรังผึ้งพลังงานโปร่งแสง, ลายรัศมี 8 แฉก และวงแกนพลังงานตรงกลาง
     /// </summary>
     public static Texture2D CreateHeraldicShieldEmblemTexture(int size)
     {
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        tex.name = "T_HeraldicEnergyShield_512";
+        tex.name = "T_CircularEnergyShield_512";
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.filterMode = FilterMode.Bilinear;
 
@@ -598,12 +624,12 @@ public class MMOBlockParryController : MonoBehaviour
                 float u = x / (float)(size - 1);
                 float nx = (u * 2f) - 1f;
 
-                float sdf = EvaluateShieldSDF(nx, ny);
+                float r = Mathf.Sqrt(nx * nx + ny * ny);
+                float sdf = r - 0.86f;
 
-                // มาสก์ตัดขอบรูปโล่ให้คมชัด (Anti-Aliased Edge)
+                // มาสก์ตัดขอบวงกลมให้คมชัดและใสสนิทนอกวงกลม (ไม่มีขอบสี่เหลี่ยม)
                 float insideMask = 1f - Mathf.SmoothStep(-0.012f, 0.012f, sdf);
-                // แสงเรืองรอบนอกขอบโล่เล็กน้อย
-                float outerRimGlow = Mathf.Exp(-Mathf.Max(0f, sdf) * 28f) * 0.45f;
+                float outerRimGlow = Mathf.Exp(-Mathf.Max(0f, sdf) * 26f) * 0.45f * (1f - Mathf.SmoothStep(0.92f, 0.99f, r));
 
                 if (insideMask <= 0.001f && outerRimGlow <= 0.005f)
                 {
@@ -611,13 +637,13 @@ public class MMOBlockParryController : MonoBehaviour
                     continue;
                 }
 
-                // 1. ขอบรูปโล่ชั้นนอก (หนาและสว่างชัดเพื่อให้มองเห็นเป็นรูปโล่ทันที)
-                float outerFrame = Mathf.Exp(-Mathf.Pow(sdf + 0.032f, 2f) / (2f * 0.022f * 0.022f));
+                // 1. ขอบวงกลมชั้นนอกสว่างคมกริบ
+                float outerFrame = Mathf.Exp(-Mathf.Pow(r - 0.835f, 2f) / (2f * 0.022f * 0.022f));
 
-                // 2. เส้นขอบรูนชั้นในขนานตามทรงโล่
-                float innerTrim = Mathf.Exp(-Mathf.Pow(sdf + 0.115f, 2f) / (2f * 0.010f * 0.010f)) * 0.80f;
+                // 2. เส้นวงแหวนรูนชั้นใน
+                float innerTrim = Mathf.Exp(-Mathf.Pow(r - 0.72f, 2f) / (2f * 0.011f * 0.011f)) * 0.82f;
 
-                // 3. พื้นลายรังผึ้งพลังงานโปร่งแสงภายในตัวโล่
+                // 3. ลายตารางรังผึ้งพลังงานโปร่งแสงภายในวงกลม
                 float px = u * hexFreq;
                 float py = v * hexFreq * 1.1547f;
                 float row = Mathf.Floor(py);
@@ -629,23 +655,21 @@ public class MMOBlockParryController : MonoBehaviour
                     Mathf.Max(Mathf.Abs(fx * 0.5f + fy * 0.866f), Mathf.Abs(fx * -0.5f + fy * 0.866f))
                 );
                 float hexLines = Mathf.SmoothStep(0.39f, 0.48f, hexDist) * 0.42f;
-                float glassFill = 0.24f;
+                float glassFill = 0.22f + Mathf.Pow(Mathf.Clamp01(r / 0.86f), 2.2f) * 0.14f;
 
-                // 4. ตราสัญลักษณ์ตรงกลางรูปโล่ (Guardian Diamond & Cross Crest + สันกลางโล่)
-                float cy = ny - 0.06f;
-                float diamondDist = Mathf.Abs(nx) * 1.15f + Mathf.Abs(cy) * 0.85f;
-                float centerDiamondFill = (1f - Mathf.SmoothStep(0.16f, 0.20f, diamondDist)) * 0.60f;
-                float centerDiamondRim = Mathf.Exp(-Mathf.Pow(diamondDist - 0.26f, 2f) / (2f * 0.014f * 0.014f)) * 0.85f;
+                // 4. วงแหวนแกนกลาง + รัศมีพลังงาน 8 ทิศทาง (Circular Arcane Barrier Emblem)
+                float angle = Mathf.Atan2(ny, nx);
+                float centerRing = Mathf.Exp(-Mathf.Pow(r - 0.24f, 2f) / (2f * 0.015f * 0.015f)) * 0.88f;
+                float centerCore = Mathf.Exp(-(r * r) / (2f * 0.11f * 0.11f)) * 0.58f;
+                float spokeWave = Mathf.Pow(Mathf.Abs(Mathf.Cos(angle * 4f)), 18f);
+                float spokeMask = Mathf.SmoothStep(0.24f, 0.30f, r) * (1f - Mathf.SmoothStep(0.70f, 0.74f, r));
+                float radialSpokes = spokeWave * spokeMask * 0.55f;
+                float crest = Mathf.Clamp01(centerRing + centerCore + radialSpokes);
 
-                float vertRidge = Mathf.Exp(-nx * nx * 650f) * (1f - Mathf.SmoothStep(0.0f, 0.68f, Mathf.Abs(cy))) * 0.65f;
-                float horizBar = Mathf.Exp(-cy * cy * 650f) * (1f - Mathf.SmoothStep(0.0f, 0.48f, Mathf.Abs(nx))) * 0.60f;
-                float crest = Mathf.Clamp01(centerDiamondFill + centerDiamondRim + vertRidge + horizBar);
-
-                float interiorAlpha = (glassFill + hexLines + outerFrame * 0.95f + innerTrim + crest * 0.85f) * insideMask;
+                float interiorAlpha = (glassFill + hexLines + outerFrame * 0.96f + innerTrim + crest * 0.85f) * insideMask;
                 float finalAlpha = Mathf.Clamp01(Mathf.Max(interiorAlpha, outerRimGlow));
 
-                // ไล่สีขาวสว่างตรงขอบโล่และตรากลาง เพื่อให้โดดเด่นมีมิติ
-                float highlight = Mathf.Clamp01(outerFrame * 0.85f + innerTrim * 0.65f + crest * 0.75f);
+                float highlight = Mathf.Clamp01(outerFrame * 0.88f + innerTrim * 0.65f + crest * 0.78f);
                 Color colOut = Color.Lerp(new Color(0.68f, 0.92f, 1.0f, 1f), Color.white, highlight);
                 colOut.a = finalAlpha;
 
@@ -661,7 +685,7 @@ public class MMOBlockParryController : MonoBehaviour
     public static Texture2D CreateShieldBackGlowTexture(int size)
     {
         Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
-        tex.name = "T_HeraldicShieldBackGlow";
+        tex.name = "T_CircularShieldBackGlow";
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.filterMode = FilterMode.Bilinear;
 
@@ -672,10 +696,12 @@ public class MMOBlockParryController : MonoBehaviour
             for (int x = 0; x < size; x++)
             {
                 float nx = ((x / (float)(size - 1)) * 2f) - 1f;
-                float sdf = EvaluateShieldSDF(nx, ny);
-                float halo = Mathf.Exp(-sdf * sdf * 45f) * 0.85f;
-                float softFill = (1f - Mathf.SmoothStep(-0.05f, 0.14f, sdf)) * 0.35f;
-                float alpha = Mathf.Clamp01(Mathf.Max(halo, softFill));
+                float r = Mathf.Sqrt(nx * nx + ny * ny);
+                float sdf = r - 0.86f;
+                float halo = Mathf.Exp(-sdf * sdf * 42f) * 0.85f;
+                float softFill = (1f - Mathf.SmoothStep(0.0f, 0.94f, r)) * 0.38f;
+                float outerCut = 1f - Mathf.SmoothStep(0.90f, 0.99f, r);
+                float alpha = Mathf.Clamp01(Mathf.Max(halo, softFill) * outerCut);
                 pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
             }
         }

@@ -133,12 +133,12 @@ public class Tool_07_Build_Block_EnergyShield_OnPlayer : EditorWindow
         vfxRoot.transform.localRotation = Quaternion.identity;
         vfxRoot.transform.localScale = Vector3.one;
 
-        // รูปโล่หลัก
+        // รูปโล่พลังงานวงกลมหลัก (อัตราส่วน 1:1 ตรงกับ MMOBlockParryController)
         GameObject shieldObj = new GameObject("L1_GuardShieldShape_Mesh");
         shieldObj.transform.SetParent(vfxRoot.transform, false);
         shieldObj.transform.localPosition = Vector3.zero;
         shieldObj.transform.localRotation = Quaternion.identity;
-        shieldObj.transform.localScale = new Vector3(1.12f, 1.28f, 1.0f);
+        shieldObj.transform.localScale = new Vector3(1.18f, 1.18f, 1.0f);
 
         MeshFilter shieldMf = shieldObj.AddComponent<MeshFilter>();
         shieldMf.sharedMesh = shieldMesh;
@@ -149,12 +149,12 @@ public class Tool_07_Build_Block_EnergyShield_OnPlayer : EditorWindow
         shieldMr.receiveShadows = false;
         shieldMr.sortingOrder = 12;
 
-        // แสงเรืองขอบหลังโล่
+        // แสงเรืองขอบหลังโล่วงกลม
         GameObject glowObj = new GameObject("L1_GuardShieldGlow_Back");
         glowObj.transform.SetParent(vfxRoot.transform, false);
         glowObj.transform.localPosition = new Vector3(0f, 0f, -0.02f);
         glowObj.transform.localRotation = Quaternion.identity;
-        glowObj.transform.localScale = new Vector3(1.20f, 1.37f, 1.0f);
+        glowObj.transform.localScale = new Vector3(1.30f, 1.30f, 1.0f);
 
         MeshFilter glowMf = glowObj.AddComponent<MeshFilter>();
         glowMf.sharedMesh = shieldMesh;

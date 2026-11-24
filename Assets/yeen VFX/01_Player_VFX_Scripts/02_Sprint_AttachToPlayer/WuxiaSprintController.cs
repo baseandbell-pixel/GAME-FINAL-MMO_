@@ -1,4 +1,8 @@
+using System;
 using UnityEngine;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
 [AddComponentMenu("yeen VFX/02C. [Player] วิ่งพุ่งตัววิชาตัวเบา (Wuxia Sprint)")]
 public class WuxiaSprintController : MonoBehaviour
@@ -44,13 +48,13 @@ public class WuxiaSprintController : MonoBehaviour
 
     void Update()
     {
-        // 1. จังหวะเริ่มกดปุ่ม Left Shift (Trigger Layer 1: Sonic Dash Burst + เปิดลมที่เท้า)
-        if (Input.GetKeyDown(sprintKey))
+        // 1. จังหวะเริ่มกดปุ่ม Left Shift (รองรับทั้ง New Input System และ Legacy Input ใน Unity 6)
+        if (IsSprintKeyDownThisFrame())
         {
             StartSprintVFX();
         }
         // 2. จังหวะปล่อยปุ่ม Left Shift (ปิดการปล่อยลมใหม่ แต่ปล่อยให้หางลมเก่าค่อยๆ จางหาย)
-        else if (Input.GetKeyUp(sprintKey))
+        else if (IsSprintKeyUpThisFrame())
         {
             StopSprintVFX();
         }
@@ -103,6 +107,52 @@ public class WuxiaSprintController : MonoBehaviour
     {
         isSprinting = false;
         SetSprintVFXState(false, false);
+    }
+
+    private bool IsSprintKeyDownThisFrame()
+    {
+#if ENABLE_INPUT_SYSTEM
+        try
+        {
+            if (Keyboard.current != null)
+            {
+                if (sprintKey == KeyCode.LeftShift && Keyboard.current.leftShiftKey.wasPressedThisFrame) return true;
+                if (sprintKey == KeyCode.RightShift && Keyboard.current.rightShiftKey.wasPressedThisFrame) return true;
+            }
+        }
+        catch (Exception) { }
+#endif
+        try
+        {
+            return Input.GetKeyDown(sprintKey);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private bool IsSprintKeyUpThisFrame()
+    {
+#if ENABLE_INPUT_SYSTEM
+        try
+        {
+            if (Keyboard.current != null)
+            {
+                if (sprintKey == KeyCode.LeftShift && Keyboard.current.leftShiftKey.wasReleasedThisFrame) return true;
+                if (sprintKey == KeyCode.RightShift && Keyboard.current.rightShiftKey.wasReleasedThisFrame) return true;
+            }
+        }
+        catch (Exception) { }
+#endif
+        try
+        {
+            return Input.GetKeyUp(sprintKey);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private void SetSprintVFXState(bool active, bool clearImmediate)

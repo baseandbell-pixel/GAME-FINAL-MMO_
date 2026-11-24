@@ -292,7 +292,7 @@ public class VfxPlayerAutoBinder : MonoBehaviour
         if (Time.unscaledTime < _nextCheck) return;
         _nextCheck = Time.unscaledTime + 0.4f;
 
-        foreach (var pc in FindObjectsByType<PlayerController>(FindObjectsSortMode.None))
+        foreach (var pc in FindObjectsByType<PlayerController>())
         {
             if (pc != null && pc.GetComponent<SwordWindSlashVFX>() == null)
                 pc.gameObject.AddComponent<SwordWindSlashVFX>();

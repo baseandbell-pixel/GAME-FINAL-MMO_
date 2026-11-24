@@ -25,12 +25,13 @@ public class MMOLevelUpController : MonoBehaviour
     public ParticleSystem levelUpRootVFX;
     public Transform characterMesh;
 
-    [Tooltip("ระยะเวลาปล่อยเอฟเฟกต์เลเวลอัพก่อนค่อยๆ จางหาย (วินาที)")]
-    [Range(1.2f, 5.0f)]
-    public float effectDuration = 2.6f;
+    [Tooltip("ระยะเวลาที่เอฟเฟกต์เลเวลอัพพุ่งขึ้นและจางหายไปจนหมด (วินาที)")]
+    [Range(1.0f, 3.5f)]
+    public float effectDuration = 1.65f;
 
     private Transform _vfxMount;
     private ParticleSystem _l1GroundRing;
+    private ParticleSystem _l1RisingRing;
     private ParticleSystem _l2GoldenPillar;
     private ParticleSystem _l3RisingSparkles;
     private ParticleSystem _l4CrownFlash;
@@ -63,6 +64,7 @@ public class MMOLevelUpController : MonoBehaviour
 
         EnsureLevelUpVFXBuilt();
         StopLevelUpVFX(true);
+        if (_vfxMount != null) _vfxMount.gameObject.SetActive(false);
     }
 
     private void OnEnable()
@@ -118,7 +120,7 @@ public class MMOLevelUpController : MonoBehaviour
         }
         else
         {
-            controller = Instance != null ? Instance : FindFirstObjectByType<MMOLevelUpController>();
+            controller = Instance != null ? Instance : FindAnyObjectByType<MMOLevelUpController>();
             if (controller == null && PlayerCombat.Local != null)
             {
                 controller = PlayerCombat.Local.GetComponent<MMOLevelUpController>();
@@ -166,32 +168,55 @@ public class MMOLevelUpController : MonoBehaviour
 
         if (_vfxMount != null) _vfxMount.gameObject.SetActive(true);
         PlayLayer(_l1GroundRing);
+        PlayLayer(_l1RisingRing);
         PlayLayer(_l2GoldenPillar);
         PlayLayer(_l3RisingSparkles);
         PlayLayer(_l4CrownFlash);
 
         float elapsed = 0f;
         float duration = Mathf.Max(1.0f, effectDuration);
+        float stopEmitTime = duration * 0.58f;
+        bool stoppedEmitting = false;
+
         while (elapsed < duration)
         {
             elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+
+            // หยุดปล่อยอนุภาคใหม่กลางทาง เพื่อให้เอฟเฟกต์พุ่งขึ้นแล้วค่อยๆ จางหายไปเองอย่างนุ่มนวล
+            if (!stoppedEmitting && elapsed >= stopEmitTime)
+            {
+                stoppedEmitting = true;
+                StopLevelUpVFX(false);
+            }
+
             if (_levelUpLight != null)
             {
                 _levelUpLight.enabled = true;
-                float t = Mathf.Clamp01(elapsed / duration);
-                float fadeIn = Mathf.Clamp01(t / 0.12f);
-                float fadeOut = t < 0.60f ? 1f : 1f - Mathf.Clamp01((t - 0.60f) / 0.40f);
-                _levelUpLight.intensity = 5.5f * fadeIn * fadeOut;
+                float fadeIn = Mathf.Clamp01(t / 0.14f);
+                float fadeOut = t < 0.38f ? 1f : 1f - Mathf.Clamp01((t - 0.38f) / 0.52f);
+                _levelUpLight.intensity = 5.2f * fadeIn * fadeOut;
             }
             yield return null;
         }
 
-        StopLevelUpVFX(false);
+        if (!stoppedEmitting)
+        {
+            StopLevelUpVFX(false);
+        }
+
         if (_levelUpLight != null)
         {
             _levelUpLight.intensity = 0f;
             _levelUpLight.enabled = false;
         }
+
+        // รอให้อนุภาคที่ลอยขึ้นชุดสุดท้ายจางหายจน Alpha = 0 เอง แล้วค่อยปิดโหนดทั้งหมดให้สะอาด 100%
+        yield return new WaitForSeconds(0.65f);
+
+        StopLevelUpVFX(true);
+        if (_vfxMount != null) _vfxMount.gameObject.SetActive(false);
+        if (levelUpRootVFX != null) levelUpRootVFX.gameObject.SetActive(false);
 
         _activeRoutine = null;
     }
@@ -208,6 +233,7 @@ public class MMOLevelUpController : MonoBehaviour
         }
 
         StopLayer(_l1GroundRing, mode);
+        StopLayer(_l1RisingRing, mode);
         StopLayer(_l2GoldenPillar, mode);
         StopLayer(_l3RisingSparkles, mode);
         StopLayer(_l4CrownFlash, mode);
@@ -271,7 +297,7 @@ public class MMOLevelUpController : MonoBehaviour
     private void EnsureLevelUpVFXBuilt()
     {
         if (levelUpRootVFX != null) return;
-        if (_l1GroundRing != null && _l2GoldenPillar != null && _l3RisingSparkles != null && _l4CrownFlash != null) return;
+        if (_l1GroundRing != null && _l1RisingRing != null && _l2GoldenPillar != null && _l3RisingSparkles != null && _l4CrownFlash != null) return;
 
         EnsureSharedAssets();
 
@@ -293,6 +319,7 @@ public class MMOLevelUpController : MonoBehaviour
         }
 
         if (_l1GroundRing == null) _l1GroundRing = CreateLayer1GroundRing(_vfxMount, s_MatRing);
+        if (_l1RisingRing == null) _l1RisingRing = CreateLayer1BRisingRing(_vfxMount, s_MatRing);
         if (_l2GoldenPillar == null) _l2GoldenPillar = CreateLayer2GoldenPillar(_vfxMount, s_PillarConeMesh, s_MatPillar);
         if (_l3RisingSparkles == null) _l3RisingSparkles = CreateLayer3Sparkles(_vfxMount, s_MatSparkles);
         if (_l4CrownFlash == null) _l4CrownFlash = CreateLayer4CrownFlash(_vfxMount, s_MatSparkles);
@@ -328,9 +355,9 @@ public class MMOLevelUpController : MonoBehaviour
         if (s_RaysTex == null) s_RaysTex = BuildRaysTex(256, 256);
         if (s_StarTex == null) s_StarTex = BuildStarTex(128, 128);
 
-        if (s_MatRing == null) s_MatRing = CreateAdditiveMat(s_RingTex, new Color(1.8f, 1.4f, 0.45f, 1f));
-        if (s_MatPillar == null) s_MatPillar = CreateAdditiveMat(s_RaysTex, new Color(1.9f, 1.45f, 0.48f, 1f));
-        if (s_MatSparkles == null) s_MatSparkles = CreateAdditiveMat(s_StarTex, new Color(2.0f, 1.65f, 0.72f, 1f));
+        if (s_MatRing == null) s_MatRing = CreateAdditiveMat(s_RingTex, new Color(2.8f, 2.15f, 0.72f, 1f));
+        if (s_MatPillar == null) s_MatPillar = CreateAdditiveMat(s_RaysTex, new Color(2.6f, 1.95f, 0.65f, 1f));
+        if (s_MatSparkles == null) s_MatSparkles = CreateAdditiveMat(s_StarTex, new Color(3.4f, 2.75f, 1.15f, 1f));
     }
 
     private static Material CreateAdditiveMat(Texture2D tex, Color baseColor)
@@ -372,35 +399,94 @@ public class MMOLevelUpController : MonoBehaviour
         ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
         var main = ps.main;
-        main.duration = 1.4f;
+        main.duration = 1.05f;
         main.loop = false;
         main.playOnAwake = false;
-        main.startLifetime = 1.35f;
+        main.startLifetime = 1.00f;
         main.startSpeed = 0f;
-        main.startSize = 3.2f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(3.6f, 2.75f, 0.85f, 1f));
+        main.startSize = 3.0f;
+        main.startColor = Color.white;
         main.simulationSpace = ParticleSystemSimulationSpace.Local;
         main.maxParticles = 4;
 
         var em = ps.emission;
         em.rateOverTime = 0f;
-        em.SetBursts(new[] { new ParticleSystem.Burst(0.0f, 2) });
+        em.SetBursts(new[] { new ParticleSystem.Burst(0.0f, 1) });
         var sh = ps.shape;
         sh.enabled = false;
 
         var sol = ps.sizeOverLifetime;
         sol.enabled = true;
         sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
-            new Keyframe(0f, 0.20f, 3.5f, 3.5f),
-            new Keyframe(0.45f, 0.95f, 0.4f, 0.4f),
-            new Keyframe(1f, 1.20f, 0f, 0f)));
+            new Keyframe(0f, 0.22f, 3.8f, 3.8f),
+            new Keyframe(0.45f, 0.96f, 0.4f, 0.4f),
+            new Keyframe(1f, 1.25f, 0f, 0f)));
 
         var col = ps.colorOverLifetime;
         col.enabled = true;
         Gradient g = new Gradient();
         g.SetKeys(
             new[] { new GradientColorKey(new Color(1f, 0.96f, 0.8f), 0f), new GradientColorKey(new Color(1f, 0.76f, 0.22f), 1f) },
-            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.12f), new GradientAlphaKey(0.75f, 0.6f), new GradientAlphaKey(0f, 1f) });
+            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.12f), new GradientAlphaKey(0.65f, 0.55f), new GradientAlphaKey(0f, 1f) });
+        col.color = new ParticleSystem.MinMaxGradient(g);
+
+        var r = ps.GetComponent<ParticleSystemRenderer>();
+        r.renderMode = ParticleSystemRenderMode.HorizontalBillboard;
+        r.sharedMaterial = mat;
+        return ps;
+    }
+
+    private static ParticleSystem CreateLayer1BRisingRing(Transform parent, Material mat)
+    {
+        GameObject obj = new GameObject("L1B_LevelUp_RisingAuraRing");
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = new Vector3(0f, 0.08f, 0f);
+
+        ParticleSystem ps = obj.AddComponent<ParticleSystem>();
+        ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+        var main = ps.main;
+        main.duration = 1.15f;
+        main.loop = false;
+        main.playOnAwake = false;
+        main.startLifetime = 0.92f;
+        main.startSpeed = 0f;
+        main.startSize = 2.35f;
+        main.startColor = Color.white;
+        main.simulationSpace = ParticleSystemSimulationSpace.Local;
+        main.maxParticles = 4;
+
+        var em = ps.emission;
+        em.rateOverTime = 0f;
+        em.SetBursts(new[]
+        {
+            new ParticleSystem.Burst(0.00f, 1),
+            new ParticleSystem.Burst(0.18f, 1)
+        });
+        var sh = ps.shape;
+        sh.enabled = false;
+
+        // วงแหวนแสงทองลอยกวาดขึ้นจากปลายเท้าผ่านลำตัวแล้วจางหายด้านบน
+        var vel = ps.velocityOverLifetime;
+        vel.enabled = true;
+        vel.space = ParticleSystemSimulationSpace.Local;
+        vel.x = new ParticleSystem.MinMaxCurve(0f);
+        vel.y = new ParticleSystem.MinMaxCurve(2.55f);
+        vel.z = new ParticleSystem.MinMaxCurve(0f);
+
+        var sol = ps.sizeOverLifetime;
+        sol.enabled = true;
+        sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
+            new Keyframe(0f, 0.55f, 1.5f, 1.5f),
+            new Keyframe(0.50f, 1.00f, 0.4f, 0.4f),
+            new Keyframe(1f, 1.18f, 0f, 0f)));
+
+        var col = ps.colorOverLifetime;
+        col.enabled = true;
+        Gradient g = new Gradient();
+        g.SetKeys(
+            new[] { new GradientColorKey(new Color(1f, 0.98f, 0.86f), 0f), new GradientColorKey(new Color(1f, 0.78f, 0.26f), 1f) },
+            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(0.95f, 0.14f), new GradientAlphaKey(0.58f, 0.58f), new GradientAlphaKey(0f, 1f) });
         col.color = new ParticleSystem.MinMaxGradient(g);
 
         var r = ps.GetComponent<ParticleSystemRenderer>();
@@ -419,16 +505,16 @@ public class MMOLevelUpController : MonoBehaviour
         ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
         var main = ps.main;
-        main.duration = 2.0f;
+        main.duration = 1.45f;
         main.loop = false;
         main.playOnAwake = false;
-        main.startLifetime = 1.9f;
+        main.startLifetime = 1.38f;
         main.startSpeed = 0f;
         main.startSize3D = true;
         main.startSizeX = 1.35f;
         main.startSizeY = 4.6f;
         main.startSizeZ = 1.35f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(3.2f, 2.35f, 0.72f, 1f));
+        main.startColor = Color.white;
         main.simulationSpace = ParticleSystemSimulationSpace.Local;
         main.maxParticles = 2;
 
@@ -438,11 +524,27 @@ public class MMOLevelUpController : MonoBehaviour
         var sh = ps.shape;
         sh.enabled = false;
 
+        // เสาแสงทองพุ่งสูงขึ้นจากพื้น แล้วค่อยๆ ลอยยกตัวขึ้นและคอดจางหายไปในอากาศ
+        var vel = ps.velocityOverLifetime;
+        vel.enabled = true;
+        vel.space = ParticleSystemSimulationSpace.Local;
+        vel.x = new ParticleSystem.MinMaxCurve(0f);
+        vel.y = new ParticleSystem.MinMaxCurve(0.65f);
+        vel.z = new ParticleSystem.MinMaxCurve(0f);
+
         var sol = ps.sizeOverLifetime;
         sol.enabled = true;
         sol.separateAxes = true;
-        AnimationCurve xz = new AnimationCurve(new Keyframe(0f, 0.65f), new Keyframe(0.20f, 1.05f), new Keyframe(1f, 1.25f));
-        AnimationCurve y = new AnimationCurve(new Keyframe(0f, 0.12f, 7f, 7f), new Keyframe(0.16f, 1.0f), new Keyframe(1f, 1.12f));
+        AnimationCurve xz = new AnimationCurve(
+            new Keyframe(0f, 0.60f),
+            new Keyframe(0.18f, 1.06f),
+            new Keyframe(0.68f, 0.96f),
+            new Keyframe(1f, 0.42f));
+        AnimationCurve y = new AnimationCurve(
+            new Keyframe(0f, 0.08f, 8.5f, 8.5f),
+            new Keyframe(0.18f, 1.00f),
+            new Keyframe(0.70f, 1.12f),
+            new Keyframe(1f, 1.25f));
         sol.x = new ParticleSystem.MinMaxCurve(1f, xz);
         sol.y = new ParticleSystem.MinMaxCurve(1f, y);
         sol.z = new ParticleSystem.MinMaxCurve(1f, xz);
@@ -451,15 +553,15 @@ public class MMOLevelUpController : MonoBehaviour
         rol.enabled = true;
         rol.separateAxes = true;
         rol.x = new ParticleSystem.MinMaxCurve(0f);
-        rol.y = new ParticleSystem.MinMaxCurve(50f * Mathf.Deg2Rad);
+        rol.y = new ParticleSystem.MinMaxCurve(65f * Mathf.Deg2Rad);
         rol.z = new ParticleSystem.MinMaxCurve(0f);
 
         var col = ps.colorOverLifetime;
         col.enabled = true;
         Gradient g = new Gradient();
         g.SetKeys(
-            new[] { new GradientColorKey(new Color(1f, 0.96f, 0.82f), 0f), new GradientColorKey(new Color(1f, 0.78f, 0.25f), 1f) },
-            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(0.95f, 0.12f), new GradientAlphaKey(0.80f, 0.62f), new GradientAlphaKey(0f, 1f) });
+            new[] { new GradientColorKey(new Color(1f, 0.97f, 0.84f), 0f), new GradientColorKey(new Color(1f, 0.78f, 0.25f), 1f) },
+            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(0.95f, 0.14f), new GradientAlphaKey(0.72f, 0.50f), new GradientAlphaKey(0f, 1f) });
         col.color = new ParticleSystem.MinMaxGradient(g);
 
         var r = ps.GetComponent<ParticleSystemRenderer>();
@@ -480,26 +582,26 @@ public class MMOLevelUpController : MonoBehaviour
         ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
         var main = ps.main;
-        main.duration = 2.4f;
-        main.loop = true;
+        main.duration = 0.85f;
+        main.loop = false;
         main.playOnAwake = false;
-        main.startLifetime = new ParticleSystem.MinMaxCurve(1.1f, 1.8f);
-        main.startSpeed = new ParticleSystem.MinMaxCurve(0.15f, 0.55f);
-        main.startSize = new ParticleSystem.MinMaxCurve(0.16f, 0.34f);
+        main.startLifetime = new ParticleSystem.MinMaxCurve(0.75f, 1.15f);
+        main.startSpeed = new ParticleSystem.MinMaxCurve(0.15f, 0.50f);
+        main.startSize = new ParticleSystem.MinMaxCurve(0.14f, 0.30f);
         main.startColor = new ParticleSystem.MinMaxGradient(
-            new Color(3.6f, 2.95f, 1.15f, 1f),
-            new Color(4.5f, 3.9f, 2.0f, 1f));
+            new Color(1.0f, 0.92f, 0.56f, 1f),
+            new Color(1.0f, 0.98f, 0.84f, 1f));
         main.simulationSpace = ParticleSystemSimulationSpace.Local;
-        main.maxParticles = 120;
+        main.maxParticles = 100;
 
         var em = ps.emission;
-        em.rateOverTime = 28f;
-        em.SetBursts(new[] { new ParticleSystem.Burst(0.0f, 24) });
+        em.rateOverTime = 24f;
+        em.SetBursts(new[] { new ParticleSystem.Burst(0.0f, 26) });
 
         var sh = ps.shape;
         sh.enabled = true;
         sh.shapeType = ParticleSystemShapeType.Circle;
-        sh.radius = 0.85f;
+        sh.radius = 0.82f;
         sh.radiusThickness = 0.45f;
         sh.rotation = new Vector3(-90f, 0f, 0f);
 
@@ -507,10 +609,10 @@ public class MMOLevelUpController : MonoBehaviour
         vel.enabled = true;
         vel.space = ParticleSystemSimulationSpace.Local;
         vel.x = new ParticleSystem.MinMaxCurve(0f);
-        vel.y = new ParticleSystem.MinMaxCurve(1.45f);
+        vel.y = new ParticleSystem.MinMaxCurve(2.25f);
         vel.z = new ParticleSystem.MinMaxCurve(0f);
         vel.orbitalX = new ParticleSystem.MinMaxCurve(0f);
-        vel.orbitalY = new ParticleSystem.MinMaxCurve(3.4f);
+        vel.orbitalY = new ParticleSystem.MinMaxCurve(3.8f);
         vel.orbitalZ = new ParticleSystem.MinMaxCurve(0f);
         vel.orbitalOffsetX = new ParticleSystem.MinMaxCurve(0f);
         vel.orbitalOffsetY = new ParticleSystem.MinMaxCurve(0f);
@@ -521,7 +623,15 @@ public class MMOLevelUpController : MonoBehaviour
         var sol = ps.sizeOverLifetime;
         sol.enabled = true;
         sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
-            new Keyframe(0f, 0f), new Keyframe(0.18f, 1f), new Keyframe(0.7f, 0.85f), new Keyframe(1f, 0f)));
+            new Keyframe(0f, 0f), new Keyframe(0.16f, 1f), new Keyframe(0.62f, 0.80f), new Keyframe(1f, 0f)));
+
+        var col = ps.colorOverLifetime;
+        col.enabled = true;
+        Gradient g = new Gradient();
+        g.SetKeys(
+            new[] { new GradientColorKey(new Color(1f, 0.98f, 0.85f), 0f), new GradientColorKey(new Color(1f, 0.78f, 0.25f), 1f) },
+            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.14f), new GradientAlphaKey(0.70f, 0.60f), new GradientAlphaKey(0f, 1f) });
+        col.color = new ParticleSystem.MinMaxGradient(g);
 
         var r = ps.GetComponent<ParticleSystemRenderer>();
         r.renderMode = ParticleSystemRenderMode.Billboard;
@@ -539,13 +649,14 @@ public class MMOLevelUpController : MonoBehaviour
         ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
 
         var main = ps.main;
-        main.duration = 0.8f;
+        main.duration = 0.65f;
         main.loop = false;
         main.playOnAwake = false;
-        main.startLifetime = 0.75f;
+        main.startDelay = 0.04f;
+        main.startLifetime = 0.58f;
         main.startSpeed = 0f;
-        main.startSize = 2.8f;
-        main.startColor = new ParticleSystem.MinMaxGradient(new Color(4.6f, 3.8f, 1.6f, 1f));
+        main.startSize = 2.6f;
+        main.startColor = Color.white;
         main.simulationSpace = ParticleSystemSimulationSpace.Local;
         main.maxParticles = 2;
 
@@ -558,7 +669,15 @@ public class MMOLevelUpController : MonoBehaviour
         var sol = ps.sizeOverLifetime;
         sol.enabled = true;
         sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
-            new Keyframe(0f, 0.08f, 10f, 10f), new Keyframe(0.16f, 1.15f), new Keyframe(1f, 0f)));
+            new Keyframe(0f, 0.08f, 10f, 10f), new Keyframe(0.18f, 1.15f), new Keyframe(1f, 0f)));
+
+        var col = ps.colorOverLifetime;
+        col.enabled = true;
+        Gradient g = new Gradient();
+        g.SetKeys(
+            new[] { new GradientColorKey(new Color(1f, 0.98f, 0.86f), 0f), new GradientColorKey(new Color(1f, 0.80f, 0.28f), 1f) },
+            new[] { new GradientAlphaKey(0f, 0f), new GradientAlphaKey(1f, 0.14f), new GradientAlphaKey(0f, 1f) });
+        col.color = new ParticleSystem.MinMaxGradient(g);
 
         var r = ps.GetComponent<ParticleSystemRenderer>();
         r.renderMode = ParticleSystemRenderMode.Billboard;
